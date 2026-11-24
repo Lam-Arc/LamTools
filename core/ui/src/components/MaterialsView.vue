@@ -104,7 +104,7 @@
 
     <template v-else>
       <!-- 文件夹页签：这一层有哪些归档 -->
-      <div v-if="activeTab === 'folders' && !openFolder && childFolders.length" class="folder-grid" role="list" data-materials-folders>
+      <div v-if="activeTab === 'folders' && !openFolder && childFolders.length && !searching" class="folder-grid" role="list" data-materials-folders>
         <article
           v-for="folder in childFolders"
           :key="folder.path"
@@ -121,7 +121,16 @@
           <span class="folder-card-count">{{ folder.count }} {{ t("个文件") }}</span>
         </article>
       </div>
-      <p v-else-if="activeTab === 'folders' && !childFolders.length && !openFolder" class="full-area-note tab-empty" data-materials-folders-empty>{{ t("还没有归档 — 在文件卡片的菜单里「归到文件夹」就会出现在这里。") }}</p>
+      <p v-else-if="activeTab === 'folders' && !childFolders.length && !openFolder && !searching" class="full-area-note tab-empty" data-materials-folders-empty>{{ t("还没有归档 — 在文件卡片的菜单里「归到文件夹」就会出现在这里。") }}</p>
+
+      <!-- user:“去找四个库中用户体验最差的点，处理掉”+(筛选没命中时说清楚是“没有匹配”，
+           并给一键清除；不再把“没匹配”冒充成“库是空的”，也不再因为存在文件夹而留白)。 -->
+      <div v-else-if="!visible.length && hasFilter" class="full-area-empty" data-materials-no-results>
+        <span class="full-area-empty-icon" aria-hidden="true"><SearchX :size="18" :stroke-width="1.8" /></span>
+        <h2 class="full-area-empty-title">{{ t("没有匹配的文件") }}</h2>
+        <p class="full-area-empty-hint">{{ t("换个关键词，或清除筛选条件。") }}</p>
+        <button class="library-button" type="button" data-materials-clear-filters @click="clearFilters">{{ t("清除筛选") }}</button>
+      </div>
 
       <!-- 空态：只有这一层既没有直属文件、也没有子层时才算空 -->
       <div v-else-if="!visible.length && !childFolders.length" class="full-area-empty" data-materials-empty>
@@ -132,7 +141,7 @@
       </div>
 
       <!-- 卡片墙（网格 = 多列瀑布流，贴近参考图里的错落；列表 = 行式） -->
-      <div v-else-if="view === 'grid'" class="materials-grid" role="list" data-materials-drag-surface
+      <div v-else-if="view === 'grid' && visible.length" class="materials-grid" role="list" data-materials-drag-surface
         @pointerdown="onDragPointerDown"
         @pointermove="onDragPointerMove"
         @pointerup="onDragPointerUp"
@@ -264,7 +273,7 @@
         </article>
       </div>
 
-      <ul v-else class="library-items" role="list" data-materials-drag-surface
+      <ul v-else-if="visible.length" class="library-items" role="list" data-materials-drag-surface
         @pointerdown="onDragPointerDown"
         @pointermove="onDragPointerMove"
         @pointerup="onDragPointerUp"
@@ -415,6 +424,7 @@ import {
   MoreHorizontal,
   Play,
   Plus,
+  SearchX,
   Star,
 } from 'lucide-vue-next'
 import type { ProjectArtifact } from '@/types.ts'
@@ -689,6 +699,13 @@ function folderExists(path: string): boolean {
   return folders.value.includes(path)
 }
 
+/** 有没有正在生效的筛选（关键词 / 标签 / 非「全部」页签）——空态据此区分“没匹配”与“库是空的”。 */
+const hasFilter = computed(() => Boolean(query.value.trim()) || Boolean(activeTag.value)
+  || (activeTab.value !== 'all' && activeTab.value !== 'folders'))
+
+/** 搜索时「文件夹」页签让位给文件结果，而不是继续摆着没被过滤的文件夹。 */
+const searching = computed(() => Boolean(query.value.trim()))
+
 const visible = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase()
   const level = openFolder.value
@@ -698,7 +715,9 @@ const visible = computed(() => {
     if (level) {
       // 在文件夹里看这一层：直属文件，不穿透到更深的层。
       if (folder !== level) return false
-    } else if (activeTab.value === 'folders') {
+    } else if (activeTab.value === 'folders' && !keyword) {
+      // user:“去找四个库中用户体验最差的点，处理掉”+(在「文件夹」页签搜索时让位给文件结果：
+      // 搜索覆盖整个库，而不是只搜根上那几个文件)。
       if (!folder) return false
     }
     return true
@@ -709,8 +728,16 @@ const visible = computed(() => {
     list = list.filter(item => mediaGroup(item) === activeTab.value)
   }
   if (keyword) {
-    list = list.filter(item => [item.name, item.path, item.uri, kindLabel(item.kind, item.name), roleLabel(item.role)]
-      .filter(Boolean).join(' ').toLocaleLowerCase().includes(keyword))
+    // user:“去找四个库中用户体验最差的点，处理掉”+(标签是主检索键：搜索同时匹配名称、
+    // 标签与文件名；否则按标签找不到文件，用户会以为标签功能坏了)。
+    list = list.filter(item => [
+      item.name,
+      item.path,
+      item.uri,
+      kindLabel(item.kind, item.name),
+      roleLabel(item.role),
+      ...(item.tags ?? []),
+    ].filter(Boolean).join(' ').toLocaleLowerCase().includes(keyword))
   }
   return [...list].sort((left, right) => {
     if (sort.value === 'name') return left.name.localeCompare(right.name)
@@ -751,8 +778,11 @@ const tagCounts = computed(() => {
 /** 补全要看得到所有已有的标签，包括只出现过一次的。 */
 const tagPool = computed(() => tagCounts.value.map(([tag]) => tag))
 
-/** 筛选条只列真的复用的标签：只出现过一次的留在卡片上，不占顶部空间。 */
-const allTags = computed(() => tagCounts.value.filter(([, count]) => count >= 2).slice(0, 18).map(([tag]) => tag))
+/**
+ * 筛选条按热度列前 18 个标签；只出现一次的也列出来——它既然在卡片上，就应当能从顶部点选。
+ * 标签超过 18 个时，单次标签自然被更常用的挤出去。
+ */
+const allTags = computed(() => tagCounts.value.slice(0, 18).map(([tag]) => tag))
 
 /** HTML 素材：它本身就是一份可渲染的页面，卡片里直接嵌进去。 */
 function htmlPreviewFor(item: ProjectArtifact): string {
@@ -869,6 +899,13 @@ async function toggleTag(item: ProjectArtifact, tag: string): Promise<void> {
 function selectTab(tab: TabId): void {
   activeTab.value = tab
   if (tab !== 'folders') openFolder.value = ''
+}
+
+/** 筛选没命中时的出口：清掉关键词、标签与类型页签，回到全部资料（留在当前文件夹）。 */
+function clearFilters(): void {
+  query.value = ''
+  activeTag.value = ''
+  activeTab.value = 'all'
 }
 
 function goToFolder(dir: string): void {

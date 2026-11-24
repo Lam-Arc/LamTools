@@ -25,6 +25,7 @@ object KeyboardBridge {
   private var host: WeakReference<MainActivity>? = null
   private var lastPublishedKeyboard = -1
   private var lastPublishedTop = -1
+  private var lastPublishedBottom = -1
 
   init {
     System.loadLibrary("sunday_android_host_lib")
@@ -39,7 +40,7 @@ object KeyboardBridge {
    * user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(所以除了键盘，还要把
    * 状态栏/刘海那一截一起报上去；界面用它给顶部留位)。
    */
-  @JvmStatic external fun nativePublishInsets(keyboardDp: Int, topDp: Int)
+  @JvmStatic external fun nativePublishInsets(keyboardDp: Int, topDp: Int, bottomDp: Int)
 
   /**
    * Starts watching. Called from `MainActivity.onCreate`.
@@ -52,11 +53,13 @@ object KeyboardBridge {
     host = WeakReference(activity)
     val root = activity.findViewById<View>(android.R.id.content) ?: return
     val topType = WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout()
+    val bottomType = WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout()
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
       publish(
         activity,
         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
         insets.getInsets(topType).top,
+        insets.getInsets(bottomType).bottom,
       )
       insets
     }
@@ -67,19 +70,23 @@ object KeyboardBridge {
         activity,
         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
         insets.getInsets(topType).top,
+        insets.getInsets(bottomType).bottom,
       )
     }
   }
 
-  private fun publish(activity: MainActivity, physicalKeyboard: Int, physicalTop: Int) {
+  private fun publish(activity: MainActivity, physicalKeyboard: Int, physicalTop: Int, physicalBottom: Int) {
     val density = activity.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
     val keyboard = (physicalKeyboard / density).roundToInt().coerceAtLeast(0)
     val top = (physicalTop / density).roundToInt().coerceAtLeast(0)
-    if (keyboard == lastPublishedKeyboard && top == lastPublishedTop) return
+    // user:“底部导航的文字被系统手势条压住”+(手势条那一截也要报上来，界面自己给底部留位)。
+    val bottom = (physicalBottom / density).roundToInt().coerceAtLeast(0)
+    if (keyboard == lastPublishedKeyboard && top == lastPublishedTop && bottom == lastPublishedBottom) return
     lastPublishedKeyboard = keyboard
     lastPublishedTop = top
+    lastPublishedBottom = bottom
     try {
-      nativePublishInsets(keyboard, top)
+      nativePublishInsets(keyboard, top, bottom)
     } catch (error: Throwable) {
       // The library is gone (process teardown) or Rust is not listening yet; the next
       // layout pass publishes again.

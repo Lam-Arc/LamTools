@@ -140,6 +140,7 @@
               @fork-message="chat.onForkMessage"
               @rollback-message="chat.onRollbackMessage"
               @edit-message="chat.onEditMessage"
+              :read-edit-basis="chat.readEditBasis"
             />
           </div>
         </div>

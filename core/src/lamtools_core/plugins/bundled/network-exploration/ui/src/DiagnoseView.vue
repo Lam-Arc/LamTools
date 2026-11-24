@@ -32,6 +32,28 @@ watch(
 const current = computed(
   () => selected.value || props.session.state?.reports?.at(-1),
 );
+// user:“提供一个普通用户可以理解的「检查网络」按钮”“诊断不依赖单一网站或单一服务端”+(一次点击检查本机、网关、DNS、外网和代理，并给出人话结论)。
+const network = ref(
+  [...(props.session.state?.reports || [])]
+    .reverse()
+    .find((row) => row.kind === "network") || null,
+);
+const networkBusy = computed(() => props.session.busy === "diagnose");
+async function checkNetwork() {
+  const result = await props.session.run("diagnose", { kind: "network" }, "");
+  if (result?.report) network.value = result.report;
+}
+function stageLabel(stage) {
+  return (
+    {
+      "本机网络": "本机网络",
+      网关: "网关与局域网",
+      DNS: "域名解析",
+      "外网连接": "外网连接",
+      代理: "代理设置",
+    }[stage] || stage
+  );
+}
 function label(stage) {
   return (
     {
@@ -54,6 +76,49 @@ async function diagnose() {
 </script>
 <template>
   <div class="nx-view-stack">
+    <!-- user:“提供一个普通用户可以理解的「检查网络」按钮”+(一键检查本机、网关、DNS、外网与代理，直接给结论)。 -->
+    <section class="nx-panel nx-network-check" data-network-check-panel>
+      <div class="nx-panel-heading">
+        <h2><Activity :size="17" />这台电脑的网络</h2>
+        <span class="nx-subtle">{{
+          network ? dateLabel(network.time) : "还没检查"
+        }}</span>
+      </div>
+      <p class="nx-help">
+        检查本机连接、网关、域名解析、外网和代理，不用先想一个网站。
+      </p>
+      <div class="nx-actions">
+        <button
+          class="btn nx-button btn--primary"
+          data-network-check
+          :disabled="networkBusy"
+          @click="checkNetwork"
+        >
+          {{ networkBusy ? "检查中…" : "检查网络" }}
+        </button>
+      </div>
+      <div v-if="network" class="nx-network-result" data-network-result>
+        <strong :class="{ 'nx-danger-text': network.failures > 0 }">{{
+          network.conclusion?.text || "检查完成"
+        }}</strong>
+        <p v-if="network.conclusion?.suggestion" class="nx-help">
+          {{ network.conclusion.suggestion }}
+        </p>
+        <div class="nx-check-list">
+          <div
+            v-for="(check, index) in network.checks || []"
+            :key="index"
+            class="nx-check-row"
+          >
+            <span class="nx-check-status" :class="{ 'is-failure': !check.ok }"
+              ><Check v-if="check.ok" :size="14" /><X v-else :size="14" /></span
+            ><strong>{{ stageLabel(check.stage) }}</strong
+            ><span>{{ check.ok ? "通过" : "未通过" }}</span
+            ><span class="nx-subtle">{{ check.evidence }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="nx-panel nx-diagnose-start">
       <div class="nx-diagnose-symbol">
         <Activity :size="25" :stroke-width="1.5" />

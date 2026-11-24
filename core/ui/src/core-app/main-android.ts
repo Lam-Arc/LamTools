@@ -4,7 +4,8 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
-import { ensureRemote, readTicket, remoteStatus } from '@/app/remoteSession.ts'
+import { ensureRemote, readKeepAlivePref, readTicket, remoteStatus } from '@/app/remoteSession.ts'
+import { isUsable } from '@/app/remoteReconnect.ts'
 import { bootScreen, type BootProgressPayload } from './bootScreen.ts'
 
 /**
@@ -174,13 +175,18 @@ async function keepRemoteAlive(alreadyRemote: () => boolean): Promise<void> {
     while (readTicket()) {
       const peer = await ensureRemote(25_000)
       if (peer) {
-        if (!alreadyRemote()) {
-          switchToRemote(peer, alreadyRemote)
-          return
+        // user:“只有业务真正可用才显示已连接”+(隧道通了但电脑上的 Core 没起来时，
+        // 继续留在本机，不能为了「看起来连上了」把界面切过去)。
+        const status = await remoteStatus()
+        if (isUsable(status)) {
+          if (!alreadyRemote()) {
+            switchToRemote(peer, alreadyRemote)
+            return
+          }
+          delay = 3_000
+          await new Promise((resolve) => window.setTimeout(resolve, 15_000))
+          continue
         }
-        delay = 3_000
-        await new Promise((resolve) => window.setTimeout(resolve, 15_000))
-        continue
       }
       await new Promise((resolve) => window.setTimeout(resolve, delay))
       delay = Math.min(delay * 2, 30_000)
@@ -221,6 +227,7 @@ async function boot(): Promise<void> {
     await listen<{ phase?: string }>('p2p-progress', (event) => {
       if (event.payload?.phase !== 'connected') return
       void remoteStatus().then((status) => {
+        if (!isUsable(status)) return
         switchToRemote(status?.peer ?? '', () => usingRemote)
       })
     })
@@ -245,10 +252,17 @@ async function boot(): Promise<void> {
     // user:“我定的要求是 5 秒以内”+(界面永远不等拨号：宿主要是已经连着电脑就整条走隧道，
     // 否则先用本机把界面挂出来，拨号在后台继续，连上了再重开一次切过去)。
     const knownRemote = await remoteStatus()
-    // 正在拨号不算连上：那时隧道还没建好，整条走隧道只会读一次空一次。
-    const peer: string | null = knownRemote?.connected && !knownRemote.connecting
-      ? (knownRemote.peer ?? '')
-      : null
+    // user:“优先保证连接的稳定，减少无故断连或者无连接反馈的情况”+(有配对票据且
+    // 用户没关掉时，把连接放进前台服务，系统不会在后台把它随手冻结；没有票据就
+    // 不展示一条无意义通知)。
+    try {
+      await invoke('connection_service_set', { enabled: Boolean(readTicket()) && readKeepAlivePref() })
+    } catch {
+      // 老宿主没有这个命令：连接照常可用，只是没有后台保活。
+    }
+    // user:“只有业务真正可用才显示已连接”+(宿主给的四层结论是唯一依据；隧道在、
+    // Core 没起来或会话没恢复，都先用本机，不能拿着一半的连接去读数据)。
+    const peer: string | null = isUsable(knownRemote) ? (knownRemote?.peer ?? '') : null
     usingRemote = peer !== null
     // user:“我切到本机之后它又变回去了”+(设备页以前拿隧道状态猜界面用的是哪一端：
     //  隧道连着就显示「当前：电脑」，可界面可能是启动时选的本机，两个说法互相矛盾。
@@ -259,8 +273,10 @@ async function boot(): Promise<void> {
       // 存储不可用只是少了这条提示，不影响连接。
     }
     // 拨号结果回来得晚也照样切；同时常驻重连循环，远程期间断线也能自己恢复。
-    void remoteAttempt.then((late) => {
-      if (late && !usingRemote) switchToRemote(late, () => usingRemote)
+    void remoteAttempt.then(async (late) => {
+      if (!late || usingRemote) return
+      const status = await remoteStatus()
+      if (isUsable(status)) switchToRemote(late, () => usingRemote)
     })
     void keepRemoteAlive(() => usingRemote)
     const activeTransport = peer === null ? gateTransport(transport, coreReady) : createRemoteTransport()
@@ -276,14 +292,19 @@ async function boot(): Promise<void> {
     // reads these two variables, so there is no second layout engine here.
     // user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(状态栏那一截由宿主
     // 报上来，界面自己留位，不再压到系统栏下面)。
-    const applyInsets = (payload: { keyboard?: unknown; top?: unknown } | undefined) => {
+    const applyInsets = (payload: { keyboard?: unknown; top?: unknown; bottom?: unknown } | undefined) => {
       const root = document.documentElement
       const height = Number(payload?.keyboard ?? 0)
       const top = Number(payload?.top ?? 0)
+      const bottom = Number(payload?.bottom ?? 0)
       if (!Number.isFinite(height) || height <= 0) root.style.removeProperty('--native-keyboard-inset')
       else root.style.setProperty('--native-keyboard-inset', `${height}px`)
       if (!Number.isFinite(top) || top <= 0) root.style.removeProperty('--native-safe-area-top')
       else root.style.setProperty('--native-safe-area-top', `${top}px`)
+      // user:“底部导航的文字被系统手势条压住”+(底部安全区也由宿主报上来；
+      //  WebView 里的 env(safe-area-inset-bottom) 在这里恒为 0，不能只靠它)。
+      if (!Number.isFinite(bottom) || bottom <= 0) root.style.removeProperty('--native-safe-area-bottom')
+      else root.style.setProperty('--native-safe-area-bottom', `${bottom}px`)
     }
     await listen<{ keyboard?: unknown; top?: unknown }>('insets', (event) => {
       applyInsets(event.payload)
@@ -292,7 +313,7 @@ async function boot(): Promise<void> {
     // Without this read the interface starts with an empty safe-area variable and lays
     // its top controls under the status bar or the notch.
     try {
-      applyInsets(await invoke<{ keyboard?: unknown; top?: unknown }>('window_insets'))
+      applyInsets(await invoke<{ keyboard?: unknown; top?: unknown; bottom?: unknown }>('window_insets'))
     } catch (error) {
       console.warn('[sunday] insets: cannot read the first values', describeError(error))
     }

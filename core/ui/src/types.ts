@@ -295,6 +295,21 @@ export interface CoreMessage {
   metadata?: Record<string, unknown>;
 }
 
+/** user:“全修”+(历史编辑绑定打开时显示的会话与版本)。 */
+export interface CoreMessageEditBasis {
+  threadId: string
+  revision: number
+}
+
+/** user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(只有替换被接收后才收起编辑草稿)。 */
+export interface CoreMessageEditRequest {
+  turnId: string
+  content: string
+  basis?: CoreMessageEditBasis
+  attachments?: CoreAttachment[]
+  onSettled?(accepted: boolean): void
+}
+
 /** Durable sub-agent record from the supervisor (`sub_agent.list`). The
  * transcript projection cannot know run boundaries of resumed agents — this
  * record is the source of truth for their status and timing. */

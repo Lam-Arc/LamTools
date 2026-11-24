@@ -1,126 +1,132 @@
 <script setup>
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“你应当设计的是一个高级、简洁、现代的网络工具界面，不用管跟 sunday 是否适配”+(使用独立深色视觉和简洁导航，不继承宿主面板布局)。
+// user:“概览、下载、互联、诊断四个视图，代理和高级网络设置放进设置页”+(左栏只留四件常用事，其余收进设置，不再有进不去的页面)。
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Network,
   Home,
-  Zap,
-  Globe,
   Download,
   Activity,
   Settings2,
-  ArrowLeftRight,
-  ShieldCheck,
-  SlidersHorizontal,
   RefreshCw,
   X,
-  ChevronRight,
 } from "lucide-vue-next";
 import { useNetwork } from "./session.mjs";
 import HomeView from "./HomeView.vue";
-import DashboardView from "./DashboardView.vue";
-import ProxyView from "./ProxyView.vue";
 import TransferView from "./TransferView.vue";
+import InterconnectView from "./InterconnectView.vue";
 import DiagnoseView from "./DiagnoseView.vue";
-import NetworkSettings from "./NetworkSettings.vue";
-import ConnectionsView from "./ConnectionsView.vue";
-import SecurityView from "./SecurityView.vue";
-import AdvancedView from "./AdvancedView.vue";
+import SettingsView from "./SettingsView.vue";
 const props = defineProps({ context: { type: Object, required: true } });
 const s = useNetwork(props.context),
   report = ref(null);
+// user:“概览/下载/互联/诊断”+(四个平级视图；设置是独立入口，不占用第四个以上的平级位置)。
 const items = [
   {
-    id: "home",
-    title: "首页",
-    hint: "实时数据与常用操作",
+    id: "overview",
+    title: "概览",
+    hint: "网络状态、速率与常用操作",
     icon: Home,
     component: HomeView,
   },
   {
-    id: "overview",
-    title: "加速",
-    hint: "本机加速开关与运行状态",
-    icon: Zap,
-    component: DashboardView,
-  },
-  {
-    id: "proxy",
-    title: "代理",
-    hint: "订阅、节点与连接方式",
-    icon: Globe,
-    component: ProxyView,
-  },
-  {
     id: "transfer",
     title: "下载",
-    hint: "文件下载与任务",
+    hint: "任务、进度与文件",
     icon: Download,
     component: TransferView,
   },
   {
+    id: "devices",
+    title: "互联",
+    hint: "我的设备与文件互传",
+    icon: Network,
+    component: InterconnectView,
+  },
+  {
     id: "diagnose",
-    title: "检测",
-    hint: "检查网站连接",
+    title: "诊断",
+    hint: "检查网络并定位问题",
     icon: Activity,
     component: DiagnoseView,
   },
-  {
-    id: "network",
-    title: "网络",
-    hint: "接口与 DNS",
-    icon: Settings2,
-    component: NetworkSettings,
-  },
-  {
-    id: "traffic",
-    title: "连接",
-    hint: "应用与端口",
-    icon: ArrowLeftRight,
-    component: ConnectionsView,
-  },
-  {
-    id: "security",
-    title: "防护",
-    hint: "应用联网与恢复",
-    icon: ShieldCheck,
-    component: SecurityView,
-  },
-  {
-    id: "advanced",
-    title: "更多",
-    hint: "定时检测与记录",
-    icon: SlidersHorizontal,
-    component: AdvancedView,
-  },
 ];
-// user:“左侧入口就保留3个就行 加速 代理 下载”+(其余页面保留内部入口，不再占用左侧导航)。
-const navItems = items.filter((item) =>
-  ["home", "overview", "proxy", "transfer"].includes(item.id),
-);
-// user:“右侧栏…三行 3 个胶囊…易交互”+(胶囊点下载/代理时直接落到对应页；页面已打开时用事件切页)。
+const settingsItem = {
+  id: "settings",
+  title: "设置",
+  hint: "代理、加速与高级网络设置",
+  icon: Settings2,
+  component: SettingsView,
+};
+const navItems = items;
+// user:“代理和高级网络设置置于设置页，不新增大量平级入口”+(设置页用分区切换，六个分区都在同一页)。
+const SECTIONS = [
+  { id: "acceleration", title: "加速" },
+  { id: "proxy", title: "代理与线路" },
+  { id: "network", title: "网络与 DNS" },
+  { id: "connections", title: "连接" },
+  { id: "security", title: "防护" },
+  { id: "advanced", title: "高级与记录" },
+];
 const PAGE_STORAGE = "easynet:page";
+const section = ref("acceleration");
+// 旧入口（快捷胶囊、卡片链接）用功能名指路；统一在这里翻译成新结构，避免出现进不去的页面。
+const SECTION_ALIASES = {
+  proxy: "proxy",
+  acceleration: "acceleration",
+  network: "network",
+  connections: "connections",
+  traffic: "connections",
+  security: "security",
+  advanced: "advanced",
+  settings: "acceleration",
+};
 function requestedPage() {
   try {
     const value = sessionStorage.getItem(PAGE_STORAGE);
     sessionStorage.removeItem(PAGE_STORAGE);
-    return items.some((item) => item.id === value) ? value : "home";
+    if (!value) return "overview";
+    if (value === "home") return "overview";
+    if (SECTION_ALIASES[value]) {
+      section.value = SECTION_ALIASES[value];
+      return "settings";
+    }
+    return items.some((item) => item.id === value) ? value : "overview";
   } catch {
-    return "home";
+    return "overview";
   }
 }
 const page = ref(requestedPage());
+function target(id) {
+  if (items.some((item) => item.id === id)) return { page: id };
+  if (id === "home") return { page: "overview" };
+  if (SECTION_ALIASES[id]) return { page: "settings", section: SECTION_ALIASES[id] };
+  return { page: "overview" };
+}
+function show(id) {
+  const next = target(id);
+  page.value = next.page;
+  if (next.section) section.value = next.section;
+  s.notice = "";
+  s.error = "";
+}
+function openSettings(id) {
+  page.value = "settings";
+  if (id) section.value = SECTION_ALIASES[id] || id;
+}
 function quickPage(event) {
   const id = event.detail?.page;
-  if (items.some((item) => item.id === id)) {
-    show(id);
-    try {
-      sessionStorage.removeItem(PAGE_STORAGE);
-    } catch {
-      // 页面没有 sessionStorage 时仍按事件切换。
-    }
-  }
+  if (typeof id === "string" && id) show(id);
+}
+const current = computed(() =>
+  page.value === "settings"
+    ? settingsItem
+    : items.find((item) => item.id === page.value) || items[0],
+);
+function diagnostic(value) {
+  report.value = value;
+  page.value = "diagnose";
 }
 onMounted(() =>
   window.addEventListener("sunday:network-plugin-page", quickPage),
@@ -128,16 +134,6 @@ onMounted(() =>
 onBeforeUnmount(() =>
   window.removeEventListener("sunday:network-plugin-page", quickPage),
 );
-const current = computed(() => items.find((item) => item.id === page.value));
-function show(id) {
-  page.value = id;
-  s.notice = "";
-  s.error = "";
-}
-function diagnostic(value) {
-  report.value = value;
-  page.value = "diagnose";
-}
 </script>
 <template>
   <div class="nx-app" :aria-busy="Boolean(s.busy)">
@@ -162,6 +158,21 @@ function diagnostic(value) {
             /><span>{{ item.title }}</span>
           </button></template
         >
+        <div class="nx-nav-divider" />
+        <button
+          class="nx-nav-item"
+          :class="{ 'is-active': page === 'settings' }"
+          data-settings
+          :aria-current="page === 'settings' ? 'page' : undefined"
+          :title="settingsItem.hint"
+          @click="openSettings()"
+        >
+          <component
+            :is="settingsItem.icon"
+            :size="20"
+            :stroke-width="1.65"
+          /><span>{{ settingsItem.title }}</span>
+        </button>
       </nav>
       <div class="nx-sidebar-foot">
         <span
@@ -227,8 +238,12 @@ function diagnostic(value) {
             :key="page"
             :session="s"
             :report="report"
+            :section="section"
+            :sections="SECTIONS"
             @navigate="show"
             @diagnostic="diagnostic"
+            @settings="openSettings"
+            @section="section = $event"
           />
           <div v-else key="loading" class="nx-loading" aria-live="polite">
             <div class="nx-skeleton nx-loading-banner" />

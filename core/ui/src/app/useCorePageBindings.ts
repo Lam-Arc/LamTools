@@ -41,6 +41,7 @@ export function useCorePageBindings(context: {
   openFileFromSearch: any
   openLibraryProjectFile: (path: string, scope: { workRoot: string; projectId?: string }) => Promise<void>
   openPluginsFromSearch: any
+  openPluginsFromSettings: any
   openSessionFromSearch: any
   persistSettingsCatalog: any
   pluginsSection: any
@@ -81,7 +82,7 @@ export function useCorePageBindings(context: {
   updateState: any
   uploadArtifactFiles: any
 }) {
-  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups, openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
+  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups, openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openPluginsFromSettings, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
   return computed<Record<string, Record<string, any>>>(() => ({
 
   arrange: {
@@ -162,6 +163,8 @@ export function useCorePageBindings(context: {
     'updateState': unref(updateState),
     'onClose': unref(closeFullArea),
     'onSectionChange': ($event: any) => { settingsSection.value = $event },
+    // user:“插件与远程收进设置”+(手机设置里给插件一个明确入口；桌面仍走左侧竖栏的插件页)。
+    'onOpenPlugins': appRuntime.platform === 'mobile' ? openPluginsFromSettings : undefined,
     'onUpdate:density': uiPreferences.setDensity,
     'onUpdate:contentWidth': uiPreferences.setContentWidth,
     'onUpdate:themeMode': uiPreferences.setThemeMode,

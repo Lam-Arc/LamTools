@@ -38,6 +38,15 @@ const state = () => ({
   transactions: [],
   automations: [],
 });
+// user:“代理和高级网络设置置于设置页”+(测试统一从这里进设置，不再假设左栏有代理页)。
+async function openSettings(view, section) {
+  await view.get("[data-settings]").trigger("click");
+  await flushPromises();
+  if (section) {
+    await view.get(`[data-settings-section="${section}"]`).trigger("click");
+    await flushPromises();
+  }
+}
 async function setup(overrides = {}) {
   const snapshot = { ...state(), ...overrides };
   const rpc = vi.fn(async (method) => {
@@ -129,30 +138,30 @@ it("writes live numeric values into the home stat bar", async () => {
   expect(view.get("[data-stat='total']").text()).toContain("14.3 MB");
   expect(view.get("[data-stat='delay']").text()).toContain("26 ms");
 });
-it("keeps exactly home, acceleration, proxy, and downloads in the left navigation", async () => {
-  // user:“左侧分为 4 个：首页、加速、代理和下载”+(只保留这四个入口)。
+it("keeps exactly overview, downloads, interconnect, and diagnostics in the left navigation", async () => {
+  // user:“概览、下载、互联、诊断四个视图，代理和高级网络设置放进设置页”+(四个平级入口，设置单独一个入口)。
   const { view } = await setup();
   expect(
     view.findAll("[data-page]").map((button) => button.attributes("data-page")),
-  ).toEqual(["home", "overview", "proxy", "transfer"]);
-  expect(view.text()).toContain("首页");
-  expect(view.text()).toContain("加速");
-  expect(view.text()).toContain("代理");
-  expect(view.text()).toContain("下载");
+  ).toEqual(["overview", "transfer", "devices", "diagnose"]);
+  expect(view.text()).toContain("概览");
+  expect(view.text()).toContain("互联");
+  expect(view.text()).toContain("诊断");
+  expect(view.find("[data-settings]").exists()).toBe(true);
 });
 it("navigates from the home block links", async () => {
   const { view } = await setup();
   await view.get('[data-home-open="proxy"]').trigger("click");
   await flushPromises();
-  expect(view.get('[data-page="proxy"]').attributes("aria-current")).toBe(
-    "page",
-  );
+  expect(view.find("[data-settings-page]").exists()).toBe(true);
+  expect(
+    view.get('[data-settings-section="proxy"]').attributes("aria-current"),
+  ).toBe("page");
 });
 it("saves a subscription while connected by reconnecting automatically", async () => {
   // user:“添加不了订阅”“把操作傻瓜化”+(保存时自动断开并重连，不要求用户先手动关闭代理)。
   const { view, rpc } = await setup();
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   const add = view
     .findAll("button")
     .find((button) => button.text().includes("更新订阅"));
@@ -164,20 +173,19 @@ it("saves a subscription while connected by reconnecting automatically", async (
   await view.get("[data-profile-import] form").trigger("submit");
   await flushPromises();
   const methods = rpc.mock.calls.map(([method]) => method);
-  expect(methods).toContain("network-exploration.proxy.stop");
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.config", {
+  expect(methods).toContain("easynet.proxy.stop");
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.config", {
     subscription: "https://example.com/sub",
   });
-  expect(methods).toContain("network-exploration.proxy.start");
+  expect(methods).toContain("easynet.proxy.start");
   expect(view.text()).toContain("订阅已更新，线路已重新连接");
 });
 it("selects real nodes from a list without asking the user for group names", async () => {
   const { view, rpc } = await setup();
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   await view.get('[data-node="Singapore"]').trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.select", {
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.select", {
     group: "Auto",
     name: "Singapore",
   });
@@ -202,11 +210,10 @@ it("measures a line group and switches to the fastest reachable node", async () 
         }
       : original(method, params),
   );
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   await view.get("[data-optimize]").trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.optimize", {
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.optimize", {
     group: "Auto",
   });
   expect(view.text()).toContain("已自动选择 Tokyo");
@@ -229,8 +236,7 @@ it("keeps the current line when no measured node is reachable", async () => {
         }
       : original(method, params),
   );
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   await view.get("[data-optimize]").trigger("click");
   await flushPromises();
   expect(view.text()).toContain("没有可用线路，已保留当前选择");
@@ -249,7 +255,7 @@ it("starts a download with the chosen parallel count and speed limit", async () 
   await view.get(".nx-download-composer").trigger("submit");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.transfer.add",
+    "easynet.transfer.add",
     expect.objectContaining({
       url: "https://example.com/file.zip",
       connections: 4,
@@ -279,7 +285,7 @@ it("pauses a download directly from its row", async () => {
   await flushPromises();
   await view.get('[data-task-action="pause"]').trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.transfer.action", {
+  expect(rpc).toHaveBeenCalledWith("easynet.transfer.action", {
     gid: "abc",
     action: "pause",
   });
@@ -287,15 +293,13 @@ it("pauses a download directly from its row", async () => {
 });
 it("turns a web address into a readable diagnostic result", async () => {
   const { view, rpc } = await setup();
-  await view.get('[data-page="overview"]').trigger("click");
+  await view.get('[data-page="diagnose"]').trigger("click");
   await flushPromises();
-  await view
-    .get('input[aria-label="要检查的网站"]')
-    .setValue("https://github.com/");
-  await view.get(".nx-site-check form").trigger("submit");
+  await view.get('input[name="target"]').setValue("https://github.com/");
+  await view.get("[data-diagnose-form]").trigger("submit");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.diagnose",
+    "easynet.diagnose",
     expect.objectContaining({ target: "github.com" }),
   );
   expect(view.text()).toContain("检查通过");
@@ -306,8 +310,7 @@ it("only enables the proxy switch after a subscription is saved", async () => {
   const { view } = await setup({
     proxy: { running: false, config_saved: false },
   });
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   expect(view.get("[data-proxy-switch] input[role=switch]").attributes("disabled")).toBeDefined();
 });
 it("toggles the proxy directly from the home block", async () => {
@@ -315,8 +318,8 @@ it("toggles the proxy directly from the home block", async () => {
   const { view, rpc } = await setup();
   await view.get("[data-home-proxy]").trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.stop", {});
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.stop", {});
+  expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
     "page",
   );
 });
@@ -326,11 +329,12 @@ it("sends a home proxy block without a subscription to the proxy page", async ()
   });
   await view.get("[data-home-proxy]").trigger("click");
   await flushPromises();
-  expect(view.get('[data-page="proxy"]').attributes("aria-current")).toBe(
-    "page",
-  );
+  expect(view.find("[data-settings-page]").exists()).toBe(true);
+  expect(
+    view.get('[data-settings-section="proxy"]').attributes("aria-current"),
+  ).toBe("page");
   expect(rpc.mock.calls.map(([method]) => method)).not.toContain(
-    "network-exploration.proxy.start",
+    "easynet.proxy.start",
   );
 });
 it("starts a download from the home block with a filename derived from the link", async () => {
@@ -342,7 +346,7 @@ it("starts a download from the home block with a filename derived from the link"
   await view.get("[data-home-download]").trigger("submit");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.transfer.add",
+    "easynet.transfer.add",
     expect.objectContaining({
       url: "https://example.com/files/My%20Mod.zip?download=1",
     }),
@@ -356,16 +360,16 @@ it("starts local acceleration from the home page without a subscription", async 
   });
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+  expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
     "page",
   );
-  expect(rpc).toHaveBeenCalledWith("network-exploration.accelerator.start", {});
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
+  expect(rpc).toHaveBeenCalledWith("easynet.accelerator.start", {});
+  expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
   expect(rpc.mock.calls.map(([method]) => method)).not.toContain(
-    "network-exploration.proxy.start",
+    "easynet.proxy.start",
   );
 });
 it("prepares the line fallback when acceleration starts with a subscription", async () => {
@@ -376,11 +380,11 @@ it("prepares the line fallback when acceleration starts with a subscription", as
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
   const methods = rpc.mock.calls.map(([method]) => method);
-  expect(methods).toContain("network-exploration.proxy.start");
-  expect(methods.indexOf("network-exploration.proxy.start")).toBeLessThan(
-    methods.indexOf("network-exploration.accelerator.start"),
+  expect(methods).toContain("easynet.proxy.start");
+  expect(methods.indexOf("easynet.proxy.start")).toBeLessThan(
+    methods.indexOf("easynet.accelerator.start"),
   );
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
+  expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
@@ -390,14 +394,13 @@ it("runs local acceleration from the acceleration page without a subscription", 
   const { view, rpc } = await setup({
     proxy: { running: false, config_saved: false },
   });
-  await view.get('[data-page="overview"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "acceleration");
   expect(view.find("[data-acceleration-mode]").exists()).toBe(false);
   expect(view.find("[data-line-select]").exists()).toBe(false);
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.accelerator.start", {});
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
+  expect(rpc).toHaveBeenCalledWith("easynet.accelerator.start", {});
+  expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
@@ -405,26 +408,24 @@ it("runs local acceleration from the acceleration page without a subscription", 
 it("keeps line switching on the proxy page instead of the acceleration page", async () => {
   // user:“加速页里头不用分什么线路加速，本机加速的意思就是本机加速选线路的事儿，去代理里面”+(加速页不再选线路，线路选择只在代理页)。
   const { view, rpc } = await setup();
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+  expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
     "page",
   );
   expect(view.text()).toContain("一键加速");
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
+  expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
-  await view.get('[data-page="overview"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "acceleration");
   expect(view.text()).toContain("去代理页管理");
   expect(view.find("[data-node]").exists()).toBe(false);
   expect(view.find("[data-line-select]").exists()).toBe(false);
-  await view.get('[data-page="proxy"]').trigger("click");
-  await flushPromises();
+  await openSettings(view, "proxy");
   await view.get('[data-node="Singapore"]').trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.select", {
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.select", {
     group: "Auto",
     name: "Singapore",
   });
@@ -470,12 +471,12 @@ it("does not claim acceleration is on when the user cancels the system change", 
 });
 it("opens the page requested by a quick pill", async () => {
   // user:“右侧栏…三行 3 个胶囊…易交互”+(侧栏胶囊可以直接落到下载页，不用先开首页再点导航)。
-  sessionStorage.setItem("network-exploration:page", "transfer");
+  sessionStorage.setItem("easynet:page", "transfer");
   const { view } = await setup();
   expect(view.get('[data-page="transfer"]').attributes("aria-current")).toBe(
     "page",
   );
-  expect(sessionStorage.getItem("network-exploration:page")).toBeNull();
+  expect(sessionStorage.getItem("easynet:page")).toBeNull();
 });
 it("renders three quick pills with direct actions", async () => {
   const rpc = vi.fn(async (method) => {
@@ -515,26 +516,26 @@ it("renders three quick pills with direct actions", async () => {
   ).toEqual(["acceleration", "proxy", "download"]);
   await view.get('[data-quick-action="acceleration"]').trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
+  expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
   view.get("[data-network-quick-node]").getComponent(UiSelect).vm.$emit("update:modelValue", "Singapore");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.select", {
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.select", {
     group: "Auto",
     name: "Singapore",
   });
   await view.get('[data-quick-action="proxy"]').trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.stop", {});
+  expect(rpc).toHaveBeenCalledWith("easynet.proxy.stop", {});
   await view
     .get('[data-quick="download"] input')
     .setValue("https://example.com/file.zip");
   await view.get('[data-quick="download"] form').trigger("submit");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.transfer.add",
+    "easynet.transfer.add",
     expect.objectContaining({
       url: "https://example.com/file.zip",
     }),
@@ -563,7 +564,7 @@ it("opens the proxy page when the quick proxy has no subscription", async () => 
   window.addEventListener("sunday:open-plugin-page", opened);
   await view.get('[data-quick-action="proxy"]').trigger("click");
   expect(opened).toHaveBeenCalled();
-  expect(sessionStorage.getItem("network-exploration:page")).toBe("proxy");
+  expect(sessionStorage.getItem("easynet:page")).toBe("proxy");
   window.removeEventListener("sunday:open-plugin-page", opened);
 });
 it("stops quick-panel polling when the window becomes hidden", async () => {
@@ -623,11 +624,11 @@ it("keeps acceleration running when system restoration fails", async () => {
   await flushPromises();
   await consumer.vm.session.toggleAcceleration();
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.system.restore", {
+  expect(rpc).toHaveBeenCalledWith("easynet.system.restore", {
     id: "owned",
   });
   expect(rpc.mock.calls.map(([method]) => method)).not.toContain(
-    "network-exploration.accelerator.stop",
+    "easynet.accelerator.stop",
   );
   expect(consumer.vm.session.error).toBe("恢复失败");
 });
@@ -640,7 +641,7 @@ it("unified download entries leave naming and defaults to the backend", async ()
     .setValue("https://example.com/file%ZZ.zip");
   await view.get("[data-home-download]").trigger("submit");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith("network-exploration.transfer.add", {
+  expect(rpc).toHaveBeenCalledWith("easynet.transfer.add", {
     url: "https://example.com/file%ZZ.zip",
   });
   const quick = mount(QuickPanel, {

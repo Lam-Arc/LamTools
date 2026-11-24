@@ -348,13 +348,17 @@ export function useWorkspace(
     root?: string,
     projectId?: string,
   ): SplitTab | null {
-    const target = pane && areasOf(model.value).some(area => area.id === pane) ? pane : activePane.value
-    if (!areasOf(model.value).some(area => area.id === target)) return null
-    const tab = newTab(kind, resource, title, {
+    return addWithMetadata(kind, resource, title, pane, {
       ...(sessionId ? { sessionId } : {}),
       ...(root ? { root } : {}),
       ...(projectId ? { projectId } : {}),
     })
+  }
+
+  function addWithMetadata(kind: SplitContent, resource: string, title: string | undefined, pane: string | undefined, extra: Partial<SplitTab>): SplitTab | null {
+    const target = pane && areasOf(model.value).some(area => area.id === pane) ? pane : activePane.value
+    if (!areasOf(model.value).some(area => area.id === target)) return null
+    const tab = newTab(kind, resource, title, extra)
     commit(addTab(model.value, target, surfaceRefOf(tab)))
     commit(selectTabIn(model.value, target, tab.id))
     activePane.value = target
@@ -413,12 +417,14 @@ export function useWorkspace(
    * user:“开一个分屏，加一个标签页，由 agent 开的标签页打一个 tag：agent”+
    * (放不下时退回当前屏：宁可窄一点，也不要让 Agent 的页面“开了但看不见”)。
    */
-  function addAgentBrowserTab(url = '', title = ''): SplitTab | null {
-    const areaId = ensureAgentBrowserArea()
-    const tab = add('browser', url, title || url || 'Agent 浏览', areaId ?? activePane.value)
-    if (!tab) return null
-    tab.tag = 'agent'
-    return tab
+  function addAgentBrowserTab(url = '', title = '', opener?: string): SplitTab | null {
+    // user:“点 e26 其实**成功开了新标签页**”+(沿用来源标签的分屏和会话设置)。
+    const source = opener ? tabsView.value.find(({ tab }) => tab.id === opener) : undefined
+    const areaId = source?.pane ?? ensureAgentBrowserArea()
+    return addWithMetadata('browser', url, title || url || 'Agent 浏览', areaId ?? activePane.value, {
+      tag: 'agent',
+      ...(source?.tab.profile ? { profile: source.tab.profile } : {}),
+    })
   }
 
   function pathToArea(node: WorkspaceModel['tree'], areaId: AreaId): number[] {

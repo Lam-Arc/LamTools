@@ -6,7 +6,7 @@
         <h2 class="device-page__title" :class="{ 'sunday-page-title': isDesktop }">{{ t("设备连接") }}</h2>
         <p class="device-page__sub" :class="{ 'sunday-page-description': isDesktop }">
           {{ isDesktop
-            ? t("手机扫这里，就能接手这台电脑上的会话。")
+            ? t("配对后，手机可以接手这台电脑上的会话。")
             : t("选择在哪里工作：这台手机，或一台配对过的电脑。") }}
         </p>
       </div>
@@ -121,6 +121,23 @@
           {{ t("连接这台电脑") }}
         </button>
       </div>
+
+      <!-- user:“优先保证连接的稳定，减少无故断连”+(一个开关，不开就没有通知；
+           开了只把进程留在前台，连接本身仍由 Rust 宿主负责)。 -->
+      <label class="device-page__toggle">
+        <input
+          type="checkbox"
+          class="sunday-checkbox"
+          :checked="keepAlive"
+          :disabled="busy"
+          data-p2p-keepalive
+          @change="onKeepAliveChange"
+        />
+        <span>{{ t("后台保持连接") }}</span>
+      </label>
+      <p class="device-page__foot">
+        {{ t("开启后会显示一条低优先级通知，减少系统在后台把连接挂起。") }}
+      </p>
     </template>
 
     <!-- 电脑：二维码就是全部入口；生成票据即开始接受连接。 -->
@@ -134,10 +151,10 @@
         </span>
         <span v-else-if="running" class="device-page__service-text">{{ t("传输服务运行中") }}</span>
         <span v-else class="device-page__service-text">{{ t("传输服务未运行") }}</span>
-        <span v-if="ticket && expiresIn > 0" class="device-page__expiry">
+        <span v-if="canUseTicket" class="device-page__expiry">
           {{ t("二维码 {0} 秒后失效", { 0: expiresIn }) }}
         </span>
-        <span v-else-if="ticket" class="device-page__expiry">{{ t("二维码已过期，请重新生成") }}</span>
+        <span v-else-if="ticket && !pairingSyncPending" class="device-page__expiry">{{ t("二维码已过期，请重新生成") }}</span>
       </div>
       <!-- user:"记住用户是否开启远程访问（持久化，不依赖临时状态）"+(桌面开关；
            下次启动按它决定要不要自动起传输) -->
@@ -147,28 +164,42 @@
           type="checkbox"
           class="sunday-checkbox"
           :checked="autoConnect"
-          :disabled="busy"
+          :disabled="busy || savingAutoConnect"
           data-p2p-autoconnect
           @change="onAutoConnectChange"
         />
         <span>{{ t("启动时自动开启远程访问") }}</span>
       </label>
+      <!-- user:“针对远程连接/设备配对 去查修目前用户体验最差的一点，并列出接下来的候选”+
+           (收到扫码申请后，把确认和拒绝直接显示在桌面二维码上方)。 -->
+      <p class="sr-only" role="status">{{ pending.length ? t("有设备等待确认配对") : '' }}</p>
+      <section v-if="pending.length" class="pair-approval sunday-page-panel" :aria-label="t('待确认设备')" data-p2p-pending>
+        <h3 class="pair-approval__title">{{ t("待确认设备") }}</h3>
+        <ul class="device-list">
+          <li v-for="item in pending" :key="item.id" class="device-item">
+            <span class="device-item__body">
+              <span class="device-item__name" :title="item.id">{{ item.name || shortId(item.id) }}</span>
+            </span>
+            <button class="device-item__action" type="button" :disabled="busy" @click="confirmDevice(item.id)">{{ t("确认") }}</button>
+            <button class="device-item__action" type="button" :disabled="busy" @click="rejectDevice(item.id)">{{ t("拒绝") }}</button>
+          </li>
+        </ul>
+      </section>
       <div v-if="ticket" class="pair-card sunday-page-panel">
-        <div v-if="qrSvg" class="pair-card__qr" v-html="qrSvg" aria-hidden="true"></div>
+        <div v-if="qrSvg && canUseTicket" class="pair-card__qr" v-html="qrSvg" aria-hidden="true"></div>
         <div class="pair-card__side">
-          <p class="pair-card__hint">{{ t("用 Sunday M 扫一下即可完成配对；二维码 5 分钟内有效，扫一次就作废。") }}</p>
-          <button
-            class="pair-card__ticket"
-            type="button"
-            :title="t('点击复制票据')"
-            :aria-label="t('复制票据')"
-            @click="copyTicket"
-          >
-            <code data-remote-ticket>{{ copied ? t("已复制") : ticket }}</code>
-          </button>
+          <p class="pair-card__hint">{{ t("用 Sunday M 扫码后在这台电脑上确认配对。二维码 5 分钟内有效，每张仅供一台设备申请。") }}</p>
+          <!-- user:“三项全做”+(图片生成失败时保留可手动选中的配对码，并提供重试和复制)。 -->
+          <p v-if="canUseTicket && qrError" class="sunday-page-status sunday-page-status--error" role="alert" data-p2p-qr-error>
+            {{ t("二维码生成失败。可以重试，或复制配对码。") }}
+          </p>
+          <code v-if="canUseTicket" class="pair-card__ticket" data-remote-ticket>{{ ticket }}</code>
+          <p v-if="canUseTicket && copyError" class="sunday-page-status sunday-page-status--error" role="alert">{{ t("复制失败，请手动选中配对码。") }}</p>
           <div class="device-page__actions">
+            <button v-if="canUseTicket && qrError" class="device-page__button" type="button" :disabled="busy || qrLoading" data-p2p-qr-retry @click="refreshQr(ticket)">{{ t("重试") }}</button>
+            <button v-if="canUseTicket" class="device-page__button" type="button" :disabled="busy" data-p2p-copy @click="copyTicket">{{ copied ? t("已复制") : t("复制配对码") }}</button>
             <button class="device-page__button" type="button" :disabled="busy" data-p2p-reissue @click="createTicket">{{ t("重新生成") }}</button>
-            <button class="device-page__button" type="button" :disabled="busy" @click="stopServing">{{ t("停止接受") }}</button>
+            <button class="device-page__button" type="button" :disabled="busy" data-p2p-stop @click="stopServing">{{ t("停止本次远程访问") }}</button>
           </div>
         </div>
       </div>
@@ -177,6 +208,7 @@
         class="device-page__button is-primary is-wide"
         type="button"
         :disabled="busy"
+        data-p2p-generate
         @click="createTicket"
       >
         {{ busy ? t("正在生成…") : t("生成配对二维码") }}
@@ -205,6 +237,10 @@
           <div>
             <dt>{{ t("连接方式") }}</dt>
             <dd data-p2p-path-value>{{ pathLabel }}</dd>
+          </div>
+          <div v-if="rttMs > 0">
+            <dt>{{ t("延迟") }}</dt>
+            <dd data-p2p-rtt>{{ rttMs }} ms</dd>
           </div>
           <div>
             <dt>{{ t("会话") }}</dt>
@@ -260,7 +296,6 @@
     <TransferPanel
       v-if="isDesktop"
       :invoke="host() ?? undefined"
-      :send-sources="sendSources"
       :preview-services="services ? transferPreview : undefined"
       @retry="onTransferRetry"
     />
@@ -292,17 +327,18 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Monitor, QrCode, RefreshCw, Smartphone } from 'lucide-vue-next'
 import type { RemoteConnectionServices } from '@/components/remoteConnectionServices.ts'
 import TransferPanel from '@/components/TransferPanel.vue'
-import { rememberSendSource, sendFileToDevice, ticketForDevice } from '@/transfer/dispatch.ts'
 
 import {
   activateDevice,
   readDevices,
+  readKeepAlivePref,
   readTicket,
-  rememberDevice,
+  saveConnectedDevice,
+  saveKeepAlivePref,
   saveTicket,
   type PairedDevice,
 } from '@/app/remoteSession.ts'
-import { explainStatus, isUsable } from '@/app/remoteReconnect.ts'
+import { explainStatus, isAwaitingApproval, isUsable } from '@/app/remoteReconnect.ts'
 
 /**
  * 设备连接页。
@@ -320,6 +356,10 @@ const transferPreview = { open: () => undefined }
 
 const ticket = ref('')
 const qrSvg = ref('')
+const qrError = ref(false)
+const qrLoading = ref(false)
+const copyError = ref(false)
+const pairingSyncPending = ref(false)
 const ticketInput = ref('')
 const serving = ref(false)
 /** 传输进程是否真的在跑（p2p_status 的 running）。 */
@@ -331,15 +371,19 @@ const expiresAt = ref(0)
 /** 每秒走一格，用来把过期时间显示成倒计时。 */
 const clock = ref(Math.floor(Date.now() / 1000))
 const expiresIn = computed(() => (expiresAt.value > 0 ? Math.max(0, expiresAt.value - clock.value) : 0))
+const canUseTicket = computed(() => !pairingSyncPending.value && Boolean(ticket.value) && expiresIn.value > 0)
 const connected = ref(false)
 /** 宿主给的分层结论（view/reason/layers）；旧宿主没有这些字段时退回 connected。 */
 const view = ref('')
 const reason = ref('')
 /** 「启动时自动开启远程访问」开关（宿主持久化在 p2p-prefs.json）。 */
 const autoConnect = ref(false)
+const savingAutoConnect = ref(false)
 const peer = ref('')
 /** 当前连接走的是直连还是中继（宿主给的 path；空/unknown 表示还在判定）。 */
 const pathKind = ref('unknown')
+/** 当前选中路径的往返延迟（毫秒）；0 表示还没测出来。 */
+const rttMs = ref(0)
 /** 当前设备的显示名（多设备时用来分清是哪一台）。 */
 const currentDeviceName = ref('')
 /** 当前那台的会话是否真的恢复过（宿主按「当前设备」给，不按「有设备」猜）。 */
@@ -350,11 +394,24 @@ const onlineDevices = ref<Array<{ id: string; name: string; path: string; sessio
 const protocolError = ref('')
 const devices = ref<Array<{ id: string; name: string }>>([])
 const revoked = ref<Array<{ id: string; name: string }>>([])
+/** 已经扫码、但还在等电脑确认的设备（宿主从 p2p-pairing.json 读出来）。 */
+const pending = ref<Array<{ id: string; name: string; requestedAt?: number; expiresAt?: number }>>([])
+/** 手机扫了码，但电脑还没确认：界面靠它自动重试。 */
+const pendingApproval = ref(false)
+/** 手机：后台保持连接（前台服务）；桌面不显示这个开关。 */
+const keepAlive = ref(true)
+let approvalTimer: number | null = null
+let approvalAttempts = 0
 const paired = ref<PairedDevice[]>([])
 const busy = ref(false)
 const error = ref('')
 const pasting = ref(false)
 const copied = ref(false)
+let copyTimer: number | undefined
+let pairingRevision = 0
+let syncedPairingCodeRevision: number | undefined
+let requestedPairingCodeRevision: number | undefined
+let autoConnectRevision = 0
 const elapsed = ref(0)
 const progressText = ref('')
 let progressTimer: number | null = null
@@ -422,33 +479,14 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id
 }
 
-/**
- * 本窗口发出去的传输：传输 id → 本机源文件。
- *
- * user:“失败可重试”+(源文件路径只有发起方知道，宿主只记「收到/发到哪」；面板按这张表
- * 决定「重试」能不能点，避免给一个点了没反应的按钮)。
- */
-const sendSources = ref<Record<string, string>>({})
-
-/**
- * 面板里点「重试」：用当前连接那台设备的票再发一次。
- *
- * user:“失败可重试；完成后可「打开所在文件夹」”+(重发走和首次发送完全同一条路，
- * 不另写一套发送逻辑；票不在就直接说清楚，不发出去再说失败)。
- */
-async function onTransferRetry(payload: { path: string; name: string }): Promise<void> {
+// user:“全部处理并继续寻找”+(重试原传输，始终交给宿主查找原接收设备)。
+async function onTransferRetry(payload: { id: string }): Promise<void> {
   const invoke = host()
   if (!invoke) return
-  const ticket = ticketForDevice(readDevices(), peer.value)
-  if (!ticket) {
-    error.value = t("这台设备没有地址票，先在「设备连接」里重新扫码配对。")
-    return
-  }
   busy.value = true
   error.value = ''
   try {
-    const sent = await sendFileToDevice(invoke, { path: payload.path, name: payload.name, ticket })
-    sendSources.value = rememberSendSource(sendSources.value, sent.transferId, payload.path)
+    await invoke('p2p_retry_transfer', { id: payload.id })
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -460,40 +498,71 @@ function loadPaired(): void {
   paired.value = props.services ? [] : readDevices()
 }
 
+interface HostStatus {
+  running?: boolean
+  serving?: boolean
+  connected?: boolean
+  peer?: string | null
+  ticket?: string
+  expiresAt?: number
+  pairingCodeRevision?: number
+  error?: string | null
+  binaryError?: string | null
+  view?: string
+  reason?: string
+  autoConnect?: boolean
+}
+
+function applyStatus(status: HostStatus, pairingIsCurrent = true, preferenceIsCurrent = true): void {
+  if (typeof status.running === 'boolean' || typeof status.serving === 'boolean') {
+    running.value = status.running === true || status.serving === true
+    serving.value = status.serving ?? running.value
+  }
+  if ('error' in status || 'binaryError' in status) serviceError.value = status.error || status.binaryError || ''
+  if (typeof status.connected === 'boolean') connected.value = status.connected
+  if (status.peer === null || typeof status.peer === 'string') peer.value = status.peer ?? ''
+  if (typeof status.view === 'string') view.value = status.view
+  if (typeof status.reason === 'string') reason.value = status.reason
+  if (preferenceIsCurrent && !savingAutoConnect.value && typeof status.autoConnect === 'boolean') {
+    autoConnect.value = status.autoConnect
+  }
+  if (pairingIsCurrent && typeof status.ticket === 'string') {
+    setPairingCode(status.ticket, status.expiresAt ?? 0, status.pairingCodeRevision)
+  }
+  applyLive(status)
+}
+
+async function readStatus(): Promise<void> {
+  const revision = pairingRevision
+  const preferenceRevision = autoConnectRevision
+  const status = await call<HostStatus>('p2p_status')
+  if (!status || !mounted) return
+  applyStatus(status, revision === pairingRevision, preferenceRevision === autoConnectRevision)
+}
+
+function onStatusPush(status: HostStatus): void {
+  if (isDesktop.value && status.running === false) {
+    setPairingCode('', 0, status.pairingCodeRevision)
+  }
+  applyStatus(status)
+  const revision = status.pairingCodeRevision
+  if (!isDesktop.value || revision === undefined || revision === syncedPairingCodeRevision || revision === requestedPairingCodeRevision) return
+  requestedPairingCodeRevision = revision
+  pairingSyncPending.value = true
+  pairingRevision++
+  void readStatus().catch(() => {
+    // 下次收到状态或手动刷新时可以重试；旧码保持隐藏。
+  }).finally(() => {
+    if (requestedPairingCodeRevision === revision) requestedPairingCodeRevision = undefined
+  })
+}
+
 async function refresh(): Promise<void> {
   busy.value = true
   error.value = ''
   activeId.value = readActive()
   try {
-    const status = await call<{
-      running?: boolean
-      serving?: boolean
-      ticket?: string
-      connected?: boolean
-      peer?: string | null
-      expiresAt?: number
-      error?: string | null
-      binaryError?: string | null
-      view?: string
-      reason?: string
-      autoConnect?: boolean
-    }>('p2p_status')
-    if (status) {
-      serving.value = status.serving === true
-      running.value = status.running === true || status.serving === true
-      serviceError.value = status.error || status.binaryError || ''
-      expiresAt.value = typeof status.expiresAt === 'number' ? status.expiresAt : 0
-      connected.value = status.connected === true
-      peer.value = status.peer ?? ''
-    applyLive(status)
-    view.value = typeof status.view === 'string' ? status.view : ''
-    reason.value = typeof status.reason === 'string' ? status.reason : ''
-    autoConnect.value = status.autoConnect === true
-      if (status.ticket && status.ticket !== ticket.value) {
-        ticket.value = status.ticket
-        await refreshQr(ticket.value)
-      }
-    }
+    await readStatus()
     loadPaired()
     const list = await call<{ devices?: Array<{ id: string; name: string }>; revoked?: Array<{ id: string; name: string }> }>('p2p_devices')
     devices.value = list?.devices ?? []
@@ -515,54 +584,63 @@ async function refreshQuiet(force = false): Promise<void> {
   // user:“确保视觉、功能和交互不退化”+(出票据后允许在忙碌状态内刷新有效期，普通轮询仍避开操作)。
   if (busy.value && !force) return
   try {
-    const status = await call<{
-      running?: boolean
-      serving?: boolean
-      connected?: boolean
-      peer?: string | null
-      expiresAt?: number
-      error?: string | null
-      binaryError?: string | null
-      view?: string
-      reason?: string
-      autoConnect?: boolean
-    }>('p2p_status')
-    if (!status) return
-    serving.value = status.serving === true
-    running.value = status.running === true || status.serving === true
-    serviceError.value = status.error || status.binaryError || ''
-    expiresAt.value = typeof status.expiresAt === 'number' ? status.expiresAt : 0
-    connected.value = status.connected === true
-    peer.value = status.peer ?? ''
-    applyLive(status)
-    view.value = typeof status.view === 'string' ? status.view : ''
-    reason.value = typeof status.reason === 'string' ? status.reason : ''
-    autoConnect.value = status.autoConnect === true
+    await readStatus()
     loadPaired()
   } catch {
     // 轮询失败不打断用户正在做的事。
   }
 }
 
-async function refreshQr(value: string): Promise<void> {
+// user:“三项全做”+(配对码和过期时间一起更新，旧图片和复制反馈随旧码清掉)。
+function setPairingCode(value: string, expiry: number, revision?: number): void {
+  const changed = value !== ticket.value
+  if (changed || expiry !== expiresAt.value) pairingRevision++
+  syncedPairingCodeRevision = revision
+  pairingSyncPending.value = false
+  ticket.value = value
+  expiresAt.value = expiry
+  clock.value = Math.floor(Date.now() / 1000)
+  ensureClock()
+  if (!changed) return
   qrSvg.value = ''
-  if (!value) return
+  qrError.value = false
+  copyError.value = false
+  copied.value = false
+  window.clearTimeout(copyTimer)
+  qrLoading.value = false
+  if (canUseTicket.value) void refreshQr(value)
+}
+
+async function refreshQr(value: string): Promise<void> {
+  if (!canUseTicket.value || qrLoading.value) return
+  qrLoading.value = true
   try {
     const result = await call<{ svg?: string }>('p2p_qr', { ticket: value })
-    qrSvg.value = result?.svg ?? ''
+    if (value !== ticket.value) return
+    qrSvg.value = result?.svg?.trim() ?? ''
+    qrError.value = !qrSvg.value
   } catch {
-    // 二维码只是方便，票据文字本身还能复制。
+    if (value === ticket.value) qrError.value = true
+  } finally {
+    if (value === ticket.value) qrLoading.value = false
   }
 }
 
 async function copyTicket(): Promise<void> {
+  if (!canUseTicket.value) return
+  const value = ticket.value
+  copyError.value = false
+  copied.value = false
+  window.clearTimeout(copyTimer)
   try {
-    if (props.services) await props.services.copy(ticket.value)
-    else await navigator.clipboard.writeText(ticket.value)
+    if (props.services) await props.services.copy(value)
+    else await navigator.clipboard.writeText(value)
+    if (value !== ticket.value) return
     copied.value = true
-    window.setTimeout(() => { copied.value = false }, 1500)
+    window.clearTimeout(copyTimer)
+    copyTimer = window.setTimeout(() => { copied.value = false }, 1500)
   } catch {
-    // 剪贴板不可用时票据文字仍可手动选择。
+    if (value === ticket.value) copyError.value = true
   }
 }
 
@@ -626,16 +704,18 @@ async function switchTo(id: string): Promise<void> {
       // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
       // 又会按「已连接」走回电脑。切换必须先断掉现有隧道)。
       await call('p2p_disconnect').catch(() => undefined)
+      void syncConnectionService()
       window.location.reload()
       return
     }
     const device = readDevices().find((item) => item.id === id)
     if (!device) throw new Error(t('这台电脑不在配对列表里了'))
-    activateDevice(id)
     // user:“点了切换电脑…进去还在手机”+(以前只存票据就重载，重载时通道还没通，界面
     // 只能先落回本机，再赌后台拨号；拨号慢一点就一直停在本机。这里先连上再重载)。
     const name = isDesktop.value ? 'PC' : 'Phone'
-    await call('p2p_connect', { ticket: device.ticket, name, timeoutMs: 45_000 })
+    const result = await call<{ resume?: string; name?: string }>('p2p_connect', { ticket: device.ticket, name, timeoutMs: 45_000 })
+    activateDevice(id)
+    if (result?.resume) saveConnectedDevice(device.ticket, result.resume, result.name || device.name)
     window.location.reload()
   } catch (cause) {
     error.value = String(cause)
@@ -654,6 +734,8 @@ function onAutoConnectChange(event: Event): void {
 }
 
 async function toggleAutoConnect(next: boolean): Promise<void> {
+  autoConnectRevision++
+  savingAutoConnect.value = true
   autoConnect.value = next
   try {
     // Tauri 的命令参数按 camelCase 绑定到 Rust 的 snake_case 参数。
@@ -663,6 +745,9 @@ async function toggleAutoConnect(next: boolean): Promise<void> {
     // 写盘失败就退回原来的值：界面不能显示一个宿主根本没记住的开关。
     autoConnect.value = !next
     error.value = String(cause)
+  } finally {
+    savingAutoConnect.value = false
+    autoConnectRevision++
   }
 }
 
@@ -677,14 +762,12 @@ async function createTicket(): Promise<void> {
       if (!apiBase) throw new Error(t('拿不到本地后端地址'))
       args.apiBase = apiBase
     }
-    const result = await call<{ ticket?: string }>('p2p_ticket', args)
+    const result = await call<HostStatus>('p2p_ticket', { ...args, renew: Boolean(ticket.value) })
     if (result?.ticket) {
-      ticket.value = result.ticket
       serving.value = true
       running.value = true
       serviceError.value = ''
-      await refreshQr(ticket.value)
-      // 过期时间由宿主给出（EXPIRES 行）：立刻取一次，倒计时不用等下一轮轮询。
+      if (typeof result.expiresAt === 'number') setPairingCode(result.ticket, result.expiresAt, result.pairingCodeRevision)
       await refreshQuiet(true)
     }
   } catch (cause) {
@@ -700,8 +783,9 @@ async function stopServing(): Promise<void> {
   try {
     await call('p2p_serve_stop')
     serving.value = false
-    ticket.value = ''
-    qrSvg.value = ''
+    running.value = false
+    setPairingCode('', 0)
+    await refreshQuiet(true)
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -725,39 +809,119 @@ async function scan(): Promise<void> {
   }
 }
 
+/** 开关只表达开/停：有票据且用户没关掉时才启动前台服务。 */
+async function syncConnectionService(): Promise<void> {
+  if (isDesktop.value) return
+  const enabled = keepAlive.value && Boolean(readTicket())
+  try {
+    await call('connection_service_set', { enabled })
+  } catch {
+    // 老宿主没有这个命令：连接照常可用，只是没有后台保活。
+  }
+}
+
+function onKeepAliveChange(event: Event): void {
+  const target = event.target as HTMLInputElement | null
+  keepAlive.value = Boolean(target?.checked)
+  saveKeepAlivePref(keepAlive.value)
+  void syncConnectionService()
+}
+
 async function connect(): Promise<void> {
   busy.value = true
   error.value = ''
   startConnecting(ticketInput.value)
   try {
     const name = isDesktop.value ? 'PC' : 'Phone'
-    const result = await call<{ peer?: string; name?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
+    const result = await call<{ peer?: string; name?: string; resume?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
     connected.value = Boolean(result?.peer)
     peer.value = result?.peer ?? ''
     if (result?.peer) {
-      saveTicket(ticketInput.value.trim())
-      // 配过的电脑进设备清单，之后直接在清单里切换。
-      rememberDevice(ticketInput.value.trim(), result.name || shortId(result.peer))
+      // user:“配对成功后建立持久设备信任，下次自动连接”+(把当前票换成 sunday1 地址票；
+      // sunday2 只有 5 分钟，不能当长期凭据。设备清单也用它，切换时才不用重扫)。
+      saveConnectedDevice(ticketInput.value.trim(), result.resume ?? '', result.name || shortId(result.peer))
+      void syncConnectionService()
       loadPaired()
     }
     window.location.reload()
   } catch (cause) {
-    error.value = String(cause)
-    if (!isDesktop.value) pasting.value = true
+    const message = String(cause)
+    // user:“电脑显示待确认设备，用户确认配对”+(扫码后只是提出申请；明确告诉用户
+    // 去电脑上点确认，而不是把「还没确认」说成连接失败)。
+    if (isAwaitingApproval(message)) {
+      pendingApproval.value = true
+      error.value = t('等待电脑确认：请在电脑的「设备连接」页点「确认」，确认后会自动连上。')
+      startApprovalWait(ticketInput.value.trim())
+    } else {
+      error.value = message
+      if (!isDesktop.value) pasting.value = true
+    }
   } finally {
     busy.value = false
     stopConnecting()
   }
 }
 
+/** user:“电脑显示待确认设备，用户确认配对”+(每 2.5 秒用同一张票重试，确认后自动接上)。 */
+function startApprovalWait(ticket: string): void {
+  if (approvalTimer !== null || !ticket) return
+  const tick = async () => {
+    approvalTimer = null
+    approvalAttempts += 1
+    if (!pendingApproval.value || approvalAttempts > 60) {
+      stopApprovalWait()
+      return
+    }
+    try {
+      const name = isDesktop.value ? 'PC' : 'Phone'
+      const result = await call<{ peer?: string; name?: string; resume?: string }>('p2p_connect', {
+        ticket,
+        name,
+        timeoutMs: 20_000,
+      })
+      if (result?.peer) {
+        saveConnectedDevice(ticket, result.resume ?? '', result.name || shortId(result.peer))
+        void syncConnectionService()
+        pendingApproval.value = false
+        stopApprovalWait()
+        window.location.reload()
+        return
+      }
+    } catch (cause) {
+      if (!isAwaitingApproval(String(cause))) {
+        pendingApproval.value = false
+        error.value = String(cause)
+        stopApprovalWait()
+        return
+      }
+    }
+    approvalTimer = window.setTimeout(tick, 2_500)
+  }
+  approvalTimer = window.setTimeout(tick, 2_500)
+}
+
+function stopApprovalWait(): void {
+  if (approvalTimer !== null) {
+    window.clearTimeout(approvalTimer)
+    approvalTimer = null
+  }
+  approvalAttempts = 0
+}
+
 async function disconnect(): Promise<void> {
+  stopApprovalWait()
+  pendingApproval.value = false
   busy.value = true
   try {
     await call('p2p_disconnect')
     connected.value = false
     peer.value = ''
     // user:“交互测试”+(隔离预览断开时不修改真实票据，也不重载应用)。
-    if (!props.services) { saveTicket(''); window.location.reload() }
+    if (!props.services) {
+      saveTicket('')
+      void syncConnectionService()
+      window.location.reload()
+    }
   } finally {
     busy.value = false
   }
@@ -787,6 +951,34 @@ async function revoke(id: string): Promise<void> {
   }
 }
 
+/** user:“电脑显示待确认设备，用户确认配对”+(确认后才写可信名单)。 */
+async function confirmDevice(id: string): Promise<void> {
+  busy.value = true
+  error.value = ''
+  try {
+    await call('p2p_confirm_device', { id })
+    await refresh()
+  } catch (cause) {
+    error.value = String(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+/** 拒绝同时把设备记入撤销名单，旧票作废。 */
+async function rejectDevice(id: string): Promise<void> {
+  busy.value = true
+  error.value = ''
+  try {
+    await call('p2p_reject_device', { id })
+    await refresh()
+  } catch (cause) {
+    error.value = String(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
 /** 倒计时只在真的有二维码时才需要：没有码就没有唤醒。 */
 let clockTimer: number | null = null
 
@@ -798,17 +990,17 @@ function stopClock(): void {
 }
 
 function ensureClock(): void {
-  const needed = expiresAt.value > 0 && document.visibilityState === 'visible'
+  clock.value = Math.floor(Date.now() / 1000)
+  const needed = expiresIn.value > 0 && document.visibilityState === 'visible'
   if (!needed) {
     stopClock()
     return
   }
   if (clockTimer === null) {
-    clock.value = Math.floor(Date.now() / 1000)
     clockTimer = window.setInterval(() => {
       clock.value = Math.floor(Date.now() / 1000)
       // 码过期了就没有继续走的理由。
-      if (expiresAt.value <= 0) stopClock()
+      if (expiresIn.value === 0) stopClock()
     }, 1000)
   }
 }
@@ -827,36 +1019,6 @@ function onFocus(): void {
   void refreshQuiet(true)
 }
 
-/**
- * 把宿主推来的状态收进界面。
- *
- * user:“清理无效轮询与监听：把托盘/状态面板里的定时轮询收敛到事件驱动，避免常驻空转”+
- * (以前页面开着就每 3 秒问一次宿主；现在宿主状态真的变了才推 `p2p-state`，这里只负责收，
- * 页面不可见时连倒计时都停掉)。
- */
-function applyPush(payload: {
-  running?: boolean
-  connected?: boolean
-  view?: string
-  reason?: string
-  peer?: string | null
-  deviceName?: string
-  path?: string
-  expiresIn?: number
-  layers?: { session?: string }
-  devices?: Array<{ id: string; name: string; path: string; session: boolean; current: boolean }>
-}): void {
-  if (typeof payload.running === 'boolean') running.value = payload.running
-  if (typeof payload.connected === 'boolean') connected.value = payload.connected
-  if (typeof payload.view === 'string') view.value = payload.view
-  if (typeof payload.reason === 'string') reason.value = payload.reason
-  if (payload.peer === null || typeof payload.peer === 'string') peer.value = payload.peer ?? ''
-  if (typeof payload.expiresIn === 'number' && payload.expiresIn > 0) {
-    expiresAt.value = Math.floor(Date.now() / 1000) + payload.expiresIn
-  }
-  applyLive(payload)
-}
-
 /** 连接详情用到的字段（手动刷新与推送两条路共用一份）。 */
 function applyLive(raw: unknown): void {
   // 入参用 unknown 再收窄：两个调用点各自的内联类型只声明了自己关心的字段，写死成窄
@@ -867,14 +1029,18 @@ function applyLive(raw: unknown): void {
     protocolError?: string | null
     layers?: { session?: string }
     devices?: Array<{ id: string; name: string; path: string; session: boolean; current: boolean }>
+    pending?: Array<{ id: string; name: string; requestedAt?: number; expiresAt?: number }>
+    rttMs?: number
   }
   if (typeof status.path === 'string' && status.path) pathKind.value = status.path
+  if (typeof status.rttMs === 'number') rttMs.value = status.rttMs
   if (typeof status.deviceName === 'string') currentDeviceName.value = status.deviceName
   if (typeof status.protocolError === 'string' || status.protocolError === null) {
     protocolError.value = status.protocolError || ''
   }
   if (status.layers) sessionResumed.value = status.layers.session === 'resumed'
   if (Array.isArray(status.devices)) onlineDevices.value = status.devices
+  if (Array.isArray(status.pending)) pending.value = status.pending
   ensureClock()
 }
 
@@ -921,16 +1087,28 @@ async function switchDevice(id: string): Promise<void> {
   }
 }
 
+let mounted = false
+const unlistenHost: Array<() => void> = []
+
+function keepHostListener(unlisten: () => void): void {
+  if (typeof unlisten !== 'function') return
+  if (mounted) unlistenHost.push(unlisten)
+  else unlisten()
+}
+
 onMounted(() => {
+  mounted = true
   activeId.value = readActive()
+  keepAlive.value = readKeepAlivePref()
+  void syncConnectionService()
   void refresh()
   ensureClock()
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('focus', onFocus)
-  if (!host()) return
+  if (props.services || !host()) return
   void import('@tauri-apps/api/event').then(async ({ listen }) => {
     try {
-      await listen<{ phase?: string; reason?: string }>('p2p-progress', (event) => {
+      keepHostListener(await listen<{ phase?: string; reason?: string }>('p2p-progress', (event) => {
         const phase = event.payload?.phase
         const why = event.payload?.reason || ''
         // user:“扫码后立刻有反馈”“配对/连接/恢复会话分阶段可见”+(阶段由宿主推过来，
@@ -952,15 +1130,15 @@ onMounted(() => {
           view.value = 'offline'
           reason.value = ''
         }
-      })
+      }))
     } catch {
       // 进度事件只是提示，缺了不影响连接。
     }
     try {
       // user:“清理无效轮询与监听”+(宿主变了才推这一条：路径、在线设备、当前设备、会话)。
-      await listen<Record<string, never>>('p2p-state', (event) => {
-        applyPush(event.payload as unknown as Parameters<typeof applyPush>[0])
-      })
+      keepHostListener(await listen<HostStatus>('p2p-state', (event) => {
+        onStatusPush(event.payload)
+      }))
     } catch {
       // 没有推送时界面仍能在切回窗口时对齐一次。
     }
@@ -968,9 +1146,14 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  mounted = false
+  pairingRevision++
+  for (const unlisten of unlistenHost.splice(0)) unlisten()
   document.removeEventListener('visibilitychange', onVisibility)
   window.removeEventListener('focus', onFocus)
   stopClock()
+  stopApprovalWait()
+  window.clearTimeout(copyTimer)
 })
 </script>
 
@@ -1304,6 +1487,18 @@ onUnmounted(() => {
 }
 
 /* ── 电脑端：二维码 ───────────────────────────────────── */
+.pair-approval {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.pair-approval__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
 .pair-card {
   display: flex;
   gap: 16px;
@@ -1350,11 +1545,7 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
   color: inherit;
   text-align: left;
-  cursor: pointer;
-}
-
-.pair-card__ticket code {
-  display: block;
+  user-select: text;
   min-width: 0;
   font: 12px/1.5 ui-monospace, monospace;
   overflow-wrap: anywhere;

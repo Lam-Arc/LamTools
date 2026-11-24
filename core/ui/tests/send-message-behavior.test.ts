@@ -9,6 +9,47 @@ afterEach(() => { vi.useRealTimers() })
 
 // user:“修，不要出错”+(使用真实消息组件验证计时、历史锁定和回退操作，不能只检查更新次数)。
 describe('send optimization preserves message behavior', () => {
+  // user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(拒绝时保留编辑内容，确认收到前拦截重复提交)。
+  it('keeps the edit draft on refusal and closes only after acceptance', async () => {
+    const message: CoreMessage = { id: 'source:turn:past:user', role: 'user', content: 'original', timestamp: '' }
+    const wrapper = mount(ChatThread, { props: {
+      messages: [message], transport: createFakeTransport(), messageActions: true,
+      readEditBasis: () => ({ threadId: 'source', revision: 12 }),
+    } })
+    try {
+      await wrapper.get('[data-user-edit]').trigger('click')
+      const edit = () => wrapper.get<HTMLTextAreaElement>('.user-edit-input textarea, textarea.user-edit-input')
+      await edit().setValue('keep my change')
+      await wrapper.get('[data-user-edit-confirm]').trigger('click')
+      await wrapper.get('[data-user-edit-confirm]').trigger('click')
+      const sent = () => (wrapper.emitted('edit-message') ?? []) as Array<[{ content: string; onSettled(ok: boolean): void }]>
+      expect(sent()).toHaveLength(1)
+      sent()[0][0].onSettled(false)
+      await wrapper.vm.$nextTick()
+      expect(edit().element.value).toBe('keep my change')
+      await wrapper.get('[data-user-edit-confirm]').trigger('click')
+      expect(sent()[1][0].content).toBe('keep my change')
+      sent()[1][0].onSettled(true)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-user-edit-confirm]').exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it('submits historical edits with the revision captured when the editor opened', async () => {
+    let revision = 12
+    const message: CoreMessage = { id: 'source:turn:past:user', role: 'user', content: 'original', timestamp: '' }
+    const wrapper = mount(ChatThread, { props: {
+      messages: [message], transport: createFakeTransport(), messageActions: true,
+      readEditBasis: () => ({ threadId: 'source', revision }),
+    } })
+    try {
+      await wrapper.get('[data-user-edit]').trigger('click')
+      revision = 17
+      await wrapper.get('[data-user-edit-confirm]').trigger('click')
+      expect(wrapper.emitted('edit-message')?.[0]?.[0]).toMatchObject({ basis: { threadId: 'source', revision: 12 } })
+    } finally { wrapper.unmount() }
+  })
+
   it('runs only the current clock, pauses while waiting, and freezes completed durations', async () => {
     vi.useFakeTimers()
     const start = Date.parse('2026-10-12T02:00:00Z')

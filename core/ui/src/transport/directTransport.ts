@@ -209,7 +209,8 @@ export class DirectTransport implements LamToolsTransport {
     this.connectPromise = null
     const socket = this.socket
     this.socket = null
-    this.rejectPending(new Error('LamTools transport closed'))
+    // user:“全修”+(关闭连接上的在途请求仍可能已经执行，由回执核对确认)。
+    this.rejectPending(new TransportDisconnectedError())
     rejectConnect?.(new Error('LamTools transport closed during connect'))
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close()
     this.setState('disconnected')

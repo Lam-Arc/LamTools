@@ -422,4 +422,60 @@ describe('PlanLibraryView', () => {
     expect(empty.text()).toContain('创建文件夹，整理库中的方案。')
     wrapper.unmount()
   })
+  it('搜索没命中时说没有匹配并给一键清除，而不是说库是空的', async () => {
+    const client = fakeClient()
+    const wrapper = mount(PlanLibraryView, { props: { client, projectId: 'proj-1' } })
+    await settled()
+
+    await wrapper.get('[data-library-search]').setValue('zzz')
+    await settled()
+
+    expect(wrapper.get('[data-library-no-results]').text()).toContain('没有匹配的文件')
+    expect(wrapper.find('[data-library-empty]').exists()).toBe(false)
+
+    await wrapper.get('[data-library-clear-filters]').trigger('click')
+    await settled()
+    expect((wrapper.get('[data-library-search]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.findAll('[data-library-entry]')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('文件夹页签里输入关键词直接给文件结果', async () => {
+    const client = fakeClient()
+    const wrapper = mount(PlanLibraryView, { props: { client, projectId: 'proj-1' } })
+    await settled()
+    await tabButton(wrapper, 'folders').trigger('click')
+    await settled()
+    expect(wrapper.findAll('[data-library-folder]')).toHaveLength(1)
+
+    await wrapper.get('[data-library-search]').setValue('导出')
+    await settled()
+    expect(wrapper.findAll('[data-library-folder]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-library-entry]')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('在文件夹里搜不到时，不再说这个文件夹还是空的', async () => {
+    const client = fakeClient({
+      listPlanLibrary: vi.fn(async () => ({
+        dir: '方案',
+        entries: [entry({ name: '归档方案.md', path: '方案/归档/归档方案.md', folder: '归档', title: '归档方案' })],
+        folders: [folder()],
+      })),
+    } as never)
+    const wrapper = mount(PlanLibraryView, { props: { client, projectId: 'proj-1' } })
+    await settled()
+    await tabButton(wrapper, 'folders').trigger('click')
+    await settled()
+    await wrapper.get('[data-library-folder="归档"]').trigger('click')
+    await settled()
+    expect(wrapper.findAll('[data-library-entry]')).toHaveLength(1)
+
+    await wrapper.get('[data-library-search]').setValue('zzz')
+    await settled()
+    expect(wrapper.find('[data-library-no-results]').exists()).toBe(true)
+    expect(wrapper.find('[data-folder-empty]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
 })

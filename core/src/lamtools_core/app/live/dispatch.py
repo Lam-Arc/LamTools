@@ -36,6 +36,7 @@ from .threads import (
     handle_thread_read_operation,
     handle_thread_resume_operation,
     handle_thread_start_operation,
+    handle_thread_write_receipts_operation,
 )
 from .turn_cancel import (
     handle_turn_cancel_operation,
@@ -43,18 +44,21 @@ from .turn_cancel import (
     handle_turn_terminate_operation,
 )
 from .turn_pause import handle_turn_pause_operation
-from .turn_start import handle_turn_resume_operation, handle_turn_start_operation
+from .turn_start import handle_turn_replace_operation, handle_turn_resume_operation, handle_turn_start_operation
 
 
 _CORE_LIVE_OPERATION_EXECUTORS = {
     "sync.start": handle_sync_start_operation,
     "thread.start": handle_thread_start_operation,
     "thread.read": handle_thread_read_operation,
+    "thread.writeReceipts": handle_thread_write_receipts_operation,  # user:“全修”+(提供独立只读回执查询)。
     "thread.resume": handle_thread_resume_operation,
     "thread.history": handle_thread_history_operation,
     "thread.outline": handle_thread_outline_operation,
     "thread.pageAround": handle_thread_page_around_operation,
     "turn.start": handle_turn_start_operation,
+    # user:“全做”+(历史编辑使用独立的原子替换操作)。
+    "turn.replace": handle_turn_replace_operation,
     "turn.resume": handle_turn_resume_operation,
     "turn.pause": handle_turn_pause_operation,
     # ``turn.cancel`` keeps its terminal meaning for clients that still send it

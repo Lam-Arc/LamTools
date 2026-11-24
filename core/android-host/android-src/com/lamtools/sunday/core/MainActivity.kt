@@ -96,6 +96,8 @@ class MainActivity : TauriActivity() {
     // The floating ring asks for a context when no activity is guaranteed to exist, and
     // touching the object runs its initialiser, which is what hands the JavaVM to Rust.
     OverlayBridge.attach(applicationContext)
+    // user:“优先保证连接的稳定”+(后台保持连接的前台服务需要 applicationContext)
+    ConnectionServiceBridge.attach(applicationContext)
     // Staging the packaged runtime takes seconds the first time and does no work after
     // that; it must not delay the first frame, and the host waits for its marker before
     // it tries to install.
@@ -112,6 +114,9 @@ class MainActivity : TauriActivity() {
     // The window does not shrink for the keyboard (edge to edge), so the interface can
     // only learn how much it covers from here.
     KeyboardBridge.watch(this)
+    // 内置浏览器的桥要在这里被“碰”一下：Kotlin object 的 init 只在首次访问时执行，
+    // 没人引用它，Rust 就永远拿不到 JavaVM/类，命令会报“runtime is not ready”。
+    BrowserBridge.prepare()
     // The ring was used while this process was gone: the action arrives with the intent
     // that started the activity, and it has to reach the interface before anything renders.
     consumeOverlayIntent(intent)

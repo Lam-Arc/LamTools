@@ -1542,6 +1542,58 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
   word-break: break-word;
 }
 
+/* user:“如图所见 latex 渲染存在问题”+(KaTeX 的上下标与分数不是普通上下标：它把每一层做成
+   「高度为 0 的行」，再用行内 top 偏移把它们叠回去。行高、display、position、字距这些排版属性
+   一旦被公式之外的样式改写，每层就多出或少掉一截，表现就是上下标和分数整体掉到下一行、
+   正文里的公式看着像被拆散了。主题、消息流外观和插件样式（plugins/styles.ts 会把插件 CSS
+   注入 document.head）都可能命中 .katex 里的 span，所以公式内部这一层只认 KaTeX 自己的值。
+   下面写的就是 KaTeX 自带 CSS 的原值：干净环境下观感完全不变，只是不再被外部覆盖。) */
+/* KaTeX 的分层声明：@layer 里的 !important 优先于未分层的 !important，
+   插件与主题注入的样式因此无法再改写公式内部排版。 */
+@layer sunday-katex-isolation {
+  .markdown-body :deep(.katex) {
+    line-height: 1.2 !important;
+    text-indent: 0 !important;
+    letter-spacing: normal !important;
+    word-spacing: normal !important;
+    text-transform: none !important;
+  }
+  .markdown-body :deep(.katex *) { line-height: 1.2 !important; }
+  /* \smash 靠行高 0 把内容从行盒里摘出去，是 KaTeX 里唯一要求行高为 0 的地方。 */
+  .markdown-body :deep(.katex .smash),
+  .markdown-body :deep(.katex .smash *) { line-height: 0 !important; }
+  .markdown-body :deep(.katex .base) {
+    display: inline-block !important;
+    position: relative !important;
+    white-space: nowrap !important;
+  }
+  .markdown-body :deep(.katex .strut) { display: inline-block !important; }
+  .markdown-body :deep(.katex .vlist-t) {
+    display: inline-table !important;
+    border-collapse: collapse !important;
+    table-layout: fixed !important;
+  }
+  .markdown-body :deep(.katex .vlist-r) { display: table-row !important; }
+  .markdown-body :deep(.katex .vlist) {
+    display: table-cell !important;
+    position: relative !important;
+    vertical-align: bottom !important;
+  }
+  .markdown-body :deep(.katex .vlist > span) {
+    display: block !important;
+    height: 0 !important;
+    position: relative !important;
+  }
+  .markdown-body :deep(.katex .vlist > span > span) { display: inline-block !important; }
+  .markdown-body :deep(.katex .vlist-s) { display: table-cell !important; vertical-align: bottom !important; }
+  .markdown-body :deep(.katex .vlist > span > .pstrut) { overflow: hidden !important; width: 0 !important; }
+  .markdown-body :deep(.katex .mfrac .frac-line) {
+    border-bottom-style: solid !important;
+    display: inline-block !important;
+    width: 100% !important;
+  }
+}
+
 /* Keep prose at a comfortable reading measure while allowing code, tables,
    diagrams, and other structured output to use the full response width. */
 .markdown-body :deep(p),

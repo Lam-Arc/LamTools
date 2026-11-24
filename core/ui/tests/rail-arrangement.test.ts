@@ -60,7 +60,8 @@ describe('left rail entry arrangement', () => {
     expect(appSource).toContain(':show-sidebar-search-action="false"')
     expect(appSource).toContain(':show-sidebar-plugins-action="false"')
     expect(appSource).toContain(':show-sidebar-settings-action="false"')
-    expect(appSource).toContain("const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')")
+    // user:“一级入口收敛为四项，底部常驻”+(手机一级导航改到底部，抽屉页脚不再重复摆一份)。
+    expect(appSource).toContain('<MobileBottomNav')
     expect(appSource).not.toContain('class="drawer-footer-account"')
     const railSource = read('src/components/AppRail.vue')
     expect(railSource).toMatch(/data-rail-entry="account"[\s\S]*?@click="emit\('open', 'account'\)"/)
@@ -77,9 +78,22 @@ describe('left rail entry arrangement', () => {
     expect(read('src/app/useCorePageBindings.ts')).toMatch(/'section': unref\(settingsSection\)/)
   })
 
-  it('leaves the mobile fallback footer on its labelled rows', () => {
-    expect(appSource).toMatch(/class="drawer-footer-rail"[\s\S]*?data-mobile-footer-chat[\s\S]*?data-mobile-footer-arrange[\s\S]*?data-mobile-footer-library[\s\S]*?data-mobile-footer-remote[\s\S]*?openFromRail\(openAccount\)/)
+  it('replaces the drawer footer with the four-entry bottom navigation', () => {
+    // 抽屉页脚那排重复入口已下线，一级导航只剩底部四条。
+    expect(appSource).not.toContain('class="drawer-footer-rail"')
+    expect(appSource).toMatch(/:active="mobileNavActive"[\s\S]*?@select="onMobileNavSelect"/)
+    const navSource = read('src/components/MobileBottomNav.vue')
+    for (const key of ['chat', 'workspace', 'task', 'settings']) {
+      expect(navSource).toContain(`id: '${key}'`)
+    }
     expect(shellCss).toMatch(/\.drawer-footer-stack \{[\s\S]*?flex: 1 1 100%;[\s\S]*?flex-direction: column;/)
+  })
+
+  it('hides the bottom navigation inside a conversation', () => {
+    // user:“会话内不需要下面的导航栏”+(列表页保留四项导航；会话详情里整条隐藏，
+    // 输入栏贴底，不再为导航留出一条空档)。
+    expect(appSource).toMatch(/<MobileBottomNav\s+v-if="appRuntime\.platform === 'mobile' && !mobileChatHeaderOpen"/)
+    expect(shellCss).toMatch(/\.workspace-shell--mobile-chat-detail \{[\s\S]*?--mobile-bottom-nav-height: 0px;/)
   })
 
   it('opens settings on the requested section and falls back to the first one', async () => {

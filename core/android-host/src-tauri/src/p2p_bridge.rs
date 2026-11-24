@@ -16,7 +16,8 @@ use serde_json::{json, Value};
 use tauri::State;
 use tokio::sync::Mutex;
 
-use sunday_p2p::{encode_ticket, Client, Identity, TrustStore};
+use sunday_p2p::state::{CoreLayer, DeviceLayer, Layers, SessionLayer};
+use sunday_p2p::{encode_ticket, Client, Identity, TrustStore, View};
 
 pub struct P2pState {
     dir: PathBuf,
@@ -37,6 +38,15 @@ pub struct P2pState {
     /// user:“显示和电脑断联了”+(网络静默断开时读帧会一直挂着，界面却还是「已连接」；
     /// 这里存的就是 Client 自己那只存活标志，宿主据此在真的断了时通知界面)。
     alive: Mutex<Arc<AtomicBool>>,
+    /// 业务层握手是否完成：initialize + ping 都成功了。
+    ///
+    /// user:“只有完成业务层握手并通过基本消息收发检查，才能显示已连接”+(隧道活着只说明
+    /// QUIC 通了；PC 的 Core 没起来时，手机必须显示降级而不是「已连接」)。
+    business: Arc<AtomicBool>,
+    /// PC 的 Core bridge 是否应答过 initialize。
+    core_ready: Arc<AtomicBool>,
+    /// 这次连接是否真的探测过 Core（区分「没探过」和「探过但挂了」）。
+    core_probed: Arc<AtomicBool>,
     /// 每次连接递增一个号：旧连接的后台监听据此退出，不会在新连接上来之后误报「断了」。
     generation: Arc<AtomicU64>,
     /// 拨号串行，但不占用 `inner` 锁。
@@ -71,6 +81,9 @@ impl P2pState {
             peer: Mutex::new(None),
             connecting: Arc::new(AtomicBool::new(false)),
             alive: Mutex::new(Arc::new(AtomicBool::new(false))),
+            business: Arc::new(AtomicBool::new(false)),
+            core_ready: Arc::new(AtomicBool::new(false)),
+            core_probed: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             dialing_gate: Mutex::new(()),
         }
@@ -78,6 +91,13 @@ impl P2pState {
 
     fn trust(&self) -> Result<TrustStore> {
         TrustStore::load(&self.dir)
+    }
+
+    /// 新连接 / 断线 / 主动断开时，业务层的结论必须一起归零。
+    fn reset_business(&self) {
+        self.business.store(false, Ordering::SeqCst);
+        self.core_ready.store(false, Ordering::SeqCst);
+        self.core_probed.store(false, Ordering::SeqCst);
     }
 }
 
@@ -143,6 +163,7 @@ pub async fn p2p_connect(
         alive.store(false, Ordering::SeqCst);
     }
     *state.peer.lock().await = None;
+    state.reset_business();
 
     // user:“连接过程中一点反应都没有，我根本不知道卡在哪里了”+(先告诉界面目标地址，
     // 再给整次尝试一个明确的上限，超时就报可执行的原因，而不是让 iroh 叠三层超时)。
@@ -178,13 +199,47 @@ pub async fn p2p_connect(
             ));
         }
     };
-    app.emit(
-        "p2p-progress",
-        json!({ "phase": "connected", "target": target }),
-    )
-    .ok();
     let peer = client.peer.clone();
     let peer_name = client.peer_name.clone();
+    // user:“只有完成业务层握手并通过基本消息收发检查，才能显示已连接”+(隧道建立只说明
+    // QUIC 通了；先向电脑要一次 initialize、再 ping 一次，Core 没起来就是 degraded)。
+    let initialized = client
+        .call_with_timeout(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "sunday-p2p",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+            Duration::from_secs(8),
+        )
+        .await
+        .is_ok();
+    let pinged = client
+        .call_with_timeout("ping", json!({}), Duration::from_secs(8))
+        .await
+        .is_ok();
+    state.core_probed.store(true, Ordering::SeqCst);
+    state.core_ready.store(initialized, Ordering::SeqCst);
+    state.business.store(initialized && pinged, Ordering::SeqCst);
+    if initialized && pinged {
+        app.emit(
+            "p2p-progress",
+            json!({ "phase": "connected", "target": target }),
+        )
+        .ok();
+    } else {
+        let reason = if initialized { "session_not_resumed" } else { "core_unavailable" };
+        app.emit(
+            "p2p-progress",
+            json!({ "phase": "degraded", "reason": reason, "target": target }),
+        )
+        .ok();
+    }
+    // user:“配对成功后建立持久设备信任，下次自动连接”+(把地址票回给界面；`sunday2:`
+    // 配对票只有 5 分钟，拿它当长期凭据，应用重启或切设备后必然要重扫)。
+    let resume = client.resume_ticket().ok();
     *state.peer.lock().await = Some(peer.clone());
     // 换成这条连接自己的标志：它的读帧与心跳任务断掉时，这个值会跟着变 false。
     let alive = client.alive_flag();
@@ -238,6 +293,7 @@ pub async fn p2p_connect(
                     continue;
                 }
                 *owned.peer.lock().await = None;
+                owned.reset_business();
                 if let Ok(mut inner) = owned.inner.try_lock() {
                     let dead = inner
                         .client
@@ -258,7 +314,7 @@ pub async fn p2p_connect(
 
     let client = Arc::new(client);
     state.inner.lock().await.client = Some(client);
-    Ok(json!({ "peer": peer, "name": peer_name }))
+    Ok(json!({ "peer": peer, "name": peer_name, "resume": resume }))
 }
 
 /// Forwards one call over the tunnel. `core_http` is what the shared UI uses for the
@@ -268,6 +324,7 @@ pub async fn p2p_call(
     state: State<'_, Arc<P2pState>>,
     method: String,
     params: Option<Value>,
+    timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
     // 只在取连接时持锁：界面的项目、模型、会话是并发加载的，不该互相排队。
     let client = {
@@ -288,12 +345,39 @@ pub async fn p2p_call(
     let Some(client) = client else {
         state.alive.lock().await.store(false, Ordering::SeqCst);
         *state.peer.lock().await = None;
+        state.reset_business();
         return Err("和电脑的连接已经断开，打开「设备连接」重连或切回本机".to_owned());
     };
-    client
-        .call(&method, params.unwrap_or_else(|| json!({})))
+    // user:“超时不自动等同于发送失败”+(界面给的预算只决定这一次等待多久；超时后
+    // 连接与对端状态不变，重试仍复用同一个幂等键)。
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000).clamp(1_000, 300_000));
+    match client
+        .call_with_timeout(&method, params.unwrap_or_else(|| json!({})), timeout)
         .await
-        .map_err(|error| format!("{error:#}"))
+    {
+        Ok(result) => {
+            // 任何真正的 Core 调用成功，都说明 Core 这一层是通的；ping/whoami/echo/file/*
+            // 由传输层自己处理，不能拿来证明 Core 可用。
+            if !matches!(method.as_str(), "ping" | "whoami" | "echo") && !method.starts_with("file/") {
+                state.core_ready.store(true, Ordering::SeqCst);
+                state.core_probed.store(true, Ordering::SeqCst);
+            }
+            if method == "thread/resume" {
+                state.business.store(true, Ordering::SeqCst);
+            }
+            Ok(result)
+        }
+        Err(error) => {
+            let message = format!("{error:#}");
+            if method != "ping"
+                && (message.contains("RPC") || message.contains("Core") || message.contains("Core 端口"))
+            {
+                state.core_probed.store(true, Ordering::SeqCst);
+                state.core_ready.store(false, Ordering::SeqCst);
+            }
+            Err(message)
+        }
+    }
 }
 
 /// 实时扫码：相机预览里识别到二维码就回填票据。
@@ -327,8 +411,12 @@ pub async fn p2p_qr(ticket: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String> {
-    // 有一条调用正在进行时锁是拿不到的，那说明隧道正常在用；这时候按存活标志回答，
-    // 别让刷新按钮排在它后面。
+    Ok(status_value(state.inner()).await)
+}
+
+/// 现在这一刻给界面看的快照（命令与 2 秒事件推送共用同一份）。
+async fn status_value(state: &P2pState) -> Value {
+    // 有一条调用正在进行时锁是拿不到的，那说明隧道正常在用；状态查询不能排在它后面。
     let snapshot = state.inner.try_lock().ok().map(|inner| {
         (
             inner
@@ -338,26 +426,137 @@ pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String
                 .unwrap_or(false),
             inner.client.as_ref().map(|client| client.peer.clone()),
             inner.ticket.clone(),
+            inner.client.as_ref().map(|client| client.rtt_ms()).unwrap_or(0),
         )
     });
     let cached = state.peer.lock().await.clone();
     let alive_now = state.alive.lock().await.load(Ordering::SeqCst);
     let dialing = state.connecting.load(Ordering::SeqCst);
-    match snapshot {
-        Some((connected, peer, ticket)) => Ok(json!({
-            "connected": connected,
-            "connecting": dialing,
-            "peer": peer.or(cached),
-            "ticket": ticket,
-        })),
+    let (connected, peer, ticket, rtt_ms) = match snapshot {
+        Some((connected, peer, ticket, rtt_ms)) => (connected, peer.or(cached), ticket, rtt_ms),
         // 锁被一条调用占着：连通性只看存活标志，不能拿「锁拿不到」当「已连接」。
-        None => Ok(json!({
-            "connected": alive_now && !dialing,
-            "connecting": dialing,
-            "busy": true,
-            "peer": cached,
-        })),
-    }
+        None => (alive_now && !dialing, cached, String::new(), 0),
+    };
+    let transport = connected && alive_now;
+    let authenticated = transport;
+    let core = if !transport {
+        CoreLayer::Unknown
+    } else if state.core_probed.load(Ordering::SeqCst) {
+        if state.core_ready.load(Ordering::SeqCst) {
+            CoreLayer::Ready
+        } else {
+            CoreLayer::Down
+        }
+    } else {
+        CoreLayer::Unknown
+    };
+    let session = if state.business.load(Ordering::SeqCst) {
+        SessionLayer::Resumed
+    } else {
+        SessionLayer::NotResumed
+    };
+    let layers = Layers {
+        transport,
+        device: if authenticated {
+            DeviceLayer::Authenticated
+        } else {
+            DeviceLayer::Unpaired
+        },
+        core,
+        session,
+    };
+    let view = layers.view();
+    let reason = match &view {
+        View::Degraded { reason } => reason.code(),
+        _ => "-",
+    };
+    json!({
+        // connected 保留给老界面（= 隧道活着）；新界面只看 view / layers。
+        "connected": transport,
+        "connecting": dialing,
+        "peer": peer,
+        "ticket": ticket,
+        // user:“只有业务真正可用才显示已连接”+(四层齐了才是 connected；Core 没起来是 degraded)。
+        "view": view.phase(),
+        "reason": reason,
+        "layers": layers_json(&layers),
+        "rttMs": rtt_ms,
+    })
+}
+
+/// 事件驱动状态：2 秒算一次，只有真的变了才推 `p2p-state`。
+///
+/// user:“减少无故断连或者无连接反馈的情况”+(手机设备页以前只靠拨号/断开事件；Core
+/// 中途挂掉或恢复没有推送。这里让宿主自己推状态，界面不用猜，也不用定时轮询)。
+pub fn start_emitter(app: tauri::AppHandle, state: Arc<P2pState>) {
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter as _;
+        let mut last = String::new();
+        let mut last_probe = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            // user:“修”+(隧道仍在线时也定期验证电脑 Core，停答即降级，恢复就更新)。
+            let transport = state.alive.lock().await.load(Ordering::SeqCst);
+            if transport && last_probe.elapsed() >= Duration::from_secs(10) {
+                last_probe = std::time::Instant::now();
+                let generation = state.generation.load(Ordering::SeqCst);
+                let client = state.inner.lock().await.client.clone();
+                if let Some(client) = client {
+                    let ready = client
+                        .call_with_timeout(
+                            "settings.get",
+                            json!({ "namespace": "core.onboarding" }),
+                            Duration::from_secs(5),
+                        )
+                        .await
+                        .is_ok();
+                    let inner = state.inner.lock().await;
+                    let same_client = inner
+                        .client
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &client));
+                    if same_client
+                        && state.generation.load(Ordering::SeqCst) == generation
+                        && client.is_alive()
+                    {
+                        state.core_ready.store(ready, Ordering::SeqCst);
+                        state.core_probed.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            let snapshot = status_value(&state).await;
+            let text = snapshot.to_string();
+            if text == last {
+                continue;
+            }
+            last = text;
+            let _ = app.emit("p2p-state", snapshot);
+        }
+    });
+}
+
+/// 四层状态给界面看的稳定字符串（与桌面 `p2p_status.layers` 同形）。
+fn layers_json(layers: &Layers) -> Value {
+    let device = match layers.device {
+        DeviceLayer::Authenticated => "authenticated",
+        DeviceLayer::Paired => "paired",
+        DeviceLayer::Unpaired => "unpaired",
+    };
+    let core = match layers.core {
+        CoreLayer::Ready => "ready",
+        CoreLayer::Down => "down",
+        CoreLayer::Unknown => "unknown",
+    };
+    let session = match layers.session {
+        SessionLayer::Resumed => "resumed",
+        SessionLayer::NotResumed => "not_resumed",
+    };
+    json!({
+        "transport": layers.transport,
+        "device": device,
+        "core": core,
+        "session": session,
+    })
 }
 
 #[tauri::command]
@@ -371,6 +570,7 @@ pub async fn p2p_disconnect(state: State<'_, Arc<P2pState>>) -> Result<(), Strin
     drop(inner);
     *state.peer.lock().await = None;
     state.alive.lock().await.store(false, Ordering::SeqCst);
+    state.reset_business();
     Ok(())
 }
 
@@ -387,4 +587,39 @@ pub async fn p2p_revoke(state: State<'_, Arc<P2pState>>, id: String) -> Result<V
     let removed = store.revoke(&id);
     store.save().ok();
     Ok(json!({ "removed": removed }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// user:“只有业务真正可用才显示已连接”+(隧道通、Core 挂了也不能算已连接)。
+    #[test]
+    fn a_live_tunnel_with_a_dead_core_is_degraded() {
+        let layers = Layers {
+            transport: true,
+            device: DeviceLayer::Authenticated,
+            core: CoreLayer::Down,
+            session: SessionLayer::NotResumed,
+        };
+        assert_eq!(layers.view().phase(), "degraded");
+        assert_eq!(layers_json(&layers)["core"], "down");
+    }
+
+    #[test]
+    fn only_all_four_layers_count_as_connected() {
+        let layers = Layers {
+            transport: true,
+            device: DeviceLayer::Authenticated,
+            core: CoreLayer::Ready,
+            session: SessionLayer::Resumed,
+        };
+        assert_eq!(layers.view().phase(), "connected");
+        assert_eq!(layers_json(&layers), json!({
+            "transport": true,
+            "device": "authenticated",
+            "core": "ready",
+            "session": "resumed",
+        }));
+    }
 }

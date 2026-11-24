@@ -11,6 +11,7 @@ from ..event_store import AppEventInput
 from ..live_protocol import INVALID_REQUEST, rpc_error, rpc_result
 from ..queue_state import latest_active_turn_id
 from ..runtime_permissions import overlay_runtime_permissions
+from ..steering import GUIDANCE_HANDOFF_IDS
 from ..turn_acceptance import TURN_ACCEPTED_METHODS, build_turn_acceptance_plan
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 from .handoff import complete_turn_handoff
@@ -248,12 +249,28 @@ async def handle_turn_resume_operation(
     )
 
 
+async def handle_turn_replace_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    # user:“全做”+(编辑使用独立请求，旧服务端无法把替换误当成普通发送)。
+    target = params.get("replace_turn_id")
+    if not isinstance(target, str) or not target.strip():
+        return CoreLiveOperationOutcome(response=rpc_error(
+            request_id, code=INVALID_REQUEST, message="replace_turn_id must identify a turn",
+        ))
+    return await handle_turn_start_operation(
+        request_id=request_id, params=params, context=context, replaced_turn_id=target.strip(),
+    )
+
+
 @complete_turn_handoff
 async def handle_turn_start_operation(
     *,
     request_id: int | str | None,
     params: dict[str, Any],
     context: CoreLiveContext,
+    guidance_handoff_ids: tuple[str, ...] = (),
+    replaced_turn_id: str = "",
 ) -> CoreLiveOperationOutcome:
     from .background import _logger
     from .events import _app_event_input, _get_running_loop
@@ -284,9 +301,13 @@ async def handle_turn_start_operation(
             await _fail_runtime_start(context=context, thread_id=thread_id,
                                       turn_id=pending_turn, message=failure_message)
     try:
-        _expected_revision(params)  # 形状校验；回合创建是幂等追加，见 write 说明
+        expected_revision = _expected_revision(params)
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    if replaced_turn_id and expected_revision is None:
+        return CoreLiveOperationOutcome(response=rpc_error(
+            request_id, code=INVALID_REQUEST, message="expected_revision is required for historical replacement",
+        ))
 
     turn_id = str(params.get("turn_id") or params.get("turnId") or f"{thread_id}:turn:{uuid.uuid4().hex[:12]}")
     user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
@@ -298,8 +319,12 @@ async def handle_turn_start_operation(
     # Capture the session's initial permission state in the acceptance event.
     # Running toolboxes refresh these fields from the session before each tool
     # boundary, while the remaining runtime options stay turn-scoped.
+    # user:“全修”+(历史替换校验前只读旧会话配置，缺省值初始化不能改变需要校验的版本)。
+    edit_options = {"persist_defaults": False} if replaced_turn_id else {}
     try:
-        resolved = await _resolve_turn_approval_policy(context=context, params={**params, "thread_id": thread_id})
+        resolved = await _resolve_turn_approval_policy(
+            context=context, params={**params, "thread_id": thread_id}, **edit_options,
+        )
     except ValueError as exc:
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
@@ -318,6 +343,7 @@ async def handle_turn_start_operation(
         thread_id=thread_id,
         params=params,
         session_metadata=resolved.get("session_metadata") or {},
+        **edit_options,
     )
     if fixed_active_mode is not None:
         resolved["active_mode"] = fixed_active_mode
@@ -346,6 +372,10 @@ async def handle_turn_start_operation(
 
     async def _run_turn_acceptance(db: Any, *, use_atomic_append: bool = False):
         nonlocal run_claimed
+        if run_claimed:
+            # user:“全做”+(写事务回滚后重试，释放上一次还未提交的运行占位)。
+            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+            run_claimed = False
         _w0 = time_module.perf_counter()
         existing = await context.persistence.find_client_event(
             db,
@@ -356,8 +386,11 @@ async def handle_turn_start_operation(
         _w1 = time_module.perf_counter()
         _logger.info("[PERF:turn_start:write] find_client_event=%.3fs", _w1 - _w0)
         if existing is not None:
-            return ("existing", existing, None, None, None, False)
+            return ("existing", existing, None, None, None, False, [])
 
+        # user:“全修”+(编辑只允许在打开编辑时看到的历史版本上截断；已接收的同一请求可查回执)。
+        if replaced_turn_id:
+            await context.persistence.assert_revision(db, thread_id, expected_revision)
         _w2 = time_module.perf_counter()
         snapshot = await context.persistence.load_metadata(db, thread_id)
         _w3 = time_module.perf_counter()
@@ -376,10 +409,11 @@ async def handle_turn_start_operation(
                     },
                 )
             )
-        is_continuation = str(
+        is_continuation = not replaced_turn_id and str(
             params.get("origin") or params.get("turn_origin") or ""
         ).strip() == "turn_resume"
-        paused_turn_id = "" if is_continuation else _paused_turn_id(snapshot)
+        # Historical replacement removes the paused tail as part of the same transaction.
+        paused_turn_id = "" if is_continuation or replaced_turn_id else _paused_turn_id(snapshot)
         if paused_turn_id:
             return CoreLiveOperationOutcome(
                 response=rpc_error(
@@ -411,6 +445,22 @@ async def handle_turn_start_operation(
 
         run_claimed = True
         try:
+            rollback_events = []
+            if replaced_turn_id:
+                from lamtools_core.checkpoint import CoreCheckpointConversationBackend, _require_inactive_session_in_db
+
+                # user:“全做”+(回退和接收替换消息在同一个写事务中提交，任一步失败都保留原来历史)。
+                await _require_inactive_session_in_db(db, thread_id)
+                backend = CoreCheckpointConversationBackend(
+                    context.session_factory,
+                    event_store=context.event_store,
+                    snapshot_store=context.snapshot_store,
+                )
+                await backend.rollback_conversation_before_turn(
+                    db, session_id=thread_id, turn_id=replaced_turn_id, event_sink=rollback_events,
+                )
+                remaining = await context.persistence.load_metadata(db, thread_id)
+                is_first_message = not remaining.get("item_order")
             materialized = await context.host.member_hooks.materialize_turn(
                 db=db,
                 thread_id=thread_id,
@@ -433,6 +483,10 @@ async def handle_turn_start_operation(
                     **materialized.turn_payload_extra,
                     "runtime_snapshot": turn_runtime_snapshot,
                     **({"origin": turn_origin} if turn_origin else {}),
+                    **({"replaces_turn_id": replaced_turn_id, "rollback_event_id": rollback_events[0].event_id}
+                       if rollback_events else {}),
+                    # user:“去找消息发送/引导/排队/分叉/编辑中最应优化/重构的地方”+(引导转成新回合时，回合接收和转发凭据同一次提交)。
+                    **({GUIDANCE_HANDOFF_IDS: list(guidance_handoff_ids)} if guidance_handoff_ids else {}),
                 },
                 user_payload_extra={
                     **materialized.user_payload_extra,
@@ -459,20 +513,24 @@ async def handle_turn_start_operation(
             _w5 = time_module.perf_counter()
             _logger.info("[PERF:turn_start:write] append_batch=%.3fs", _w5 - _w4)
             accepted, user, running = envelopes[0], envelopes[1], envelopes[2]
-            return ("applied", accepted, user, running, materialized, is_first_message)
+            return ("applied", accepted, user, running, materialized, is_first_message, rollback_events)
         except BaseException:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
             run_claimed = False
             raise
 
     try:
-        if context.persistence.can_use_rust_write:
+        if context.persistence.can_use_rust_write and not replaced_turn_id:
             # user:“实现，我需要最后可感觉到的体验优化”+(发送确认走 Rust 读池+单写事务，不再占着 Python SQLiteWriteCoordinator)。
             async with _turn_start_lock(context, thread_id):
                 async with context.session_factory() as read_db:
                     write_result = await _run_turn_acceptance(read_db, use_atomic_append=True)
         else:
             write_result = await context.persistence.write(_run_turn_acceptance)
+    except (LookupError, ValueError) as exc:
+        if not replaced_turn_id:
+            raise
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     except BaseException:
         if run_claimed:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
@@ -482,7 +540,7 @@ async def handle_turn_start_operation(
         return write_result
     include_snapshot = _include_snapshot_param(params)
     response_snapshot: dict[str, Any] | None = None
-    outcome_kind, accepted, user, running, materialized, is_first_message = write_result
+    outcome_kind, accepted, user, running, materialized, is_first_message, rollback_events = write_result
     if outcome_kind == "existing":
         if include_snapshot:
             response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
@@ -572,7 +630,7 @@ async def handle_turn_start_operation(
         **materialized.runtime_extras,
         **({"origin": turn_origin} if turn_origin else {}),
     }
-    events = [accepted, user, running]
+    events = [*rollback_events, accepted, user, running]
     _t2 = time_module.perf_counter()
     for event in events:
         await context.hub.publish(event)

@@ -269,3 +269,30 @@ def test_two_functions_in_one_module_can_be_patched(
         remove_overrides(finder)
         sys.modules.pop("patch_demo_pkg.module", None)
         sys.modules.pop("patch_demo_pkg", None)
+
+
+def test_function_patch_preserves_module_file_and_resources(tmp_path, monkeypatch):
+    import importlib.resources
+
+    package = tmp_path / "patch_resources_example"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        "def greet(): return Path(__file__).with_name('message.txt').read_text()\n",
+        encoding="utf-8",
+    )
+    (package / "message.txt").write_text("hello", encoding="utf-8")
+    patch = tmp_path / "patch.py"
+    patch.write_text("def greet(): return original().upper()\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    finder = install_overrides(
+        OverrideTable(patches={"patch_resources_example": {"greet": patch}})
+    )
+    try:
+        import patch_resources_example
+
+        assert patch_resources_example.greet() == "HELLO"
+        assert importlib.resources.files(patch_resources_example).joinpath("message.txt").read_text() == "hello"
+    finally:
+        remove_overrides(finder)
+        sys.modules.pop("patch_resources_example", None)

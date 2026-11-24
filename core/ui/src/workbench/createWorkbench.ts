@@ -103,7 +103,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   const turnActive = computed(() => isCoreActiveTurnStatus(turnState.value))
   const lastEvent = ref<CoreAppEvent | null>(null)
   const shallowThinking = (options.shallowThinking || ref(false)) as Ref<boolean>
-  let turnOptionsProvider = options.getTurnOptions || (() => ({}))
+  let turnOptionsProvider: NonNullable<typeof options.getTurnOptions> = options.getTurnOptions || (() => ({}))
   let composerCallbacks: WorkbenchComposerCallbacks = {
     onError: options.onError,
     onStatusText: options.onStatusText,
@@ -271,13 +271,22 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   const composerDraftStorage: ComposerDraftStorage | null = options.composerDraftStorage !== undefined
     ? options.composerDraftStorage
     : resolveComposerDraftStorage()
+  const draftMemory = new Map<string, string>()
+  function readDraft(threadId: string | null): string {
+    return threadId ? (draftMemory.get(threadId) ?? readComposerDraft(composerDraftStorage, threadId)) : ''
+  }
+  function writeDraft(threadId: string | null, text: string): void {
+    if (!threadId) return
+    if (writeComposerDraft(composerDraftStorage, threadId, text)) draftMemory.delete(threadId)
+    else draftMemory.set(threadId, text)
+  }
   watch(activeSessionId, (threadId, previousThreadId) => {
-    if (previousThreadId) writeComposerDraft(composerDraftStorage, previousThreadId, composerText.value)
-    composerText.value = readComposerDraft(composerDraftStorage, threadId)
-  })
+    writeDraft(previousThreadId, composerText.value)
+    composerText.value = readDraft(threadId)
+  }, { flush: 'sync' })
   watch(composerText, (text) => {
-    writeComposerDraft(composerDraftStorage, activeSessionId.value, text)
-  })
+    writeDraft(activeSessionId.value, text)
+  }, { flush: 'sync' })
 
   const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
   // 待生效的引导：发出即显示（虚线 + 呼吸），模型接手后撤下；这一轮提前结束则交回用户
@@ -286,6 +295,11 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     activeThreadId: activeSessionId,
     composerText,
     queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
+    // user:“全做”+(队列失败的引导回到原会话的草稿，切回时与已有正文一起恢复)。
+    restoreDraft: (threadId, text) => {
+      const draft = readDraft(threadId).trimEnd()
+      writeDraft(threadId, draft ? `${draft}\n${text}` : text)
+    },
     onError: options.onError,
   })
   // Snapshot-only member-wait flag (no transcript scan needed) so the
@@ -503,7 +517,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     steerTurn: async (threadId, turnId, input, clientMessageId) => {
       const outcome = await runtimeController.steerTurn(threadId, turnId, input, clientMessageId)
       if (outcome.applied) {
-        pendingGuidance.track(threadId, turnId, input)
+        pendingGuidance.track(threadId, turnId, input, { serverOwnsRecovery: outcome.serverOwnsRecovery })
         return { ok: true }
       }
       // A refusal is a success response with `applied: false`: there is nothing
@@ -522,7 +536,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       await composerCallbacks.onCommandResult?.(result)
       return true
     },
-    turnOptions: () => turnOptionsProvider(),
+    turnOptions: (context) => turnOptionsProvider(context),
     canSubmit: () => composerCallbacks.canSubmit?.() !== false,
     onSubmitStart: (submittedText: string) => composerCallbacks.onSubmitStart?.(submittedText),
     onSubmitSettled: () => composerCallbacks.onSubmitSettled?.(),
@@ -537,9 +551,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       composerCallbacks.onRestoreAttachments?.(items)
     },
     onSubmissionAccepted: (submission, rawText) => {
-      if (activeSessionId.value !== submission.threadId
-        && readComposerDraft(composerDraftStorage, submission.threadId) === rawText) {
-        writeComposerDraft(composerDraftStorage, submission.threadId, '')
+      if (rawText !== undefined && activeSessionId.value !== submission.threadId
+        && readDraft(submission.threadId) === rawText) {
+        writeDraft(submission.threadId, '')
       }
       composerCallbacks.onSubmissionAccepted?.(submission)
     },
@@ -617,12 +631,13 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       await runtimeController.reorderQueueInputs(threadId, order)
     },
     guideQueueInput: async (threadId, turnId, itemId, text) => {
+      // user:“及优化速度/逻辑”+(引导完成会移除队列条目，提前记下待生效气泡的显示文字)。
+      const itemText = text?.trim()
+        || queuedInputs.value.find(candidate => candidate.id === itemId)?.text
+        || ''
       const result = await runtimeController.guideQueueInput(threadId, turnId, itemId, text)
       if (result.applied) {
-        const itemText = text?.trim()
-          || queuedInputs.value.find(candidate => candidate.id === itemId)?.text
-          || ''
-        pendingGuidance.track(threadId, turnId, itemText)
+        pendingGuidance.track(threadId, turnId, itemText, { serverOwnsRecovery: result.serverOwnsRecovery })
       }
       return result
     },
@@ -766,7 +781,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     queueInput,
     respondApproval,
     loadCommandCatalog,
-    setTurnOptionsProvider: (provider: () => Record<string, unknown> | Promise<Record<string, unknown>>) => {
+    setTurnOptionsProvider: (provider: NonNullable<typeof options.getTurnOptions>) => {
       turnOptionsProvider = provider
     },
     setShallowThinking: (value: boolean) => {

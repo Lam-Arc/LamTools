@@ -44,11 +44,19 @@ async function save(payload) {
       await props.session.loadProxy();
       if (wasAccelerated) await props.session.toggleAcceleration();
     }
-  } else if (props.autoStart) {
-    // user:“就像是用 watt toolkit 一样，点一下‘一键加速’”+(添加完订阅直接开启加速，不用再点第二次)。
-    await props.session.toggleAcceleration();
   } else {
-    props.session.notice = "订阅已保存，现在可以开启加速";
+    // user:“导入订阅之后会不会直接显示节点”+(保存后直接拉起代理内核，节点立刻出现，不用再点一次开关)。
+    const started = await props.session.run("proxy.start", {}, "");
+    if (started && !started.cancelled) {
+      props.session.notice = "订阅已保存，节点已加载，可以去选线路了";
+      await props.session.loadProxy();
+    } else {
+      props.session.notice = "订阅已保存，开启代理后加载节点";
+    }
+    if (props.autoStart) {
+      // user:“就像是用 watt toolkit 一样，点一下‘一键加速’”+(添加完订阅直接开启加速，不用再点第二次)。
+      await props.session.toggleAcceleration();
+    }
   }
 }
 async function readFile(event) {

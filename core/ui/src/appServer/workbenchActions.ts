@@ -49,6 +49,8 @@ export interface SubmitCoreComposerTaskOptions {
   workRoot?: string
   turnOptions?: Record<string, unknown>
   forceGuide?: boolean
+  /** user:“全做”+(外部提交和历史编辑的正文不能触发输入框命令)。 */
+  allowCommand?: boolean
   /** One identity for the whole submission: the start attempt and its queue
    *  fallback carry it, so a repeated write dedupes on the server instead of
    *  sending the message twice. */
@@ -147,7 +149,8 @@ export async function submitCoreComposerTask(
   if (!cleaned && attachments.length === 0) return { status: 'ignored' }
 
   const commandCatalog = options.commandCatalog || []
-  const parsed = attachments.length === 0 ? parseComposerInput(cleaned, commandCatalog) : null
+  const parsed = options.allowCommand !== false && attachments.length === 0
+    ? parseComposerInput(cleaned, commandCatalog) : null
   if (parsed?.kind === 'action') {
     const definition = commandCatalog.find((item) => (
       item.name.trim().replace(/^\/+/, '').toLowerCase() === parsed.name
@@ -221,6 +224,31 @@ export function isCoreSessionBusyError(error: unknown): boolean {
   const data = isRecord(record.data) ? record.data : null
   if (data?.code === 'SESSION_BUSY' || data?.reason === 'active_turn_exists') return true
   return typeof record.message === 'string' && /session has an active turn/i.test(record.message)
+}
+
+/**
+ * user:“修吧 让用户更易用”+(会话仍停在暂停回合时，发送不该报错：先继续那一轮，
+ * 让用户像没暂停过一样把话说完)。
+ *
+ * The runtime refuses a new turn while a paused turn owns the session
+ * (`SESSION_PAUSED` / "session has a paused turn"). The composer continues that
+ * turn instead, carrying the text as its supplement.
+ */
+export function isCorePausedSessionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const record = error as { code?: unknown; data?: unknown; message?: unknown }
+  if (record.code === 'SESSION_PAUSED') return true
+  const data = isRecord(record.data) ? record.data : null
+  if (data?.code === 'SESSION_PAUSED' || data?.reason === 'paused_turn_exists') return true
+  return typeof record.message === 'string' && /session has a paused turn/i.test(record.message)
+}
+
+/** The paused turn a refusal names, so the composer can continue it. */
+export function corePausedTurnIdFromError(error: unknown): string {
+  if (!error || typeof error !== 'object') return ''
+  const record = error as { data?: unknown }
+  const data = isRecord(record.data) ? record.data : null
+  return String(data?.paused_turn_id || data?.pausedTurnId || '')
 }
 
 export function coreComposerSubmissionEffects(

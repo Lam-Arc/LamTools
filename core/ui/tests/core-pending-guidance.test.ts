@@ -80,6 +80,41 @@ function createFixture(initial = snapshot()) {
 }
 
 describe('useCorePendingGuidance', () => {
+  // user:“全做”+(排队还在等待时切换会话，失败回执只能恢复到引导原会话)。
+  it('restores failed guidance to the owning draft after a session switch', async () => {
+    let fail!: (error: Error) => void
+    const attempt = new Promise<void>((_resolve, reject) => { fail = reject })
+    const activeThreadId = ref<string | null>('thread-1')
+    const composerText = ref('draft A')
+    const snapshotRef = ref(snapshot())
+    const restoreDraft = vi.fn()
+    const guidance = useCorePendingGuidance({
+      snapshot: snapshotRef, activeThreadId, composerText,
+      queueInput: async () => attempt, restoreDraft,
+    })
+    guidance.track('thread-1', TURN, 'guidance A')
+    snapshotRef.value = snapshot({ turnStatus: 'failed' })
+    await nextTick()
+    activeThreadId.value = 'thread-2'
+    composerText.value = 'draft B'
+    fail(new Error('queue unavailable'))
+    await nextTick()
+    await nextTick()
+    expect(composerText.value).toBe('draft B')
+    expect(restoreDraft).toHaveBeenCalledExactlyOnceWith('thread-1', 'guidance A')
+  })
+
+  it('leaves accepted durable guidance to the server on turn completion', async () => {
+    const fixture = createFixture()
+    fixture.composerText.value = 'current draft'
+    fixture.guidance.track('thread-1', TURN, 'durably accepted', { serverOwnsRecovery: true })
+    fixture.snapshotRef.value = snapshot({ turnStatus: 'completed' })
+    await nextTick()
+    expect(fixture.queued).toEqual([])
+    expect(fixture.composerText.value).toBe('current draft')
+    expect(fixture.guidance.guidanceParts.value).toEqual([])
+  })
+
   it('shows a pending bubble right after the guide is accepted', async () => {
     const fixture = createFixture()
     fixture.guidance.track('thread-1', TURN, '改成蓝色')

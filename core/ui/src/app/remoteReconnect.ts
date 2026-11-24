@@ -112,3 +112,14 @@ export function outageBanner(input: {
   }
   return { visible: true, text: explainStatus(input.status) }
 }
+
+
+/**
+ * 这台设备已经扫码，但还在等电脑上的用户点「确认」。
+ *
+ * user:“电脑显示待确认设备，用户确认配对”+(待确认不是连接失败；界面要说清下一步)。
+ */
+export function isAwaitingApproval(message: string): boolean {
+  const text = String(message || '')
+  return text.includes('等待电脑确认') || text.includes('pairing_pending')
+}

@@ -166,21 +166,29 @@
         </div>
 
         <!-- ── 空态 ── -->
-        <div v-if="folderTabActive && childFolders.length === 0" class="full-area-empty" data-folders-empty>
+        <div v-if="folderTabActive && childFolders.length === 0 && !searching" class="full-area-empty" data-folders-empty>
           <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
           <h2 class="full-area-empty-title">{{ openFolder ? t("这里还没有子文件夹") : t("创建你的第一个文件夹") }}</h2>
           <p class="full-area-empty-hint">{{ t("创建文件夹，整理资料库中的方案。") }}</p>
           <button class="library-button library-button--primary" type="button" data-folders-create @click="openDialog('create-folder')">{{ t("创建文件夹") }}</button>
-        </div>
-        <div v-else-if="openFolder && !showFolderGrid && folderEntries.length === 0" class="folder-empty" data-folder-empty>
-          <Upload :size="18" :stroke-width="1.6" aria-hidden="true" />
-          <p>{{ t("这个文件夹还是空的 — 点右上角「新建方案」，它会建在这里。") }}</p>
         </div>
         <div v-else-if="!openFolder && entries.length === 0" class="full-area-empty" data-library-empty>
           <span class="full-area-empty-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.8" /></span>
           <h2 class="full-area-empty-title">{{ t("还没有方案") }}</h2>
           <p class="full-area-empty-hint">{{ t("在聊天里说出你的想法，助手会一边问一边把方案写进「") }}{{ dirName }}{{ t("」文件夹；写好后就出现在这里。 方案是一篇普通的 Markdown 文档，你也可以直接新建一篇来写。") }}</p>
           <button class="library-button library-button--primary" type="button" data-library-empty-create @click="openDialog('create-plan')">{{ t("新建方案") }}</button>
+        </div>
+        <!-- user:“去找四个库中用户体验最差的点，处理掉”+(先分“真没有方案”，再分“没匹配”：
+             搜索没命中时给一键清除，不再说库是空的、也不再留白)。 -->
+        <div v-else-if="searching && !listEntries.length" class="full-area-empty" data-library-no-results>
+          <span class="full-area-empty-icon" aria-hidden="true"><SearchX :size="18" :stroke-width="1.8" /></span>
+          <h2 class="full-area-empty-title">{{ t("没有匹配的文件") }}</h2>
+          <p class="full-area-empty-hint">{{ t("换个关键词，或清除筛选条件。") }}</p>
+          <button class="library-button" type="button" data-library-clear-filters @click="clearFilters">{{ t("清除筛选") }}</button>
+        </div>
+        <div v-else-if="openFolder && !showFolderGrid && folderEntries.length === 0" class="folder-empty" data-folder-empty>
+          <Upload :size="18" :stroke-width="1.6" aria-hidden="true" />
+          <p>{{ t("这个文件夹还是空的 — 点右上角「新建方案」，它会建在这里。") }}</p>
         </div>
         <p v-else-if="!openFolder && filteredEntries.length === 0" class="full-area-note tab-empty" data-library-tab-empty>
           {{ activeTab === 'favorites' ? t("还没有收藏的方案 — 在方案卡片的菜单里「添加到收藏」。") : t("这个状态下暂无方案。") }}
@@ -294,6 +302,7 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  SearchX,
   Star,
   Trash2,
   Upload,
@@ -641,6 +650,9 @@ async function confirmDelete(): Promise<void> {
 }
 
 /* ---- 列表筛选 ---- */
+/** 搜索时文件夹让位给文件结果；空态据此区分“没匹配”与“库是空的”。 */
+const searching = computed(() => Boolean(query.value.trim()))
+
 const filteredEntries = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   let list = entries.value
@@ -673,11 +685,11 @@ const folderEntries = computed(() => {
 const listEntries = computed(() => openFolder.value ? folderEntries.value : filteredEntries.value)
 
 /* ---- 逐层导航：文件夹可以嵌套，openFolder 存库内相对目录（'' = 库根） ---- */
-/** 根上的「文件夹」页签：只列这一层的文件夹，不混方案。 */
-const folderTabActive = computed(() => !openFolder.value && activeTab.value === 'folders')
+/** 根上的「文件夹」页签：只列这一层的文件夹，不混方案；搜索时让位给文件结果。 */
+const folderTabActive = computed(() => !searching.value && !openFolder.value && activeTab.value === 'folders')
 const childFolders = computed(() => folders.value.filter(folder => folder.parent === openFolder.value))
 const showFolderGrid = computed(() =>
-  childFolders.value.length > 0 && (folderTabActive.value || Boolean(openFolder.value)))
+  !searching.value && childFolders.value.length > 0 && (folderTabActive.value || Boolean(openFolder.value)))
 
 /** 从库根到当前层的路径，每一段都能点回去。 */
 const folderTrail = computed(() => {
@@ -688,6 +700,12 @@ const folderTrail = computed(() => {
 function goToFolder(dir: string): void {
   openFolder.value = dir
   query.value = ''
+}
+
+/** 搜索没命中时的出口：清掉关键词与状态页签，回到全部方案（留在当前文件夹）。 */
+function clearFilters(): void {
+  query.value = ''
+  activeTab.value = 'all'
 }
 
 /** 空文件夹：这一层没有方案，也没有下一层文件夹。 */

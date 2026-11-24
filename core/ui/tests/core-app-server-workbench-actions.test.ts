@@ -4,7 +4,9 @@ import {
   coreDecisionSelectionPlan,
   coreComposerSubmissionEffects,
   coreComposerActionMode,
+  corePausedTurnIdFromError,
   isCoreGuidableTurnStatus,
+  isCorePausedSessionError,
   normalizeCoreCommandCatalogItem,
   submitCoreComposerTask,
   type CoreCommandCatalogItem,
@@ -363,6 +365,13 @@ describe('core appServer workbench actions', () => {
       { type: 'text', text: '写文档' },
       { type: 'attachment', attachment_id: 'att-1', filename: 'note.md' },
     ]])
+  })
+
+  it('recognizes a paused-session refusal and names the turn to continue', () => {
+    expect(corePausedTurnIdFromError({ data: { code: 'SESSION_PAUSED', reason: 'paused_turn_exists', paused_turn_id: 'turn-9' } })).toBe('turn-9')
+    expect(isCorePausedSessionError({ data: { code: 'SESSION_PAUSED', reason: 'paused_turn_exists' } })).toBe(true)
+    expect(isCorePausedSessionError({ data: { code: 'SESSION_BUSY', reason: 'active_turn_exists' } })).toBe(false)
+    expect(corePausedTurnIdFromError(new Error('plain failure'))).toBe('')
   })
 
   it('queues a busy start refusal instead of failing, with one identity', async () => {

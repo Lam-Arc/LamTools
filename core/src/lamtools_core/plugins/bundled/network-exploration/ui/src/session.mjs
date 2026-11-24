@@ -130,6 +130,26 @@ export function useNetwork(context) {
     notice.value = "";
     try {
       const result = await rpc(method, params);
+      // user:“EasyNet 开了加速，浏览器立刻用上”+(出口变化通知宿主，浏览器据此重建网络环境)。
+      if (
+        !result.cancelled &&
+        [
+          "system.apply",
+          "system.restore",
+          "accelerator.start",
+          "accelerator.stop",
+          "proxy.start",
+          "proxy.stop",
+        ].includes(method)
+      ) {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("sunday:easynet-network-changed", { detail: { method } }),
+          );
+        } catch {
+          // 没有 window 时不做任何事。
+        }
+      }
       notice.value = result.cancelled ? "已取消操作" : message;
       await networkStore.refresh();
       return result;
@@ -319,6 +339,8 @@ export function useNetwork(context) {
     connectionError,
     run,
     read,
+    // user:“支持下载完成通知、校验、快速打开文件”+(用宿主提供的 openFile 打开下载完成的文件)。
+    openFile: (path) => context.openFile?.(path),
     refresh,
     loadProxy,
     loadTasks,

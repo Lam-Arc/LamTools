@@ -23,7 +23,7 @@ import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
 import type { CoreExecutionControlsState } from '@/composables/useCoreExecutionControlsState.ts'
 import type { CoreExecutionModelSource, CoreExecutionProviderSource } from '@/composer/execution.ts'
 import { t } from '@/i18n/index.ts'
-import type { CoreInputItem, CoreMessage } from '@/types.ts'
+import type { CoreInputItem, CoreMessage, CoreMessageEditRequest } from '@/types.ts'
 import type { CardState, PingRuntime } from '../ping/usePingRuntime.ts'
 
 // user:“输入框缺东西”+(输入参数组与主界面同一套控件：模型/思考/模式/权限，
@@ -222,29 +222,38 @@ async function confirmRollback(): Promise<void> {
   }
 }
 
-async function onEdit(payload: { turnId: string; content: string; attachments?: Array<{ id: string }> }): Promise<void> {
-  const node = channel.value
-  if (!node) return
-  if (turnActive.value) {
-    error.value = t('任务运行中，请先停止任务再编辑')
-    return
-  }
-  if (!payload.turnId) {
-    error.value = t('这条消息没有可用的回合')
-    return
-  }
+const readEditBasis = () => channel.value?.readEditBasis()
+
+async function onEdit(payload: CoreMessageEditRequest): Promise<void> {
+  let accepted = false
   try {
-    // 编辑 = 回退后按原内容重发（主界面同语义）；原附件已上传，
-    // 直接按 attachment_id 随发送提交，无需重新上传。
-    await node.rollbackTurn(payload.turnId)
-    const items: CoreInputItem[] = (payload.attachments || []).map(attachment => ({
-      type: 'attachment',
-      attachment_id: attachment.id,
-    }))
-    const result = await node.send(payload.content, items)
-    if (result.status === 'ignored') error.value = result.message
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    const node = channel.value
+    if (!node) return
+    if (turnActive.value) {
+      error.value = t('任务运行中，请先停止任务再编辑')
+      return
+    }
+    if (!payload.turnId) {
+      error.value = t('这条消息没有可用的回合')
+      return
+    }
+    if (!payload.basis || payload.basis.threadId !== props.card.sessionId) {
+      error.value = t('会话已切换，请重新操作')
+      return
+    }
+    try {
+      // user:“全修”+(卡片附件和正文随原子替换发送，失败时保留原历史)。
+      const items: CoreInputItem[] = (payload.attachments || []).map(attachment => ({
+        type: 'attachment',
+        attachment_id: attachment.id,
+      }))
+      await node.replaceMessage(payload.turnId, payload.basis, payload.content, items)
+      accepted = true
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : String(cause)
+    }
+  } finally {
+    payload.onSettled?.(accepted)
   }
 }
 
@@ -343,6 +352,7 @@ function endDrag(): void {
         :turn-active="turnActive"
         :turn-status="turnStatus"
         :locked-message-ids="lockedMessageIds"
+        :read-edit-basis="readEditBasis"
         message-actions
         :process-expanded-ids="processExpandedIds"
         :sub-agent-rows-inert="true"

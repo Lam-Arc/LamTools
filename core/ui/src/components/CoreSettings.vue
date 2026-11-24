@@ -56,6 +56,38 @@
         </div>
       </section>
 
+      <!-- user:“手机端保证简单可靠易用”+(设备连接页直接放进设置，一个入口看到
+           配对、连接状态与后台保活；桌面仍走左侧竖栏的整版页面)。 -->
+      <section v-if="activeSection === 'account'" class="settings-panel">
+        <RemoteConnectionPanel :platform="commandShellPlatform === 'mobile' ? 'mobile' : 'desktop'" />
+      </section>
+
+      <!-- user:“插件与远程收进设置”+(手机没有左侧竖栏，插件/技能/钩子从设置进；
+           桌面不传 onOpenPlugins，这一节不会出现)。 -->
+      <section v-if="activeSection === 'plugins'" class="settings-panel">
+        <header class="settings-title">
+          <h1>{{ t("插件与工具") }}</h1>
+          <p>{{ t("管理已安装的插件，以及它们带来的技能与钩子。") }}</p>
+        </header>
+        <div class="settings-surface settings-surface--stack">
+          <article class="setting-card">
+            <h3>{{ t("插件") }}</h3>
+            <p>{{ t("开关插件，查看它们提供的界面与工具。") }}</p>
+            <div class="about-actions">
+              <button class="btn btn--primary" type="button" data-settings-open-plugins @click="openPluginsPage('plugins')">{{ t("打开插件管理") }}</button>
+            </div>
+          </article>
+          <article class="setting-card">
+            <h3>{{ t("技能与钩子") }}</h3>
+            <p>{{ t("查看已安装的技能与钩子，按需接入会话。") }}</p>
+            <div class="about-actions">
+              <button class="btn" type="button" data-settings-open-skills @click="openPluginsPage('skills')">{{ t("打开技能") }}</button>
+              <button class="btn" type="button" data-settings-open-hooks @click="openPluginsPage('hooks')">{{ t("打开钩子") }}</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section v-if="activeSection === 'pet'" class="settings-panel">
         <CorePetEditor />
       </section>
@@ -607,6 +639,7 @@ import {
 } from '@/helpers/messageStreamStyle.ts'
 import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
 import CoreGeneralEditor from '@/components/CoreGeneralEditor.vue'
+import RemoteConnectionPanel from '@/components/RemoteConnectionPanel.vue'
 import {
   enterSmallWindow,
   openOverlayPermission,
@@ -676,6 +709,8 @@ const props = withDefaults(defineProps<{
   /** Await the host's existing persistence/revision handling before closing. */
   persistCatalog?: (operation: SettingsCatalogMutation, payload: Record<string, unknown>) => Promise<void>
   updateState?: CoreUpdateState
+  /** 手机宿主用它把插件页并进设置；桌面不传，插件分区就不出现。 */
+  onOpenPlugins?: (section?: string) => void
 }>(), {
   modelGroups: () => [],
   catalogView: 'provider',
@@ -725,7 +760,23 @@ const emit = defineEmits<{
   'create-model-with-provider': [payload: Record<string, unknown>]
 }>()
 
-const sections = CORE_SETTINGS_SECTIONS
+// user:“手机设置点桌宠报 Command pet_config_read not found”+(桌宠只有桌面宿主有那些命令：
+// 手机上不列这一节，免得点进去只剩报错；桌面保持原样)。
+const mobileHiddenSettings = new Set(['pet'])
+const visibleSections = computed<SettingsSection[]>(() => (
+  props.commandShellPlatform === 'mobile'
+    ? CORE_SETTINGS_SECTIONS.filter(section => !mobileHiddenSettings.has(section.id))
+    : CORE_SETTINGS_SECTIONS
+))
+// user:“插件与远程收进设置”+(宿主给了入口才多出这一节，桌面保持原样)。
+const sections = computed<SettingsSection[]>(() => (
+  props.onOpenPlugins
+    ? [...visibleSections.value, { id: 'plugins', get label() { return t('插件与工具') }, icon: 'puzzle' }]
+    : visibleSections.value
+))
+function openPluginsPage(section: string): void {
+  props.onOpenPlugins?.(section)
+}
 
 // user:“去把模型调用台从左竖栏 apprail 中移除，放进设置-模型与供应商里面作为一个子功能，自行设计”+
 // (默认仍是供应商与模型；调用台作为同区第二个子视图，名字沿用原来的「调用台」)。
@@ -774,7 +825,7 @@ onMounted(() => {
   void refreshOverlayState()
 })
 const draftGuard = createSettingsDraftGuard()
-const resolvedSection = ref(props.activeSection || props.section || sections[0]?.id || '')
+const resolvedSection = ref(props.activeSection || props.section || sections.value[0]?.id || '')
 function beforeSectionChange(_id: string, proceed: () => void) {
   draftGuard.requestNavigation(proceed, { section: resolvedSection.value })
 }

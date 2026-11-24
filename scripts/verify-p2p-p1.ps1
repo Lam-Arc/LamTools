@@ -167,6 +167,19 @@ try {
     Check 'p2p transport serves and prints a pairing ticket' ($ticket -ne '') (Tail-Log $serverLog1)
     if (-not $ticket) { throw "no pairing ticket; log: $(Tail-Log $serverLog1)" }
 
+    # This call is expected to fail (pending confirmation); a native non-zero exit must not abort the script.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $first = & $Bin 'call' '--dir' $PhoneDir '--name' 'phone-p1' '--ticket' $ticket '--method' 'whoami' 2>&1 | Out-String }
+    finally { $ErrorActionPreference = $previous }
+    Check 'a fresh ticket waits for confirmation' ($first -match 'DIAL FAILED') $first.Trim()
+    $pending = & $Bin 'pending' '--dir' $PcDir 2>&1 | Out-String
+    $pendingId = ''
+    foreach ($line in ($pending -split "`r?`n")) {
+        if ($line -match '^PENDING\s+(\S+)') { $pendingId = $Matches[1] }
+    }
+    $confirmed = if ($pendingId) { & $Bin 'confirm' '--dir' $PcDir '--id' $pendingId 2>&1 | Out-String } else { '' }
+    Check 'the computer confirms the pairing' ($confirmed -match 'CONFIRMED') $confirmed.Trim()
     $pair = & $Bin 'call' '--dir' $PhoneDir '--name' 'phone-p1' '--ticket' $ticket '--method' 'whoami' 2>&1 | Out-String
     $resume = ''
     foreach ($line in ($pair -split "`r?`n")) {

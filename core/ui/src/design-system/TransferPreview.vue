@@ -9,6 +9,7 @@ const online = { id: 'sample-online', name: '示例笔记本', ticket: 'sample-o
 const offline = { id: 'sample-offline', name: '示例平板', ticket: 'sample-only' }
 const file = { path: 'C:/example/报告.pdf', name: '示例报告.pdf', size: 4096 }
 let cancelled = false
+const resumed = ref(false)
 
 // user:“交互测试”+(示例状态保存在内存，操作不访问真实设备、文件或配对信息)。
 async function invoke(command: string): Promise<unknown> {
@@ -27,6 +28,15 @@ async function invoke(command: string): Promise<unknown> {
           percent: 50,
           source: file.path,
           state: cancelled ? 'cancelled' : 'transferring',
+        }, {
+          id: 'sample-resume',
+          direction: 'send',
+          name: '示例大文件.zip',
+          total: 8192,
+          transferred: 4096,
+          percent: 50,
+          source: 'C:/example/示例大文件.zip',
+          state: resumed.value ? 'transferring' : 'failed',
         }],
         received: [{ transferId: 'sample-received', path: 'C:/example/说明.md', name: '说明.md', at: 2000 }],
       }
@@ -53,7 +63,7 @@ const previewMenu = { devices: () => [online, offline], sent: () => ({}) }
       v-if="mode === 'panel'"
       :invoke="invoke"
       :preview-services="previewPanel"
-      @retry="result = '重试传输'"
+      @retry="resumed = true; result = '从已接收的 50% 继续传输'"
     />
     <SendToDeviceMenu
       v-else

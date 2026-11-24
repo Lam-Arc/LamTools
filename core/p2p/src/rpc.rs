@@ -119,6 +119,18 @@ impl CoreRpc {
             break value.get("result").cloned().unwrap_or(Value::Null);
         };
 
+        // user:“断线恢复后不得漏事件”+(Core 的 `initialize.lastSeenSeq` 只记日志，真正
+        // 回放 journal 的是 `thread/resume`；桥重建时位点已经知道，就把这条补上，
+        // 否则断线期间的审批/后台事件只能等界面自己重新打开会话才补)。
+        if last_seen_seq > 0 {
+            if let Some(thread) = thread.filter(|thread| !thread.is_empty()) {
+                socket
+                    .send(Message::Text(resume_request(thread, last_seen_seq).to_string().into()))
+                    .await
+                    .context("cannot send the resume frame")?;
+            }
+        }
+
         let (events, _) = broadcast::channel::<Value>(4096);
         let events_for_reader = events.clone();
         let dead = Arc::new(AtomicBool::new(false));
@@ -247,8 +259,38 @@ impl CoreRpc {
     }
 }
 
+/// The frame that asks Core to replay a thread from the position we last applied.
+///
+/// user:“断线恢复后不得漏事件”+(只带 `lastSeenSeq` 的 initialize 不会触发回放；
+/// 真正把 journal 取回来的是这条 `thread/resume`)。
+fn resume_request(thread: &str, last_seen_seq: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "thread/resume",
+        "params": {
+            "thread_id": thread,
+            "last_seen_seq": last_seen_seq,
+        },
+    })
+}
+
 /// Ids only have to be unique per socket; a monotonic value also keeps logs readable.
 fn next_id() -> u64 {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// user:“断线恢复后不得漏事件”+(桥重建时带着上次的位点补一条 thread/resume)。
+    #[test]
+    fn a_rebuilt_bridge_asks_for_the_missed_events() {
+        let frame = resume_request("thread-1", 42);
+        assert_eq!(frame["method"], "thread/resume");
+        assert_eq!(frame["params"]["thread_id"], "thread-1");
+        assert_eq!(frame["params"]["last_seen_seq"], 42);
+    }
 }

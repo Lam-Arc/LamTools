@@ -45,6 +45,7 @@ export interface ShellLayoutOptions {
 }
 
 export function useShellLayout(options: ShellLayoutOptions) {
+  const mobilePlatform = options.platform === 'mobile'
   // --- state ---
   // user:“不要让它自动缩进去，手动缩回后也应该有打开方式”+(桌面项目侧栏默认展开，由独立按钮切换)。
   const leftOpen = ref(true)
@@ -59,6 +60,12 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const contentWidth = ref(options.contentWidth ?? 780)
   /* 用户拖定的会话栏宽度（px）；null 表示继续跟随样式表按窗口给出的默认档位。 */
   const leftWidth = ref<number | null>(null)
+  const viewportWidth = ref(0)
+  // user:“找出 3 个及以上优化”+(桌面侧栏只在显示时按窗口收窄，放大后恢复原宽度)。
+  const maxLeftWidth = computed(() => viewportWidth.value > 0
+    ? Math.min(LEFT_DRAWER_WIDTH_MAX, Math.max(LEFT_DRAWER_WIDTH_MIN, viewportWidth.value - 360))
+    : LEFT_DRAWER_WIDTH_MAX)
+  const effectiveLeftWidth = computed(() => leftWidth.value === null ? null : Math.min(leftWidth.value, maxLeftWidth.value))
   const theme = ref<ThemeData>(options.theme ?? { ...DEFAULT_THEME })
 
   // --- shell class ---
@@ -87,8 +94,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
     return {
       '--content-width': `${Math.min(1120, Math.max(560, contentWidth.value))}px`,
       // 用户拖定的宽度内联在 shell 上，盖过样式表里的三档默认值；手机抽屉不吃它。
-      ...(leftWidth.value !== null && !isNarrowViewport.value
-        ? { '--sidebar-width': `${leftWidth.value}px` }
+      ...(effectiveLeftWidth.value !== null && !isNarrowViewport.value
+        ? { '--sidebar-width': `${effectiveLeftWidth.value}px` }
         : {}),
       '--theme-titlebar-bg': titlebarBg,
       ...cssVars,
@@ -121,12 +128,12 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   /* 拖出来的宽度按视口收口：给聊天区至少留 360px，窄窗口也不会把主区挤没。 */
   function clampLeftWidth(value: number): number {
-    const viewport = typeof window === 'undefined' ? 0 : window.innerWidth
-    const maxByViewport = viewport > 0
-      ? Math.max(LEFT_DRAWER_WIDTH_MIN, viewport - 360)
-      : LEFT_DRAWER_WIDTH_MAX
-    const upper = Math.min(LEFT_DRAWER_WIDTH_MAX, maxByViewport)
+    const upper = maxLeftWidth.value
     return Math.round(Math.min(Math.max(value, LEFT_DRAWER_WIDTH_MIN), upper))
+  }
+
+  function syncViewportWidth() {
+    viewportWidth.value = window.innerWidth
   }
 
   function setLeftWidth(value: number | null): void {
@@ -281,7 +288,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
   let narrowMediaQuery: MediaQueryList | undefined
   // user:“桌面端窄屏也会出现左上角的悬浮窗，这不对”+(那个浮动开关是手机打开抽屉的入口；
   // 桌面端只考虑桌面布局，窗口再窄也不切换成移动端的抽屉语义。)
-  const mobilePlatform = options.platform === 'mobile'
   function syncViewportMode(event: MediaQueryList | MediaQueryListEvent) {
     if (!mobilePlatform) return
     const wasNarrow = isNarrowViewport.value
@@ -307,6 +313,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
   onMounted(() => {
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeydown)
+    syncViewportWidth()
+    if (!mobilePlatform) window.addEventListener('resize', syncViewportWidth)
     narrowMediaQuery = window.matchMedia?.('(max-width: 640px)')
     if (narrowMediaQuery) {
       syncViewportMode(narrowMediaQuery)
@@ -323,6 +331,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
   onUnmounted(() => {
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeydown)
+    if (!mobilePlatform) window.removeEventListener('resize', syncViewportWidth)
     if (narrowMediaQuery) {
       if (typeof narrowMediaQuery.removeEventListener === 'function') {
         narrowMediaQuery.removeEventListener('change', syncViewportMode)
@@ -348,7 +357,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
       if (saved.density) density.value = saved.density
       if (saved.contentWidth) contentWidth.value = saved.contentWidth
       if (typeof saved.leftWidth === 'number' && Number.isFinite(saved.leftWidth)) {
-        leftWidth.value = clampLeftWidth(saved.leftWidth)
+        leftWidth.value = mobilePlatform
+          ? clampLeftWidth(saved.leftWidth)
+          : Math.round(Math.min(LEFT_DRAWER_WIDTH_MAX, Math.max(LEFT_DRAWER_WIDTH_MIN, saved.leftWidth)))
       }
       if (saved.theme) theme.value = migrateThemeDefaults({ ...DEFAULT_THEME, ...saved.theme })
     } catch {
@@ -384,6 +395,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
     density,
     contentWidth,
     leftWidth,
+    effectiveLeftWidth,
+    maxLeftWidth,
     theme,
     // computed
     shellClass,

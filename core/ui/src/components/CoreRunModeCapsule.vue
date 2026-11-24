@@ -230,8 +230,11 @@ const emit = defineEmits<{ 'update:modelValue': [value: CoreRunMode] }>()
 }
 
 .core-run-mode__pill {
-  /* 一档是改造前的原样：两格等宽 132px、字号 15px，空间够就不压缩。 */
-  flex: 0 0 132px;
+  /* user:“这里中间没有对齐，改一下”+(两格必须有确定宽度，而不只是 flex-basis：
+     flex-basis 不参与外层容器的 max-content 计算，容器会缩到文字宽度（约 135px），
+     两格于是向右溢出、看着像整体偏右。写死 width 后容器按 274px 正确居中)。 */
+  flex: 0 0 auto;
+  width: 132px;
   height: 40px;
   padding: 0 var(--space-4, 16px);
   overflow: hidden;
@@ -272,6 +275,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: CoreRunMode] }>()
 .core-run-mode--locked .core-run-mode__pill,
 .core-run-mode--locked .core-run-mode__pill.is-active {
   flex: 0 1 auto;
+  width: auto;
   background: color-mix(in srgb, var(--text) 10%, transparent);
   color: color-mix(in srgb, var(--text) 72%, transparent);
   cursor: default;
@@ -288,6 +292,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: CoreRunMode] }>()
    （只有可用宽度真的小于一档需要的 274px 时才会进入这一档。） */
 .core-run-mode--compact .core-run-mode__pill {
   flex: 1 1 0;
+  width: auto;
   min-width: 4em;
   padding: 0 var(--space-2);
   font-size: var(--type-sm);

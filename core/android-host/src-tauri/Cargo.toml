@@ -46,3 +46,8 @@ jni = "0.21"
 
 [dev-dependencies]
 tempfile = "3"
+
+# user:“debug 包 335MB 的调试符号把安装包撑到 455MB，模拟器都被拖挂了”+
+# (调试也要能装得进设备：只保留行号级别的调试信息，去掉 .so 里的调试符号)。
+[profile.dev]
+strip = "debuginfo"

@@ -7,7 +7,8 @@
 //! 协议不动帧：`call` / `reply` / `error` / `event` 四类帧原样用，互传只是**新增 method**：
 //!
 //! ```text
-//! call  file/offer    {id,name,size,chunk}          → {id,name,size,chunk,received}
+//! call  file/offer    {id,name,size,chunk,resume,sourceVersion}
+//!                                                  → {id,name,size,chunk,received,next} 或 {completed}
 //! call  file/chunk    {id,seq,data(base64)}         → {id,received,next}
 //! call  file/complete {id}                          → {id,name,path,size}
 //! call  file/cancel   {id,reason}                   → {id,cancelled}
@@ -18,13 +19,12 @@
 //! 而现有的 `call` 已经带按 `id` 配对、断链时把所有在途调用一次性置失败、每条调用前复核
 //! 撤权这三件事。分块走它，等于免费得到「断线不挂死、撤权当场生效」。
 //!
-//! 已知取舍（写进汇报的下一步，不在本批做）：断点续传的跨重启恢复、目录打包、多文件并行。
-//! 本版一次只承载一个文件的写入进度；分块是顺序的（`seq` 必须连着来），乱序直接拒绝，
-//! 免得留下一个「半个文件」的静默损坏。
+//! 接收进度按设备保留三分钟，重连后继续传。接收进程重启后需要重新发送。
+//! 分块按 `seq` 顺序写入，恢复时由接收端返回下一块。
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -96,6 +96,27 @@ pub const CODE_TIMEOUT: &str = "file_timeout";
 pub const CODE_CANCELLED: &str = "file_cancelled";
 /// 对端拒了这一次调用（消息里带着对端的错误码与原因）。
 pub const CODE_PEER: &str = "file_peer_error";
+
+#[derive(Debug)]
+pub struct InterruptedCall(pub anyhow::Error);
+
+impl std::fmt::Display for InterruptedCall {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for InterruptedCall {}
+
+const CODE_INTERRUPTED: &str = "file_interrupted";
+
+fn transfer_call_error(error: anyhow::Error) -> TransferError {
+    if let Some(message) = error.to_string().strip_prefix("[file_cancelled] ") {
+        return TransferError::new(CODE_CANCELLED, message);
+    }
+    let code = if error.is::<InterruptedCall>() { CODE_INTERRUPTED } else { CODE_PEER };
+    TransferError::new(code, format!("{error:#}"))
+}
 
 /// 一个可判定的传输错误：稳定码 + 给人看的原因。
 #[derive(Debug, Clone)]
@@ -370,24 +391,14 @@ fn numbered_name(name: &str, index: u32) -> String {
     }
 }
 
-/// transfer id 会进临时文件名：只留字母数字与 `-`/`_`，别的一律丢掉。
-fn safe_id(id: &str) -> String {
-    let cleaned: String = id
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-        .take(64)
-        .collect();
-    if cleaned.is_empty() {
-        "transfer".to_owned()
-    } else {
-        cleaned
-    }
-}
-
 // ---- 接收端 -------------------------------------------------------------
 
 struct Incoming {
     name: String,
+    requested_name: String,
+    source_version: String,
+    resumable: bool,
+    sink: ProgressSink,
     /// 已经占好位的最终路径（0 字节）。
     target: PathBuf,
     /// 数据先写到这个 `.part`，完成时才顶上最终名字。
@@ -400,9 +411,15 @@ struct Incoming {
     last_percent: u8,
 }
 
+#[derive(Default)]
 struct Inner {
-    active: HashMap<String, Incoming>,
+    active: HashMap<(String, String), Incoming>,
+    completed: HashMap<(String, String), (String, String, Value, Instant)>,
+    cancelled: HashMap<(String, String), Instant>,
 }
+
+#[derive(Clone, Default)]
+pub struct ReceiveTransfers(Arc<Mutex<Inner>>);
 
 /// 接收端：把 `file/*` 方法落到 `<root>/<日期>/` 下的一个真实文件。
 ///
@@ -412,18 +429,29 @@ pub struct Receiver {
     root: PathBuf,
     trusted: bool,
     sink: ProgressSink,
-    inner: Mutex<Inner>,
+    transfers: ReceiveTransfers,
+    peer: String,
 }
 
 impl Receiver {
     pub fn new(root: impl Into<PathBuf>, trusted: bool, sink: ProgressSink) -> Self {
+        Self::for_peer(root, trusted, sink, ReceiveTransfers::default(), String::new())
+    }
+
+    // user:“全部处理并继续寻找”+(续传按已认证设备和传输编号查进度，新连接继承同一设备的半文件)。
+    pub fn for_peer(
+        root: impl Into<PathBuf>,
+        trusted: bool,
+        sink: ProgressSink,
+        transfers: ReceiveTransfers,
+        peer: String,
+    ) -> Self {
         Self {
             root: root.into(),
             trusted,
             sink,
-            inner: Mutex::new(Inner {
-                active: HashMap::new(),
-            }),
+            transfers,
+            peer,
         }
     }
 
@@ -434,13 +462,13 @@ impl Receiver {
 
     /// 处理一条 `file/*` 调用。
     pub fn handle(&self, method: &str, params: &Value) -> Result<Value, TransferError> {
-        self.sweep_stale();
         if !self.trusted {
             return Err(TransferError::new(
                 CODE_UNTRUSTED,
                 "这台设备没有互传权限（未配对或已被移除授权）",
             ));
         }
+        self.transfers.sweep_stale();
         match method {
             METHOD_OFFER => self.offer(params),
             METHOD_CHUNK => self.chunk(params),
@@ -456,6 +484,10 @@ impl Receiver {
     fn offer(&self, params: &Value) -> Result<Value, TransferError> {
         let id = text(params, "id")?;
         let mut name = sanitize_file_name(&text(params, "name")?)?;
+        let requested_name = name.clone();
+        let source_version = params.get("sourceVersion").and_then(Value::as_str).unwrap_or("").to_owned();
+        let resume = params.get("resume").and_then(Value::as_bool) == Some(true);
+        let key = (self.peer.clone(), id.clone());
         let size = number(params, "size")?;
         if size > MAX_FILE_BYTES {
             return Err(TransferError::new(
@@ -467,14 +499,28 @@ impl Receiver {
         fs::create_dir_all(&day).map_err(|error| {
             TransferError::new(CODE_DISK, format!("无法创建接收目录 {}：{error}", day.display()))
         })?;
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if inner.active.contains_key(&id) {
-            return Err(TransferError::new(
-                CODE_BUSY,
-                format!("传输 {id} 已经在进行中"),
-            ));
+        let mut inner = self.transfers.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        check_cancelled(&inner, &key)?;
+        if let Some((original_name, version, receipt, _)) = inner.completed.get(&key) {
+            if !resume || original_name != &name || version != &source_version || receipt["size"].as_u64() != Some(size) {
+                return Err(TransferError::new(CODE_BUSY, "传输编号已被使用"));
+            }
+            return Ok(json!({ "completed": receipt }));
         }
-        if inner.active.len() >= MAX_ACTIVE {
+        if let Some(entry) = inner.active.get_mut(&key) {
+            if !resume || entry.requested_name != name || entry.size != size || entry.source_version != source_version {
+                return Err(TransferError::new(CODE_BUSY, "续传编号或源文件已变化"));
+            }
+            entry.last = Instant::now();
+            entry.sink = self.sink.clone();
+            return Ok(json!({
+                "id": id, "name": entry.name, "size": size,
+                "chunk": CHUNK_BYTES, "received": entry.received, "next": entry.next_seq,
+            }));
+        }
+        if inner.active.len() >= MAX_ACTIVE * 16
+            || inner.active.keys().filter(|(peer, _)| peer == &self.peer).count() >= MAX_ACTIVE
+        {
             return Err(TransferError::new(
                 CODE_BUSY,
                 format!("同时进行的传输太多了（上限 {MAX_ACTIVE}），请稍后再试"),
@@ -487,14 +533,19 @@ impl Receiver {
         if let Some(actual) = target.file_name().and_then(|item| item.to_str()) {
             name = actual.to_owned();
         }
-        let part = day.join(format!(".{}.part", safe_id(&id)));
-        let file = File::create(&part).map_err(|error| {
+        let part = day.join(format!(".{}.part", new_transfer_id()));
+        let file = OpenOptions::new().create_new(true).write(true).open(&part).map_err(|error| {
+            let _ = fs::remove_file(&target);
             TransferError::new(CODE_DISK, format!("无法创建临时文件：{error}"))
         })?;
         inner.active.insert(
-            id.clone(),
+            key,
             Incoming {
                 name: name.clone(),
+                requested_name,
+                source_version,
+                resumable: resume,
+                sink: self.sink.clone(),
                 target: target.clone(),
                 part,
                 file: Some(file),
@@ -516,6 +567,7 @@ impl Receiver {
             "size": size,
             "chunk": CHUNK_BYTES,
             "received": 0u64,
+            "next": 0u64,
         }))
     }
 
@@ -535,8 +587,10 @@ impl Receiver {
                 format!("块太大（{} > {CHUNK_BYTES}）", bytes.len()),
             ));
         }
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(entry) = inner.active.get_mut(&id) else {
+        let key = (self.peer.clone(), id.clone());
+        let mut inner = self.transfers.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        check_cancelled(&inner, &key)?;
+        let Some(entry) = inner.active.get_mut(&key) else {
             return Err(TransferError::new(
                 CODE_NOT_FOUND,
                 format!("传输 {id} 不在进行中（可能已超时或已取消）"),
@@ -564,7 +618,11 @@ impl Receiver {
             });
         if let Err(error) = write {
             let name = entry.name.clone();
-            inner.active.remove(&id);
+            if let Some(mut failed) = inner.active.remove(&key) {
+                drop(failed.file.take());
+                let _ = fs::remove_file(&failed.part);
+                let _ = fs::remove_file(&failed.target);
+            }
             drop(inner);
             emit(&self.sink, Progress::at(&id, "receive", &name, 0, 0, "failed").failed(error.code(), error.message()));
             return Err(error);
@@ -590,8 +648,13 @@ impl Receiver {
 
     fn complete(&self, params: &Value) -> Result<Value, TransferError> {
         let id = text(params, "id")?;
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(mut entry) = inner.active.remove(&id) else {
+        let key = (self.peer.clone(), id.clone());
+        let mut inner = self.transfers.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        check_cancelled(&inner, &key)?;
+        if let Some((_, _, receipt, _)) = inner.completed.get(&key) {
+            return Ok(receipt.clone());
+        }
+        let Some(mut entry) = inner.active.remove(&key) else {
             return Err(TransferError::new(
                 CODE_NOT_FOUND,
                 format!("传输 {id} 不在进行中"),
@@ -627,17 +690,21 @@ impl Receiver {
             );
             return Err(TransferError::new(CODE_DISK, message));
         }
-        drop(inner);
         let path = entry.target.to_string_lossy().to_string();
+        let receipt = json!({ "id": id, "name": entry.name, "path": path, "size": entry.size });
+        if entry.resumable {
+            if inner.completed.len() >= MAX_ACTIVE * 16 {
+                if let Some(key) = inner.completed.iter().min_by_key(|(_, item)| item.3).map(|(key, _)| key.clone()) {
+                    inner.completed.remove(&key);
+                }
+            }
+            inner.completed.insert(key, (entry.requested_name, entry.source_version, receipt.clone(), Instant::now()));
+        }
+        drop(inner);
         let mut progress = Progress::at(&id, "receive", &entry.name, entry.size, entry.size, "completed");
         progress.path = path.clone();
         emit(&self.sink, progress);
-        Ok(json!({
-            "id": id,
-            "name": entry.name,
-            "path": path,
-            "size": entry.size,
-        }))
+        Ok(receipt)
     }
 
     fn cancel(&self, params: &Value) -> Result<Value, TransferError> {
@@ -647,8 +714,8 @@ impl Receiver {
             .and_then(Value::as_str)
             .unwrap_or("对端取消了传输")
             .to_owned();
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(mut entry) = inner.active.remove(&id) else {
+        let mut inner = self.transfers.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(mut entry) = inner.active.remove(&(self.peer.clone(), id.clone())) else {
             return Ok(json!({ "id": id, "cancelled": false }));
         };
         drop(entry.file.take());
@@ -665,12 +732,63 @@ impl Receiver {
         Ok(json!({ "id": id, "cancelled": true }))
     }
 
+}
+
+impl ReceiveTransfers {
+    // user:“全修”+(接收端取消会删除部分文件，并阻止同一笔传输重连后自行恢复)。
+    pub fn cancel_receiving(&self, id: &str) -> Option<Progress> {
+        let entry = {
+            let mut inner = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            let mut matches = inner.active.keys().filter(|(_, transfer)| transfer == id);
+            let key = matches.next()?.clone();
+            if matches.next().is_some() {
+                return None;
+            }
+            let entry = inner.active.remove(&key)?;
+            if inner.cancelled.len() >= MAX_ACTIVE * 16 {
+                if let Some(oldest) = inner
+                    .cancelled
+                    .iter()
+                    .min_by_key(|(_, time)| **time)
+                    .map(|(key, _)| key.clone())
+                {
+                    inner.cancelled.remove(&oldest);
+                }
+            }
+            inner.cancelled.insert(key, Instant::now());
+            entry
+        };
+        let Incoming {
+            file,
+            part,
+            target,
+            sink,
+            name,
+            size,
+            received,
+            ..
+        } = entry;
+        drop(file);
+        let _ = fs::remove_file(part);
+        let _ = fs::remove_file(target);
+        let mut progress = Progress::at(id, "receive", &name, size, received, "cancelled");
+        progress.code = CODE_CANCELLED.to_owned();
+        progress.message = "接收方取消了传输".to_owned();
+        emit(&sink, progress.clone());
+        Some(progress)
+    }
+
     /// 太久没动静的传输当场作废：不放着半个文件占名字。
-    fn sweep_stale(&self) {
-        let mut expired: Vec<Incoming> = Vec::new();
+    pub fn sweep_stale(&self) {
+        let mut expired = Vec::new();
         {
-            let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let stale: Vec<String> = inner
+            let mut inner = self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            inner.completed.retain(|_, entry| entry.3.elapsed() <= IDLE);
+            inner.cancelled.retain(|_, time| time.elapsed() <= IDLE);
+            let stale: Vec<_> = inner
                 .active
                 .iter()
                 .filter(|(_, entry)| entry.last.elapsed() > IDLE)
@@ -678,14 +796,26 @@ impl Receiver {
                 .collect();
             for id in stale {
                 if let Some(entry) = inner.active.remove(&id) {
-                    expired.push(entry);
+                    expired.push((id.1, entry));
                 }
             }
         }
-        for mut entry in expired {
+        for (id, mut entry) in expired {
             drop(entry.file.take());
             let _ = fs::remove_file(&entry.part);
             let _ = fs::remove_file(&entry.target);
+            emit(
+                &entry.sink,
+                Progress::at(
+                    &id,
+                    "receive",
+                    &entry.name,
+                    entry.size,
+                    entry.received,
+                    "failed",
+                )
+                .failed(CODE_TIMEOUT, "传输长时间没有进展"),
+            );
             println!(
                 "[sunday-p2p] transfer swept: {} ({})",
                 entry.name,
@@ -693,6 +823,13 @@ impl Receiver {
             );
         }
     }
+}
+
+fn check_cancelled(inner: &Inner, key: &(String, String)) -> Result<(), TransferError> {
+    if inner.cancelled.contains_key(key) {
+        return Err(TransferError::new(CODE_CANCELLED, "接收方取消了传输"));
+    }
+    Ok(())
 }
 
 // ---- 发送端 -------------------------------------------------------------
@@ -710,12 +847,25 @@ pub struct SentFile {
 /// 把本地一个文件发给对端。
 ///
 /// `call` 就是这条隧道上的普通调用（`Client::call` 或宿主自己的转发函数）：互传不要求
-/// 调用方知道帧长什么样。中途任何一步失败都会尽力发一条 `file/cancel`，不让对端留下
-/// 半个文件与一个 `.part`。
+/// 调用方知道帧长什么样。链路中断后，接收端在恢复窗口内保留已确认的进度。
 pub async fn send_file<F, Fut>(
+    call: F,
+    path: &Path,
+    as_name: Option<&str>,
+    sink: &ProgressSink,
+) -> Result<SentFile, TransferError>
+where
+    F: FnMut(String, Value) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Value>>,
+{
+    send_file_with_id(call, path, as_name, None, sink).await
+}
+
+pub async fn send_file_with_id<F, Fut>(
     mut call: F,
     path: &Path,
     as_name: Option<&str>,
+    transfer_id: Option<&str>,
     sink: &ProgressSink,
 ) -> Result<SentFile, TransferError>
 where
@@ -727,9 +877,10 @@ where
         .and_then(|name| name.to_str())
         .unwrap_or("file");
     let name = sanitize_file_name(as_name.unwrap_or(fallback))?;
-    let metadata = fs::metadata(path).map_err(|error| {
+    let mut file = File::open(path).map_err(|error| {
         TransferError::new(CODE_BAD_REQUEST, format!("读不到 {}：{error}", path.display()))
     })?;
+    let metadata = file.metadata().map_err(|error| TransferError::new(CODE_BAD_REQUEST, error.to_string()))?;
     if !metadata.is_file() {
         return Err(TransferError::new(
             CODE_BAD_REQUEST,
@@ -743,35 +894,95 @@ where
             format!("文件超过上限 {} 字节", MAX_FILE_BYTES),
         ));
     }
-    let id = new_transfer_id();
+    let id = transfer_id.map(str::to_owned).unwrap_or_else(new_transfer_id);
+    let modified = metadata.modified().ok();
+    let source_version = modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos().to_string()).unwrap_or_default();
     emit(
         sink,
         Progress::at(&id, "send", &name, size, 0, "offered"),
     );
+    let offer_params = json!({
+        "id": id, "name": name, "size": size, "chunk": CHUNK_BYTES,
+        "resume": true, "sourceVersion": source_version,
+    });
+    let mut progress = Progress::at(&id, "send", &name, size, 0, "offered");
+    // user:“全部处理并继续寻找”+(断线后重新询问接收端已写进度，已收到但丢了回执的块也不重传)。
+    for attempt in 0..=4 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if !file.metadata().is_ok_and(|current| current.len() == size && current.modified().ok() == modified) {
+                let error = TransferError::new(CODE_BAD_REQUEST, "源文件已变化，请重新发送");
+                emit(sink, progress.failed(error.code(), error.message()));
+                return Err(error);
+            }
+        }
+        match send_file_attempt(&mut call, &mut file, &offer_params, &mut progress, sink).await {
+            Ok(sent) => return Ok(sent),
+            Err(error) if error.code() == CODE_INTERRUPTED && attempt < 4 => {
+                let mut reconnecting = progress.clone();
+                reconnecting.message = "连接中断，正在尝试续传".to_owned();
+                emit(sink, reconnecting);
+            }
+            Err(error) if error.code() == CODE_CANCELLED => {
+                progress.state = "cancelled".to_owned();
+                progress.code = error.code().to_owned();
+                progress.message = error.message().to_owned();
+                emit(sink, progress);
+                return Err(error);
+            }
+            Err(error) => {
+                emit(sink, progress.failed(error.code(), error.message()));
+                return Err(error);
+            }
+        }
+    }
+    unreachable!("last transfer attempt returns")
+}
+
+async fn send_file_attempt<F, Fut>(
+    call: &mut F,
+    file: &mut File,
+    offer_params: &Value,
+    progress: &mut Progress,
+    sink: &ProgressSink,
+) -> Result<SentFile, TransferError>
+where
+    F: FnMut(String, Value) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Value>>,
+{
+    let id = progress.transfer_id.clone();
+    let size = progress.total;
     let offer = call(
         METHOD_OFFER.to_owned(),
-        json!({ "id": id, "name": name, "size": size, "chunk": CHUNK_BYTES }),
+        offer_params.clone(),
     )
     .await
-    .map_err(|error| TransferError::new(CODE_PEER, format!("{error:#}")))?;
+    .map_err(transfer_call_error)?;
+    if let Some(receipt) = offer.get("completed") {
+        return Ok(finish_send(sink, progress, receipt, size, size.div_ceil(CHUNK_BYTES as u64)));
+    }
     // 对端可能给了一个不重名的新名字（`a (2).txt`）：后面报的就是它。
     let accepted_name = offer
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or(&name)
+        .unwrap_or(&progress.name)
         .to_owned();
 
-    let mut file = File::open(path).map_err(|error| {
-        TransferError::new(CODE_BAD_REQUEST, format!("打不开 {}：{error}", path.display()))
-    })?;
     let mut buffer = vec![0u8; CHUNK_BYTES];
-    let mut seq: u64 = 0;
-    let mut sent: u64 = 0;
-    let mut last_percent: u8 = 0;
-    loop {
-        let read = match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => read,
+    let mut seq = offer.get("next").and_then(Value::as_u64).unwrap_or(0);
+    let mut sent = offer.get("received").and_then(Value::as_u64).unwrap_or(0);
+    if sent > size || seq != sent.div_ceil(CHUNK_BYTES as u64) || (sent < size && sent % CHUNK_BYTES as u64 != 0) {
+        return Err(TransferError::new(CODE_BAD_REQUEST, "接收端返回了无效的续传位置"));
+    }
+    file.seek(std::io::SeekFrom::Start(sent)).map_err(|error| TransferError::new(CODE_BAD_REQUEST, error.to_string()))?;
+    let mut last_percent = percent_of(sent, size, false);
+    *progress = Progress::at(&id, "send", &accepted_name, size, sent, "transferring");
+    emit(sink, progress.clone());
+    while sent < size {
+        let read = (size - sent).min(CHUNK_BYTES as u64) as usize;
+        let read = match file.read_exact(&mut buffer[..read]) {
+            Ok(()) => read,
             Err(error) => {
                 let _ = call(
                     METHOD_CANCEL.to_owned(),
@@ -779,11 +990,6 @@ where
                 )
                 .await;
                 let message = format!("读本地文件失败：{error}");
-                emit(
-                    sink,
-                    Progress::at(&id, "send", &accepted_name, size, sent, "failed")
-                        .failed(CODE_BAD_REQUEST, &message),
-                );
                 return Err(TransferError::new(CODE_BAD_REQUEST, message));
             }
         };
@@ -793,48 +999,40 @@ where
         )
         .await
         {
-            let _ = call(
-                METHOD_CANCEL.to_owned(),
-                json!({ "id": id, "reason": format!("{error:#}") }),
-            )
-            .await;
-            let message = format!("{error:#}");
-            emit(
-                sink,
-                Progress::at(&id, "send", &accepted_name, size, sent, "failed")
-                    .failed(CODE_PEER, &message),
-            );
-            return Err(TransferError::new(CODE_PEER, message));
+            return Err(transfer_call_error(error));
         }
         sent += read as u64;
         seq += 1;
         let percent = percent_of(sent, size, sent == size);
+        *progress = Progress::at(&id, "send", &accepted_name, size, sent, "transferring");
         // 每 1% 一条：400 条的进度条已经够顺，别让进度事件把隧道占满。
         if percent != last_percent || sent == size {
             last_percent = percent;
-            emit(
-                sink,
-                Progress::at(&id, "send", &accepted_name, size, sent, "transferring"),
-            );
+            emit(sink, progress.clone());
         }
     }
     let done = call(METHOD_COMPLETE.to_owned(), json!({ "id": id }))
         .await
-        .map_err(|error| TransferError::new(CODE_PEER, format!("{error:#}")))?;
+        .map_err(transfer_call_error)?;
+    Ok(finish_send(sink, progress, &done, sent, seq))
+}
+
+fn finish_send(sink: &ProgressSink, state: &Progress, done: &Value, sent: u64, seq: u64) -> SentFile {
     let remote_path = done
         .get("path")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
-    let mut progress = Progress::at(&id, "send", &accepted_name, size, sent, "completed");
+    let name = done.get("name").and_then(Value::as_str).unwrap_or(&state.name);
+    let mut progress = Progress::at(&state.transfer_id, "send", name, state.total, sent, "completed");
     progress.path = remote_path.clone();
     emit(sink, progress);
-    Ok(SentFile {
-        name: accepted_name,
+    SentFile {
+        name: name.to_owned(),
         bytes: sent,
         chunks: seq,
         remote_path,
-    })
+    }
 }
 
 fn text(params: &Value, key: &str) -> Result<String, TransferError> {
@@ -861,6 +1059,99 @@ pub fn as_anyhow(error: TransferError) -> anyhow::Error {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn remote_repair_receiving_cancel_stops_chunks_and_reconnect_resume() {
+        let root = temp_dir("receiver-cancel");
+        let transfers = ReceiveTransfers::default();
+        let receiver = Receiver::for_peer(&root, true, null_sink(), transfers.clone(), "sender".into());
+        let offer = json!({"id":"cancel-me","name":"payload.bin","size":2,"resume":true});
+        receiver.handle(METHOD_OFFER, &offer).unwrap();
+        let ack = transfers.cancel_receiving("cancel-me").unwrap();
+        assert_eq!(ack.state, "cancelled");
+        let reconnect = Receiver::for_peer(&root, true, null_sink(), transfers, "sender".into());
+        let chunk = json!({"id":"cancel-me","seq":0,"data":B64.encode([1])});
+        assert_eq!(receiver.handle(METHOD_CHUNK, &chunk).unwrap_err().code(), CODE_CANCELLED);
+        assert_eq!(reconnect.handle(METHOD_OFFER, &offer).unwrap_err().code(), CODE_CANCELLED);
+        assert_eq!(fs::read_dir(day_dir_for(&root, now_secs())).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn remote_repair_sender_stops_instead_of_resuming_after_receiver_cancel() {
+        let root = temp_dir("cancel-notice");
+        let source = root.join("source.bin");
+        fs::write(&source, vec![7; CHUNK_BYTES + 1]).unwrap();
+        let transfers = ReceiveTransfers::default();
+        let receiver = Receiver::for_peer(&root, true, null_sink(), transfers.clone(), "sender".into());
+        let seen = Arc::new(Mutex::new(Vec::<Progress>::new()));
+        let progress = seen.clone();
+        let sink: ProgressSink = Arc::new(move |row| progress.lock().unwrap().push(row));
+        let mut chunk_calls = 0;
+        let error = send_file_with_id(|method, params| {
+            if method == METHOD_CHUNK {
+                chunk_calls += 1;
+                if chunk_calls == 1 {
+                    transfers.cancel_receiving("active-transfer").unwrap();
+                }
+            }
+            let result = receiver.handle(&method, &params).map_err(as_anyhow);
+            async move { result }
+        }, &source, None, Some("active-transfer"), &sink).await.unwrap_err();
+        assert_eq!(error.code(), CODE_CANCELLED);
+        assert_eq!(chunk_calls, 1);
+        assert_eq!(seen.lock().unwrap().last().unwrap().state, "cancelled");
+    }
+
+    // user:“全部处理并继续寻找”+(块和完成回执丢失后，重新连接只发缺少的字节)。
+    #[tokio::test]
+    async fn remote_reliability_file_resumes_after_chunk_and_completion_ack_loss() {
+        let root = temp_dir("resume");
+        let source = root.join("original.bin");
+        let bytes = vec![0xab; CHUNK_BYTES + 13];
+        fs::write(&source, &bytes).unwrap();
+        let store = ReceiveTransfers::default();
+        let mut lost_chunk = false;
+        let mut lost_completion = false;
+        let mut chunks = Vec::new();
+        let call = |method: String, params: Value| {
+            let receiver = Receiver::for_peer(&root, true, null_sink(), store.clone(), "peer-a".into());
+            let result = receiver.handle(&method, &params).map_err(as_anyhow);
+            let interrupt = if method == METHOD_CHUNK {
+                chunks.push(params["seq"].as_u64().unwrap());
+                !std::mem::replace(&mut lost_chunk, true)
+            } else if method == METHOD_COMPLETE {
+                !std::mem::replace(&mut lost_completion, true)
+            } else {
+                false
+            };
+            async move {
+                if result.is_ok() && interrupt {
+                    Err(InterruptedCall(anyhow!("lost response")).into())
+                } else {
+                    result
+                }
+            }
+        };
+        let sent = send_file_with_id(call, &source, Some("received.bin"), Some("resume-id"), &null_sink()).await.unwrap();
+        assert_eq!(chunks, vec![0, 1]);
+        assert_eq!(fs::read(sent.remote_path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn remote_reliability_resume_is_scoped_to_original_device_and_source() {
+        let root = temp_dir("resume-peer");
+        let store = ReceiveTransfers::default();
+        let a = Receiver::for_peer(&root, true, null_sink(), store.clone(), "a".into());
+        let b = Receiver::for_peer(&root, true, null_sink(), store, "b".into());
+        let offer = json!({ "id": "same", "name": "file.bin", "size": 2, "resume": true, "sourceVersion": "v1" });
+        a.handle(METHOD_OFFER, &offer).unwrap();
+        a.handle(METHOD_CHUNK, &json!({ "id": "same", "seq": 0, "data": B64.encode([1]) })).unwrap();
+        assert_eq!(a.handle(METHOD_OFFER, &offer).unwrap()["received"], 1);
+        assert_eq!(b.handle(METHOD_OFFER, &offer).unwrap()["received"], 0);
+        let mut changed = offer;
+        changed["sourceVersion"] = json!("v2");
+        assert_eq!(a.handle(METHOD_OFFER, &changed).unwrap_err().code(), CODE_BUSY);
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);

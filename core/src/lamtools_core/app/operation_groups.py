@@ -7,6 +7,7 @@ from .operation_catalog import OperationCatalog, OperationHandler
 
 CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "thread.read",
+    "thread.writeReceipts",  # user:“全修”+(开放断线重连回执核对)。
     "thread.resume",
     "thread.history",
     "thread.outline",
@@ -14,6 +15,7 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "sync.start",
     "thread.start",
     "turn.start",
+    "turn.replace",  # user:“全做”+(开放安全的历史消息替换操作)。
     "turn.resume",
     "turn.steer",
     "turn.pause",
@@ -46,6 +48,7 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     # user:“先记到方案，再完成这个PRD”+(Library 的本机文件、资产与集合也走同一个
     # live RPC；不登记就会被实时通道当成未知方法)。
     "libraryfs.status",
+    "libraryfs.setup",
     "libraryfs.roots",
     "libraryfs.search",
     "libraryfs.browse",

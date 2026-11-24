@@ -8,6 +8,7 @@ export interface CorePendingGuidanceOptions {
   activeThreadId: Readonly<Ref<string | null>>
   composerText: Ref<string>
   queueInput(threadId: string, input: CoreInputItem[]): Promise<void>
+  restoreDraft?(threadId: string, text: string): void
   onError?(message: string): void
 }
 
@@ -16,6 +17,7 @@ interface PendingGuidanceEntry {
   threadId: string
   turnId: string
   text: string
+  serverOwnsRecovery: boolean
 }
 
 const TERMINAL_TURN_STATUSES = new Set(['completed', 'failed', 'cancelled', 'skipped'])
@@ -36,14 +38,20 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
   // 每个待生效条目配一个 part 对象，生命周期与条目一致。挂在过程末尾的是同一个
   // 对象引用，投影缓存与 v-memo 才不会逐帧失效。
   const parts = new Map<string, MessagePart>()
-  /** `turnId\0text` → 已经被待生效条目配对掉的落库条数（只增不减）。
+  /** `threadId\0turnId\0text` → 已经被待生效条目配对掉的落库条数（只增不减）。
    *  同一个 turn 里文本相同的引导可能有多条，必须一一配对：配对结果一旦确定就要
    *  记住，否则撤掉一条后，剩下的那条会被同一条落库记录再次"配对"，凭空消失。 */
   const consumedLands = new Map<string, number>()
+  const parked = new Map<string, string[]>()
   let sequence = 0
 
   /** 记录一条刚被服务端接受的引导。 */
-  function track(threadId: string | null | undefined, turnId: string | null | undefined, value: unknown): void {
+  function track(
+    threadId: string | null | undefined,
+    turnId: string | null | undefined,
+    value: unknown,
+    { serverOwnsRecovery = false } = {},
+  ): void {
     const text = String(coreInputToText(value) || '').trim()
     const ownerThread = String(threadId || '')
     const ownerTurn = String(turnId || '')
@@ -57,7 +65,7 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
       label: '引导',
       metadata: { guidancePending: true },
     })
-    entries.value = [...entries.value, { key, threadId: ownerThread, turnId: ownerTurn, text }]
+    entries.value = [...entries.value, { key, threadId: ownerThread, turnId: ownerTurn, text, serverOwnsRecovery }]
   }
 
   /** 这一轮里已落库的引导文本计数：用来判定待生效的条目是否已经生效。 */
@@ -149,6 +157,9 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
     const landed: Array<{ key: string; pairKey: string }> = []
     const ended: PendingGuidanceEntry[] = []
     const threadId = String(options.activeThreadId.value || '')
+    // user:“全做”+(新会话加载时暂不使用旧会话的回合状态判断引导是否结束)。
+    const snapshot = options.snapshot.value
+    if (snapshot && snapshot.thread_id !== threadId) return { visible, landed, ended }
     const countsByTurn = new Map<string, Map<string, number>>()
     // 本次评估内的配对增量（不落库；由 watcher 在撤下条目时提交）
     const passConsumed = new Map<string, number>()
@@ -161,7 +172,7 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
         counts = landedCounts(entry.turnId)
         countsByTurn.set(entry.turnId, counts)
       }
-      const pairKey = `${entry.turnId}\u0000${entry.text}`
+      const pairKey = `${entry.threadId}\u0000${entry.turnId}\u0000${entry.text}`
       const consumed = (consumedLands.get(pairKey) || 0) + (passConsumed.get(pairKey) || 0)
       if ((counts.get(entry.text) || 0) > consumed) {
         passConsumed.set(pairKey, (passConsumed.get(pairKey) || 0) + 1)
@@ -216,12 +227,29 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
     try {
       await options.queueInput(entry.threadId, [{ type: 'text', text: entry.text }])
     } catch (error) {
-      // 队列都失败：退回输入框，内容绝不丢
-      const current = options.composerText.value.replace(/\s+$/, '')
-      options.composerText.value = current ? `${current}\n${entry.text}` : entry.text
-      options.onError?.(error instanceof Error ? error.message : String(error))
+      // user:“全做”+(异步失败只把引导交还原会话，避免切换后把文字或错误放进另一个会话)。
+      if (options.activeThreadId.value === entry.threadId) {
+        appendToComposer(entry.text)
+        options.onError?.(error instanceof Error ? error.message : String(error))
+      } else if (options.restoreDraft) {
+        options.restoreDraft(entry.threadId, entry.text)
+      } else {
+        parked.set(entry.threadId, [...(parked.get(entry.threadId) ?? []), entry.text])
+      }
     }
   }
+
+  function appendToComposer(text: string): void {
+    const current = options.composerText.value.trimEnd()
+    options.composerText.value = current ? `${current}\n${text}` : text
+  }
+
+  watch(options.activeThreadId, (threadId) => {
+    const texts = threadId && parked.get(threadId)
+    if (!threadId || !texts) return
+    parked.delete(threadId)
+    appendToComposer(texts.join('\n'))
+  })
 
   const guidanceParts = computed(() => (
     entries.value.length === 0 ? [] : evaluate().visible
@@ -241,7 +269,8 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
     for (const entry of landed) parts.delete(entry.key)
     for (const entry of ended) {
       parts.delete(entry.key)
-      void returnToUser(entry)
+      // user:“全做”+(服务端已持久接收的引导由服务端补投，前端只恢复自己持有的旧式引导)。
+      if (!entry.serverOwnsRecovery) void returnToUser(entry)
     }
   })
 

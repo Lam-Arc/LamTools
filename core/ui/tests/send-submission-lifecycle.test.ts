@@ -1,7 +1,7 @@
 import { nextTick, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import { useCoreLiveComposerController } from '../src/composables/useCoreLiveComposerController'
-import { CoreRequestAcceptanceUnknownError } from '../src/appServer/client'
+import { CoreHistoryEditConflictError, CoreRequestAcceptanceUnknownError } from '../src/appServer/client'
 import type { UseCoreLiveComposerControllerOptions } from '../src/composables/useCoreLiveComposerController'
 import type { CoreInputItem } from '../src/types'
 
@@ -35,6 +35,48 @@ function setup(overrides: Partial<UseCoreLiveComposerControllerOptions> = {}) {
 }
 
 describe('submission lifecycle acceptance', () => {
+  it('requires reopening an edit after a version conflict', async () => {
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      if (startTurn.mock.calls.length === 1) throw new CoreHistoryEditConflictError()
+    })
+    const s = setup({ startTurn })
+    const message = { threadId: 'a', turnId: 'old', expectedRevision: 12, text: 'revised', attachments: [] }
+    await s.controller.replaceMessage(message)
+    const conflict = s.controller.submissions.value[0]
+    expect(conflict).toMatchObject({ needsReopen: true })
+    await s.controller.retrySubmission(conflict.id)
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    await s.controller.replaceMessage({ ...message, expectedRevision: 14 })
+    expect(startTurn.mock.calls[1][3]).toMatchObject({ expected_revision: 14 })
+  })
+  // user:“全做”+(历史编辑固定会话和回合，即使正在切换或服务器忙也不能改走普通发送)。
+  it('binds a historical edit to its source across session switches and refuses busy fallback', async () => {
+    const gate = deferred<Record<string, unknown>>()
+    const queueInput = vi.fn(async () => {})
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      throw Object.assign(new Error('session has an active turn'), { code: 'SESSION_BUSY' })
+    })
+    const s = setup({ turnOptions: () => gate.promise, queueInput, startTurn })
+    const edit = s.controller.replaceMessage({ threadId: 'a', turnId: 'old-turn', expectedRevision: 12, text: '/literal', attachments: [] })
+    s.thread.value = 'b'
+    s.text.value = 'draft B'
+    gate.resolve({ model_id: 'model-a' })
+    await edit
+    expect(startTurn).toHaveBeenCalledWith('a', [{ type: 'text', text: '/literal' }], 'E:/A', {
+      model_id: 'model-a', replace_turn_id: 'old-turn', expected_revision: 12,
+    }, expect.any(String))
+    expect(queueInput).not.toHaveBeenCalled()
+    expect(s.text.value).toBe('draft B')
+    expect(s.controller.submissions.value[0]).toMatchObject({ threadId: 'a', state: 'failed', replaceTurnId: 'old-turn' })
+  })
+
+  it('does not clear composer attachments when accepted external input has the same id', async () => {
+    const s = setup()
+    await s.controller.submit({ text: 'external', attachments: [...s.attachments.value] })
+    expect(s.attachments.value).toHaveLength(1)
+    expect(s.clearAttachments).not.toHaveBeenCalled()
+  })
+
   it('shows preparation immediately and captures attachments, target and status before async options', async () => {
     const gate = deferred<Record<string, unknown>>()
     const s = setup({ turnOptions: () => gate.promise })
@@ -183,6 +225,84 @@ describe('submission lifecycle acceptance', () => {
     expect(canSubmit).toHaveBeenCalledTimes(2)
     expect(s.startTurn).not.toHaveBeenCalled()
     expect(s.text.value).toBe('original')
+  })
+
+  // user:“修吧 让用户更易用”+(服务端说会话仍处于暂停时，发送应继续那个暂停回合，
+  // 而不是把“有会话处于暂停”当失败丢回给用户)。
+  it('continues the paused turn when a start is refused as paused', async () => {
+    const resumeTurn = vi.fn(async () => {})
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      throw Object.assign(new Error('session has a paused turn'), {
+        code: 'INVALID_REQUEST',
+        data: { code: 'SESSION_PAUSED', reason: 'paused_turn_exists', paused_turn_id: 'turn-paused' },
+      })
+    })
+    const s = setup({ startTurn, resumeTurn })
+    await s.controller.submit({ clearComposer: true })
+
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    expect(resumeTurn).toHaveBeenCalledWith('a', 'turn-paused', [
+      { type: 'text', text: 'original' },
+      { type: 'attachment', attachment_id: 'file-a', filename: 'a.txt' },
+    ], expect.any(String))
+    expect(s.controller.lastError.value).toBe('')
+    expect(s.controller.submissions.value[0]?.state).toBe('accepted')
+    expect(s.text.value).toBe('')
+    expect(s.attachments.value).toEqual([])
+  })
+
+  it('queues the text when the paused turn can no longer be continued', async () => {
+    const queueInput = vi.fn(async (_threadId: string, _inputItems: unknown[], _options?: unknown, _id?: string) => {})
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      throw Object.assign(new Error('session has a paused turn'), {
+        code: 'INVALID_REQUEST',
+        data: { code: 'SESSION_PAUSED', reason: 'paused_turn_exists', paused_turn_id: 'turn-gone' },
+      })
+    })
+    const resumeTurn = vi.fn(async () => {
+      throw new Error('latest turn is not resumable')
+    })
+    const s = setup({ startTurn, resumeTurn, queueInput })
+    await s.controller.submit({ clearComposer: true })
+
+    // 继续失败也不能把这条消息弄丢：落到队列，按“已排队”收尾。
+    expect(queueInput).toHaveBeenCalledTimes(1)
+    expect(queueInput.mock.calls[0]?.[0]).toBe('a')
+    expect(JSON.stringify(queueInput.mock.calls[0]?.[1])).toContain('original')
+    expect(s.controller.submissions.value[0]?.state).toBe('queued')
+    expect(s.controller.lastError.value).toBe('')
+  })
+
+  it('continues the latest paused turn when the refusal carries no turn id', async () => {
+    const resumeTurn = vi.fn(async () => {})
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      // 旧服务端只给文字，没有 paused_turn_id；空 id 表示“继续最近暂停的一轮”。
+      throw Object.assign(new Error('session has a paused turn'), { code: 'INVALID_REQUEST' })
+    })
+    const s = setup({ startTurn, resumeTurn })
+    await s.controller.submit({ clearComposer: true })
+
+    expect(resumeTurn).toHaveBeenCalledWith('a', '', expect.any(Array), expect.any(String))
+    expect(s.controller.submissions.value[0]?.state).toBe('accepted')
+  })
+
+  it('never turns a historical edit into a pause continuation', async () => {
+    const resumeTurn = vi.fn(async () => {})
+    const queueInput = vi.fn(async () => {})
+    const startTurn = vi.fn<UseCoreLiveComposerControllerOptions['startTurn']>(async () => {
+      throw Object.assign(new Error('session has a paused turn'), {
+        code: 'INVALID_REQUEST',
+        data: { code: 'SESSION_PAUSED', reason: 'paused_turn_exists', paused_turn_id: 'turn-paused' },
+      })
+    })
+    const s = setup({ startTurn, resumeTurn, queueInput, turnOptions: () => ({}) })
+    await s.controller.replaceMessage({
+      threadId: 'a', turnId: 'old-turn', expectedRevision: 3, text: '修正', attachments: [],
+    })
+
+    expect(resumeTurn).not.toHaveBeenCalled()
+    expect(queueInput).not.toHaveBeenCalled()
+    expect(s.controller.submissions.value[0]).toMatchObject({ state: 'failed', replaceTurnId: 'old-turn' })
   })
 
   it('allows Stop after acceptance even while the original send reply is pending', async () => {

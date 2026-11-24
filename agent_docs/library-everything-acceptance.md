@@ -29,6 +29,17 @@
   - 计数：`*.png` 27 万条，单次 20–67ms。
 - 修复记录：首次实现把已编译查询再次拼接 `ext:`，导致同类条件互相 AND、计数为 0；已改为只编译一次，并由单测锁定。
 
+### 1.1 “缺少命令行工具”的修复（2026-11-22）
+
+- 现象：已安装 Everything，Library 仍显示“已安装 Everything，但还没有可用的命令行查询工具”。
+- 原因：`C:\Program Files\Everything` 只有 `Everything.exe`，官方 ES 不在安装目录；应用数据目录 `%APPDATA%\Sunday` 下也没有 `tools\es.exe`，旧代码只探测固定的几个位置。
+- 处理：
+  - 探测位置扩展到应用数据目录、Everything 安装目录/注册表目录、`%LOCALAPPDATA%\Programs\Everything`、打包资源目录、PATH。
+  - 新增 `libraryfs.setup`：用户点「下载查询工具」时从 voidtools 官方 zip 下载并校验 PE 后放到应用数据目录 `tools\es.exe`；不静默、不装服务。
+  - 安装后清空探测缓存并重新检测，状态直接变为 ready。
+- 实测：官方 ES 1.1.0.26 下载 117,768 字节，`-get-everything-version` → `1.4.1.1032`；隔离后端 `libraryfs.setup` 后 `libraryfs.search` 正常返回 9 条。
+- 无网络时：状态条仍提示手工把官方 `ES.exe` 放到显示出来的目录，浏览与资产功能不受影响。
+
 ### 2. 资产与文件身份
 
 用临时图片验证：
@@ -59,7 +70,7 @@
 
 ### 5. 测试与构建
 
-- `pytest tests/test_library_fs_everything.py tests/test_library_fs_assets.py tests/test_library_fs_tool.py` → **20 passed**。
+- `pytest tests/test_library_fs_everything.py tests/test_library_fs_assets.py tests/test_library_fs_tool.py` → **23 passed**。
 - `npx vite build` → 成功。
 - `npx vue-tsc --noEmit`：新组件与 LibraryHomeView 无报错（仓库仍有其他既有类型错误）。
 

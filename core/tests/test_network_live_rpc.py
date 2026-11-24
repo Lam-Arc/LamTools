@@ -36,16 +36,16 @@ def test_running_host_exposes_network_page_and_one_controller(tmp_path):
             config = rpc('plugin.system.config.get', {'name': 'network-exploration'})
             assert config['has_panel'] is True
             assert client.get(config['panel_url']).status_code == 200
-            first = rpc('network-exploration.status')
-            second = rpc('network-exploration.status')
+            first = rpc('easynet.status')
+            second = rpc('easynet.status')
             assert first['controller_pid'] == second['controller_pid']
             assert first['traffic_source'] == 'system_interfaces'
             assert first['proxy']['running'] is False
-            connections = rpc('network-exploration.connections', {'filter': 'TCP'})
+            connections = rpc('easynet.connections', {'filter': 'TCP'})
             assert connections['traffic_source'] == 'system_connections'
             assert connections['per_process_bytes_available'] is False
-            interfaces = rpc('network-exploration.interfaces')['interfaces']
+            interfaces = rpc('easynet.interfaces')['interfaces']
             assert interfaces
-            snapshot = rpc('network-exploration.system.inspect', {'kind': 'dns', 'interface_index': interfaces[0]['index'], 'servers': ['1.1.1.1']})
+            snapshot = rpc('easynet.system.inspect', {'kind': 'dns', 'interface_index': interfaces[0]['index'], 'servers': ['1.1.1.1']})
             assert snapshot['adapter_guid']
             assert all(isinstance(row['manual'], bool) for row in snapshot['rows'])

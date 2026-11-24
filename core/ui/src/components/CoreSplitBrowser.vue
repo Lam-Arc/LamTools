@@ -84,6 +84,35 @@ let syncSeq = 0
 // user:“地址栏下方出现 [object Object] 文本”+(模板只读这两个派生标签：无论上游把字符串、Error 还是
 //  Rust 的 {code,message} 对象塞进 error/notice，画出来的都只会是一句话)。
 const errorLabel = computed(() => error.value ? errorText(error.value) : '')
+// user:“页面打不开时给一句能照着做的下一步”+(交给 EasyNet 做分层检查，结论回填到错误条下面，不在这里重写诊断)。
+const networkHint = ref(''), checkingNetwork = ref(false)
+function browserNetworkHost(): string {
+  try { return new URL(addressText(props.tab.resource)).hostname } catch { return '' }
+}
+function checkBrowserNetwork(): void {
+  const target = browserNetworkHost()
+  if (!target) { error.value = '当前地址不是一个网站，先打开一个网页再检查'; return }
+  const requestId = `net-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  checkingNetwork.value = true
+  networkHint.value = ''
+  const stop = (event: Event) => {
+    const detail = (event as CustomEvent<{ requestId?: string; ok?: boolean; text?: string; suggestion?: string }>).detail
+    if (!detail || detail.requestId !== requestId) return
+    window.removeEventListener('sunday:easynet-diagnose-result', stop)
+    checkingNetwork.value = false
+    networkHint.value = detail.ok
+      ? ([detail.text, detail.suggestion].filter(Boolean).join('；') || '检查完成，没有更多细节')
+      : (detail.suggestion || 'EasyNet 现在没有回话，稍后再试')
+  }
+  window.addEventListener('sunday:easynet-diagnose-result', stop)
+  window.dispatchEvent(new CustomEvent('sunday:easynet-diagnose-request', { detail: { requestId, target } }))
+  window.setTimeout(() => {
+    if (!checkingNetwork.value) return
+    window.removeEventListener('sunday:easynet-diagnose-result', stop)
+    checkingNetwork.value = false
+    networkHint.value = '检查超时，稍后再试'
+  }, 12000)
+}
 const noticeLabel = computed(() => notice.value ? errorText(notice.value, '') : '')
 const loading = ref(false), created = ref(false), title = ref(addressText(props.tab.title))
 // user:“当浏览器标签没有地址（tab.resource 为空、尚未创建 webview）时，在 pane 内渲染一张首页而不是空白”+
@@ -183,6 +212,60 @@ const notice = ref('')
 // user:“下载列表由 Rust 自维护，只做开始/完成/失败三态”+(没有字节进度，也不做暂停/继续)。
 const downloads = ref<BrowserDownloadRecord[]>([])
 const downloadsOpen = ref(false)
+// user:“下载进度不镜像本身就是反直觉且不原生，改掉”+(接管的任务要像浏览器原生下载一样：进度、速度、暂停继续取消、完成能打开)。
+interface EasyNetTask {
+  gid: string
+  tab: string
+  filename: string
+  status: string
+  completed: number
+  total: number
+  speed: number
+  errorText: string
+  directory: string
+}
+const easyNetTasks = ref<EasyNetTask[]>([])
+const EASYNET_LABELS: Record<string, string> = {
+  active: '下载中', waiting: '等待中', paused: '已暂停', complete: '已完成',
+  removed: '已取消', error: '下载失败', recoverable: '待恢复', gone: '任务已不在列表',
+}
+function easyNetLabel(status: string): string {
+  return EASYNET_LABELS[status] || '下载中'
+}
+function easyNetPercent(task: EasyNetTask): number {
+  if (!task.total) return task.status === 'complete' ? 100 : 0
+  return Math.min(100, Math.max(0, Math.round((task.completed / task.total) * 100)))
+}
+function easyNetSize(value: number): string {
+  if (!value || value < 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1048576) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1073741824) return `${(value / 1048576).toFixed(1)} MB`
+  return `${(value / 1073741824).toFixed(2)} GB`
+}
+function easyNetSpeed(value: number): string {
+  return value > 0 ? `${easyNetSize(value)}/s` : ''
+}
+function onEasyNetProgress(event: Event) {
+  const detail = (event as CustomEvent<{ tasks?: EasyNetTask[] }>).detail
+  const rows = Array.isArray(detail?.tasks) ? detail!.tasks! : []
+  easyNetTasks.value = rows.filter((row) => row.tab === props.tab.id)
+  if (easyNetTasks.value.length) downloadsOpen.value = true
+}
+function easyNetAction(task: EasyNetTask, action: 'pause' | 'resume' | 'cancel') {
+  window.dispatchEvent(new CustomEvent('sunday:easynet-download-action', { detail: { gid: task.gid, action } }))
+}
+function easyNetOpen(task: EasyNetTask) {
+  const path = [task.directory, task.filename].filter(Boolean).join('\\')
+  if (!path) return
+  window.dispatchEvent(new CustomEvent('sunday:easynet-download-open', { detail: { gid: task.gid, path } }))
+}
+function openEasyNetDownloads() {
+  try { sessionStorage.setItem('easynet:page', 'transfer') } catch { /* 没有 sessionStorage 也照样能跳 */ }
+  window.dispatchEvent(new CustomEvent('sunday:open-plugin-page', { detail: { plugin: 'easynet', id: 'network' } }))
+}
+onMounted(() => window.addEventListener('sunday:easynet-download-progress', onEasyNetProgress))
+onBeforeUnmount(() => window.removeEventListener('sunday:easynet-download-progress', onEasyNetProgress))
 const approvePending = ref('')
 const downloadSummaryLabel = computed(() => downloadSummary(downloads.value))
 
@@ -795,8 +878,17 @@ function recoverLostNativeTab(cause: unknown): boolean {
   })
   return true
 }
+// user:“手机页里网页没起来、界面也没说为什么”+(把拒绝启动的原因落在 DOM 属性上：
+// 静默 return 只能靠猜，写出来就能一眼看到卡在哪一条)。
+const blockedReason = ref('')
 async function ensureBrowser() {
-  if (!props.visible || disposed || creating || !addressText(props.tab.resource) || !services.available()) return
+  blockedReason.value = !props.visible ? 'invisible'
+    : disposed ? 'disposed'
+    : creating ? 'creating'
+    : !addressText(props.tab.resource) ? 'no-address'
+    : !services.available() ? 'native-unavailable'
+    : ''
+  if (blockedReason.value) return
   if (created.value) { await action('activate'); lastBounds = ''; void sync(); return }
   await navigate()
 }
@@ -954,7 +1046,7 @@ function onHostWheel(event: WheelEvent) {
   <!-- user:“悬浮窗：可拖动、可缩放的小窗…原生 webview 没有圆角与阴影，所以浮窗外观要用 DOM 边框 + 内缩”+
        (外框是这个 div 的边框/圆角/阴影；网页矩形靠内边距收进来，于是网页四边都落在边框以内)。
        悬浮时连工具条一起收成一条窄把手：小窗里再摆一排地址栏按钮，既挤占了网页又不像“瞥一眼”。 -->
-  <div class="split-browser" :class="{ 'split-browser--float': surface === 'float' }" @keydown.esc="onSurfaceEscape">
+  <div class="split-browser" :class="{ 'split-browser--float': surface === 'float' }" :data-browser-blocked="blockedReason" @keydown.esc="onSurfaceEscape">
     <div v-if="surface === 'float'" class="split-browser-float-bar" :title="title || address || t('悬浮窗')" @pointerdown.prevent="beginSurfaceGesture($event, 'move')">
       <span class="split-browser-float-grip" aria-hidden="true"></span>
       <span class="split-browser-float-title">{{ title || hostname(address) || t('悬浮窗') }}</span>
@@ -1007,7 +1099,25 @@ function onHostWheel(event: WheelEvent) {
     </div>
     <p v-if="noticeLabel" class="split-browser-notice" role="status">{{ noticeLabel }}</p>
     <div v-if="downloadsOpen" class="split-browser-downloads" role="region" aria-label="下载列表">
-      <p v-if="!downloads.length" class="split-browser-downloads-empty">还没有下载（只记录开始 / 完成 / 失败，不做进度）</p>
+      <p v-if="!downloads.length && !easyNetTasks.length" class="split-browser-downloads-empty">还没有下载</p>
+      <!-- user:“下载进度不镜像本身就是反直觉且不原生，改掉”+(接管的任务和原生下载一样有进度与操作)。 -->
+      <div v-for="task in easyNetTasks" :key="task.gid" class="split-browser-download-net">
+        <div class="split-browser-download-row">
+          <span class="split-browser-download-name" :title="task.filename">{{ task.filename }}</span>
+          <span class="split-browser-download-state">{{ easyNetLabel(task.status) }}<template v-if="task.status === 'active' && task.speed"> · {{ easyNetSpeed(task.speed) }}</template></span>
+          <span class="split-browser-download-percent">{{ easyNetPercent(task) }}%</span>
+        </div>
+        <div class="split-browser-download-track" role="progressbar" :aria-valuenow="easyNetPercent(task)" aria-valuemin="0" aria-valuemax="100" :aria-label="task.filename"><span :style="{ width: `${easyNetPercent(task)}%` }" /></div>
+        <div class="split-browser-download-actions">
+          <span class="split-browser-download-bytes">{{ easyNetSize(task.completed) }} / {{ easyNetSize(task.total) }}</span>
+          <button v-if="['active', 'waiting'].includes(task.status)" class="split-text-button" type="button" @click="easyNetAction(task, 'pause')">暂停</button>
+          <button v-else-if="['paused', 'recoverable'].includes(task.status)" class="split-text-button" type="button" @click="easyNetAction(task, 'resume')">继续</button>
+          <button v-if="['active', 'waiting', 'paused', 'recoverable'].includes(task.status)" class="split-text-button" type="button" @click="easyNetAction(task, 'cancel')">取消</button>
+          <button v-if="task.status === 'complete'" class="split-text-button" type="button" @click="easyNetOpen(task)">打开</button>
+          <button class="split-text-button" type="button" @click="openEasyNetDownloads">详情</button>
+        </div>
+        <p v-if="task.status === 'error'" class="split-browser-download-error">{{ task.errorText || '下载失败' }}</p>
+      </div>
       <div v-for="record in downloads" :key="record.id" class="split-browser-download-row">
         <span class="split-browser-download-name" :title="record.path || record.url">{{ record.filename }}</span>
         <span class="split-browser-download-state">{{ downloadStateLabel(record.state) }}</span>
@@ -1022,7 +1132,9 @@ function onHostWheel(event: WheelEvent) {
       <button class="split-icon-button" type="button" title="下一个" aria-label="下一个" @click="findStep('next')"><ChevronDown :size="14" /></button>
       <button class="split-icon-button" type="button" title="关闭查找" aria-label="关闭查找" @click="closeFind"><X :size="12" /></button>
     </div>
-    <p v-if="errorLabel" class="split-content-error" role="alert">{{ errorLabel }}<button v-if="retriable" class="split-text-button" type="button" @click="navigate">重试</button><button v-if="certificateHost" class="split-text-button" type="button" @click="continueCertificate">继续访问（不推荐）</button></p>
+    <p v-if="errorLabel" class="split-content-error" role="alert">{{ errorLabel }}<button v-if="retriable" class="split-text-button" type="button" @click="navigate">重试</button><button v-if="certificateHost" class="split-text-button" type="button" @click="continueCertificate">继续访问（不推荐）</button><button class="split-text-button" type="button" :disabled="checkingNetwork" @click="checkBrowserNetwork">{{ checkingNetwork ? '检查中…' : '检查网络' }}</button></p>
+    <!-- user:“网络正常，但目标网站无响应”+(结论只显示 EasyNet 测到的结果与建议，不在这里编)。 -->
+    <p v-if="networkHint" class="split-browser-notice" role="status">{{ networkHint }}</p>
     <!-- user:“当浏览器标签没有地址时，在 pane 内渲染一张首页而不是空白”+
          (首页显示期间这个标签**没有**原生 webview：要么还没创建，要么上次建失败退回来了，
           所以这里画的 DOM 一定不会被原生网页盖住；进站后首页自己消失，网页照旧由 Rust 建出来)。 -->
@@ -1139,6 +1251,14 @@ function onHostWheel(event: WheelEvent) {
 .split-browser-download-row { display: flex; align-items: center; gap: var(--space-2); padding: 2px 0; }
 .split-browser-download-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-browser-download-state { flex: 0 0 auto; font-size: 11px; opacity: .7; }
+/* user:“下载进度不镜像本身就是反直觉且不原生，改掉”+(进度条沿用工具栏材质，只在接管任务出现)。 */
+.split-browser-download-net { display: flex; flex-direction: column; gap: 3px; padding: 3px 0; }
+.split-browser-download-percent { flex: 0 0 auto; font-size: 11px; opacity: .62; font-variant-numeric: tabular-nums; }
+.split-browser-download-track { height: 3px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--theme-main-text) 12%, transparent); }
+.split-browser-download-track > span { display: block; height: 100%; border-radius: inherit; background: var(--green, #8ae6bf); transition: width .2s ease; }
+.split-browser-download-actions { display: flex; align-items: center; gap: var(--space-2); }
+.split-browser-download-bytes { flex: 1; min-width: 0; font-size: 11px; opacity: .55; font-variant-numeric: tabular-nums; }
+.split-browser-download-error { margin: 0; font-size: 11px; color: var(--red, #ef9c9f); opacity: .85; }
 /* user:“会话形态与站点操作要看得见”+(角标、下拉与权限条沿用现有工具栏材质与间距，不引入新颜色)。 */
 .split-browser-badge { flex: 0 0 auto; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-main-text) 12%, transparent); color: var(--theme-main-text); padding: 0 var(--space-1); font-size: 10px; line-height: 16px; opacity: .8; }
 .split-browser-menu { position: relative; flex: 0 0 auto; }

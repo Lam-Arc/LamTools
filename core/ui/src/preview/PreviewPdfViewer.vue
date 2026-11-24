@@ -81,6 +81,40 @@ function clearTimer(): void {
   if (timer !== undefined) { clearTimeout(timer); timer = undefined }
 }
 
+/**
+ * pdfjs 6 内部会调用 `Uint8Array.prototype.toHex` 等新方法（ES2025）。
+ * 老一点的安卓 WebView 没有这些内置方法，会在 PDF 一打开就抛 `a.toHex is not a function`。
+ * 这里只补缺失的那几个，已有内置实现的浏览器不受影响。
+ */
+function ensureByteHelpers(): void {
+  const proto = Uint8Array.prototype as Uint8Array & {
+    toHex?: () => string
+    toBase64?: () => string
+  }
+  if (typeof proto.toHex !== 'function') {
+    Object.defineProperty(proto, 'toHex', {
+      configurable: true,
+      writable: true,
+      value(this: Uint8Array) {
+        let out = ''
+        for (const byte of this) out += byte.toString(16).padStart(2, '0')
+        return out
+      },
+    })
+  }
+  if (typeof proto.toBase64 !== 'function') {
+    Object.defineProperty(proto, 'toBase64', {
+      configurable: true,
+      writable: true,
+      value(this: Uint8Array) {
+        let binary = ''
+        for (const byte of this) binary += String.fromCharCode(byte)
+        return btoa(binary)
+      },
+    })
+  }
+}
+
 function armTimer(): void {
   clearTimer()
   if (!Number.isFinite(props.loadTimeoutMs) || props.loadTimeoutMs <= 0) return
@@ -108,6 +142,9 @@ async function load(): Promise<void> {
     if (!load) throw new Error('这份 PDF 没有可读取的通道')
     const bytes = await load()
     if (run !== generation) return
+    // user:“PDF 预览报 a.toHex is not a function”+(pdfjs 6 用了 Uint8Array 的新内置方法，
+    // 安卓 WebView 的 Chromium 版本还没有它们；这里补一层等价实现，缺什么补什么)。
+    ensureByteHelpers()
     const pdfjs = await import('pdfjs-dist')
     const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
     pdfjs.GlobalWorkerOptions.workerSrc = worker.default

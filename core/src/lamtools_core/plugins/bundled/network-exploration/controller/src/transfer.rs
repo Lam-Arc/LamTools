@@ -39,7 +39,64 @@ pub fn normalize(mut p: Value) -> Result<Value, String> {
     if p.get("sha256").is_some_and(|v| !v.is_string()) {
         return Err("SHA-256 必须是字符串".into());
     }
+    // user:“接管时把 Cookie 和 User-Agent 传给 aria2”+(只接受三个请求头，禁止换行注入，总量有上限)。
+    p["headers"] = normalize_headers(p.get("headers"))?;
+    let source = match p.get("source") {
+        None | Some(Value::Null) => "page".to_string(),
+        Some(Value::String(value)) => value.trim().to_lowercase(),
+        _ => return Err("来源必须是字符串".into()),
+    };
+    if !matches!(source.as_str(), "page" | "tool" | "browser") {
+        return Err("来源只能是 page、tool 或 browser".into());
+    }
+    p["source"] = json!(source);
     Ok(p)
+}
+/// 允许的请求头：只做转发登录态所需的最小集合。
+const ALLOWED_HEADERS: [&str; 3] = ["Cookie", "User-Agent", "Referer"];
+fn normalize_headers(value: Option<&Value>) -> Result<Value, String> {
+    let Some(value) = value else {
+        return Ok(json!({}));
+    };
+    if value.is_null() {
+        return Ok(json!({}));
+    }
+    let map = value.as_object().ok_or("headers 必须是对象")?;
+    if map.is_empty() {
+        return Ok(json!({}));
+    }
+    let mut total = 0usize;
+    let mut out = serde_json::Map::new();
+    for (key, raw) in map {
+        let canonical = ALLOWED_HEADERS
+            .iter()
+            .find(|allowed| allowed.eq_ignore_ascii_case(key))
+            .ok_or_else(|| format!("不支持的请求头 {key}"))?;
+        let text = raw.as_str().ok_or("请求头的值必须是字符串")?.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if text.contains(['\r', '\n', '\0']) {
+            return Err("请求头里不能有换行或空字符".into());
+        }
+        total += canonical.len() + text.len();
+        if total > 8192 {
+            return Err("请求头总长度超过 8 KB".into());
+        }
+        out.insert((*canonical).to_string(), json!(text));
+    }
+    Ok(Value::Object(out))
+}
+/// aria2 的 `header` 选项是字符串数组，这里把白名单对象摊开。
+pub fn header_lines(value: &Value) -> Vec<String> {
+    value
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .map(|(key, raw)| format!("{key}: {}", raw.as_str().unwrap_or("")))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 fn derive_filename(url: &reqwest::Url) -> String {
     let source = url.path().rsplit('/').next().unwrap_or("").as_bytes();
@@ -164,6 +221,25 @@ mod tests {
         }
     }
     #[test]
+    fn download_headers_are_whitelisted_and_bounded() {
+        // user:“Cookie 只用于本次请求”+(只认三个头，禁换行注入，超长整批拒绝)。
+        let ok = normalize(json!({
+            "url":"https://example.com/a.zip",
+            "headers":{"cookie":"session=ok","user-agent":"Sunday/1.0","Referer":"https://example.com/"}
+        }))
+        .unwrap();
+        assert_eq!(ok["headers"]["Cookie"], "session=ok");
+        assert_eq!(ok["headers"]["User-Agent"], "Sunday/1.0");
+        assert_eq!(ok["headers"]["Referer"], "https://example.com/");
+        assert_eq!(ok["source"], "page");
+        assert!(normalize(json!({"url":"https://example.com/a.zip","headers":{"X-Token":"t"}})).is_err());
+        assert!(normalize(json!({"url":"https://example.com/a.zip","headers":{"Cookie":"a\r\nB: c"}})).is_err());
+        assert!(normalize(json!({"url":"https://example.com/a.zip","headers":{"Cookie":"x".repeat(9000)}})).is_err());
+        assert!(normalize(json!({"url":"https://example.com/a.zip","source":"elsewhere"})).is_err());
+        let lines = header_lines(&json!({"Cookie":"session=ok"}));
+        assert_eq!(lines, vec!["Cookie: session=ok".to_string()]);
+    }
+    #[test]
     fn unified_download_route_obeys_explicit_choices_and_follows_acceleration() {
         assert_eq!(
             route(&json!({}), Some(49152), false).unwrap(),
@@ -200,5 +276,20 @@ mod tests {
         assert_eq!(list["tasks"][0]["status"], "recoverable");
         assert!(list["tasks"][0].get("protected_request").is_none());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn failed_aria_start_leaves_no_saved_download() {
+        let dir = std::env::temp_dir().join(format!("failed-download-{}", uuid::Uuid::new_v4()));
+        let mut controller = crate::state::Controller::new(dir.clone()).unwrap();
+        let result = controller
+            .add_download(serde_json::json!({"url":"https://example.com/report.zip"}))
+            .await;
+        let saved = crate::state::Controller::new(dir.clone()).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(result.unwrap_err().contains("aria2c"));
+        assert!(controller.saved.downloads.is_empty());
+        assert!(saved.saved.downloads.is_empty());
     }
 }

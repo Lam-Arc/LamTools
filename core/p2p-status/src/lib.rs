@@ -36,6 +36,8 @@ pub enum StatusEvent {
     },
     /// 中继信息（只用于排障展示）。
     Relay { summary: String },
+    /// The endpoint could not start. The host can show the specific cause.
+    StartupFailed { message: String },
     /// 一台设备连上来了（握手通过或未通过都会说）。
     Peer {
         peer: String,
@@ -57,7 +59,13 @@ pub enum StatusEvent {
     /// 对端在这条连接上完成了 `initialize`：业务真的可用了。
     Session { peer: String },
     /// 这条连接走的路径变了（直连打洞成功、退回中继，或者反过来）。
-    Path { peer: String, path: String },
+    Path {
+        peer: String,
+        path: String,
+        /// 发出这条状态时选中路径的往返延迟（毫秒）；还没选中路径时是 0。
+        #[serde(default)]
+        rtt_ms: u64,
+    },
     /// 一次文件互传的进度（发送或接收）。
     ///
     /// user:“发送与接收都要有可观察进度（百分比或已传字节）”+(宿主拿到这条就发
@@ -133,6 +141,7 @@ impl StatusEvent {
         match self {
             Self::Ticket { .. } => "ticket",
             Self::Relay { .. } => "relay",
+            Self::StartupFailed { .. } => "startup_failed",
             Self::Peer { .. } => "peer",
             Self::PeerClosed { .. } => "peer_closed",
             Self::Session { .. } => "session",
@@ -173,6 +182,12 @@ pub fn parse_line(line: &str) -> Option<Result<StatusEvent, StatusError>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn relay_stability_preserves_startup_error_in_status_channel() {
+        let event = StatusEvent::StartupFailed { message: "自定义中继地址无效".into() };
+        assert_eq!(parse_line(&event.render()).unwrap().unwrap(), event);
+    }
+
     /// 每一种状态都能原样走一圈：宿主拿到的字段就是传输进程写下的字段。
     #[test]
     fn every_event_survives_a_round_trip() {
@@ -200,6 +215,7 @@ mod tests {
             StatusEvent::Path {
                 peer: "node-id".to_owned(),
                 path: "relay".to_owned(),
+                rtt_ms: 42,
             },
             StatusEvent::Transfer {
                 transfer_id: "t-1".to_owned(),

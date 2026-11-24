@@ -81,6 +81,11 @@
       "description": "Network Exploration: proxy.config"
     },
     {
+      "name": "easynet.proxy.subscriptions",
+      "handler": "ops:dispatch",
+      "description": "已保存的订阅：列出、切换、删除"
+    },
+    {
       "name": "easynet.accelerator.start",
       "handler": "ops:dispatch",
       "description": "Network Exploration: accelerator.start"

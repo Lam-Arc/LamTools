@@ -3,6 +3,46 @@ import { describe, expect, it } from 'vitest'
 import { useCoreQueuedInputController } from '../src/composables'
 
 describe('useCoreQueuedInputController', () => {
+  // user:“及优化速度/逻辑”+(未修改的排队消息直接引导，保留服务端已展开的技能正文)。
+  it('steers untouched queue input without substituting its display text', async () => {
+    let replacement: string | undefined
+    const controller = useCoreQueuedInputController({
+      activeTurnId: ref('turn'), ensureConnected: async () => {}, updateQueueInput: async () => {},
+      reorderQueueInputs: async () => {}, deleteQueueInput: async () => {},
+      guideQueueInput: async (_thread, _turn, _item, text) => {
+        replacement = text
+        return { applied: true, reason: '' }
+      },
+    })
+    const item = { id: 'queued-skill', thread_id: 'thread', text: '/review', status: 'queued' }
+    expect(await controller.guide(item)).toBe(true)
+    expect(replacement).toBeUndefined()
+  })
+
+  // user:“全做”+(删除在连线前就锁定条目，与删除、编辑及引导互斥)。
+  it('claims a queued item before deleting and releases it after the request', async () => {
+    let connect!: () => void
+    const ready = new Promise<void>(resolve => { connect = resolve })
+    const deleted: string[] = []
+    const controller = useCoreQueuedInputController({
+      activeTurnId: ref('turn'), ensureConnected: async () => ready,
+      updateQueueInput: async () => {}, reorderQueueInputs: async () => {},
+      deleteQueueInput: async (_thread, item) => { deleted.push(item) },
+      guideQueueInput: async () => ({ applied: true, reason: '' }),
+    })
+    const item = { id: 'input', thread_id: 'thread', text: 'original', status: 'queued' }
+    await controller.beginEdit(item)
+    controller.draft.value = 'changed'
+    const removal = controller.remove(item)
+    expect(controller.submittingItemIds.value.has(item.id)).toBe(true)
+    const others = [controller.remove(item), controller.save(item), controller.guide(item)]
+    connect()
+    expect(await Promise.all(others)).toEqual([false, false, false])
+    expect(await removal).toBe(true)
+    expect(deleted).toEqual([item.id])
+    expect(controller.submittingItemIds.value.size).toBe(0)
+  })
+
   it('saves an edited queued input before steering it into the active turn', async () => {
     const calls: string[] = []
     let resolveGuidance!: (value: { applied: boolean; reason: string }) => void

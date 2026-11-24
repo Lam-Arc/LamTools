@@ -13,7 +13,8 @@ it('renders the four visible pages and disposes without leaving polling', async 
   const rpc = vi.fn(async method => method.endsWith('.status') ? snapshot : { tasks: [] });
   const dispose = mount(root, { rpc, signal: controller.signal, visible: true, onVisibilityChange: () => () => {} });
   await flushPromises();
-  for (const page of ['home', 'overview', 'proxy', 'transfer']) {
+  // user:“概览、下载、互联、诊断四个视图，代理和高级设置收进设置页”+(构建产物同样要能逐页渲染)。
+  for (const page of ['overview', 'transfer', 'devices', 'diagnose']) {
     root.querySelector(`[data-page="${page}"]`).click();
     await flushPromises();
     expect(root.querySelector('.ne-content').textContent.length).toBeGreaterThan(10);
@@ -39,9 +40,10 @@ it('does not interpret diagnostic text as HTML', async () => {
   const root = document.createElement('div'); document.body.append(root);
   const controller = new AbortController();
   const evil = '<img src=x onerror=alert(1)>';
-  const rpc = vi.fn(async method => method.endsWith('.transfer.list')
-    ? { tasks: [{ gid: 'x', filename: evil, status: 'active', totalLength: '1', completedLength: '0', downloadSpeed: '0' }] }
-    : { ...snapshot, events: [{ message: evil, kind: 'test' }] });
+  // 下载文件名与事件都来自后台，任何一段都不能被当成 HTML 解释。
+  const rpc = vi.fn(async method => method.endsWith('.status')
+    ? { ...snapshot, events: [{ message: evil, kind: 'test' }], downloads: [{ gid: 'x', filename: evil, status: 'active', totalLength: '1', completedLength: '0', downloadSpeed: '0' }] }
+    : { tasks: [] });
   const dispose = mount(root, { rpc, signal: controller.signal, visible: true });
   await flushPromises();
   root.querySelector('[data-page="transfer"]').click();

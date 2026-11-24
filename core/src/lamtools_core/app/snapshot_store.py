@@ -1710,6 +1710,10 @@ class SqlAlchemyThreadSnapshotStore:
         event_revision = max((int(event.revision or 0) for event in events), default=0)
         state["revision"] = max(prior_revision, event_revision, len(events))
         await db.execute(delete(self.item_model).where(self.item_model.thread_id == thread_id))
+        # user:“修吧 让用户更易用”+(全量重建时，拆表里的旧回合必须一起清掉；否则被回退
+        # 的暂停回合会在下次读元数据时复活，服务端一直以为会话还暂停着，用户每次发送
+        # 都得到“有会话处于暂停”)。成果表仍留给读时合并，修补只在拆表里的旧库。
+        await self._clear_split_projection_rows(db, thread_id, include_artifacts=False)
         await self._persist(db, row, state, thread_id)
         await db.flush()
         return state
@@ -1738,9 +1742,43 @@ class SqlAlchemyThreadSnapshotStore:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
         await db.execute(delete(self.item_model).where(self.item_model.thread_id == thread_id))
+        # user:“修吧 让用户更易用”+(全量重建/回退/恢复写快照时，拆表里的旧回合与旧成果
+        # 必须一起清掉；否则被回退的暂停回合会在下次读元数据时复活，服务端一直以为
+        # 会话还暂停着，用户每次发送都得到“有会话处于暂停”)。
+        await self._clear_split_projection_rows(db, thread_id)
         await self._persist(db, row, state, thread_id)
         await db.flush()
         return state
+
+    async def _clear_split_projection_rows(
+        self, db: AsyncSession, thread_id: str, *, include_artifacts: bool = True,
+    ) -> None:
+        """Drop split rows for a thread before a full-projection rewrite.
+
+        A full projection (rebuild, rollback, restore, fork) replaces the
+        thread's whole projection: every turn it should keep is already in the
+        captured state. The split tables are only an incremental storage
+        detail, so rows left there from a discarded branch would otherwise be
+        merged back on the next read — a rolled-back paused turn then keeps the
+        session paused forever.
+
+        ``include_artifacts`` is off for rebuild: the event log is the only
+        input there, and the read-time merge repairs artifacts an older build
+        left only in the split table. Rollback/restore/fork capture the whole
+        artifact set, so their full write replaces both tables.
+        """
+        tables = (
+            ("core_thread_snapshot_artifacts", "core_thread_snapshot_turns")
+            if include_artifacts
+            else ("core_thread_snapshot_turns",)
+        )
+        for table in tables:
+            if not await self._has_auxiliary_table(db, table):
+                continue
+            await db.execute(
+                text(f"DELETE FROM {table} WHERE thread_id = :tid"),
+                {"tid": thread_id},
+            )
 
     async def _persist(
         self,

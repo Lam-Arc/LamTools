@@ -64,7 +64,10 @@ export class RemoteTransport implements LamToolsTransport {
       }
     })
     this.closed = false
-    this.setState('connected')
+    // user:“只有业务真正可用才显示已连接”+(隧道已建立不代表电脑上的 Core 起来了；
+    // 以宿主的四层结论为准，不能先报已连接再等下一次轮询纠正)。
+    const status = await remoteStatus()
+    this.setState(isUsable(status) ? 'connected' : 'connecting')
   }
 
   /**
@@ -93,6 +96,8 @@ export class RemoteTransport implements LamToolsTransport {
         }
         this.setState('connecting')
       }
+      // user:“无法恢复时明确显示设备离线或服务不可用”+(重试用尽不能停在「正在连接」)。
+      this.setState('disconnected')
     })()
       .catch(() => undefined)
       .finally(() => {
@@ -133,6 +138,11 @@ export class RemoteTransport implements LamToolsTransport {
       if (peer === null) {
         throw new TransportRpcError(undefined, '和电脑的连接断开了：打开抽屉底部的「设备连接」，可以重连或切回本机')
       }
+      // user:“只有业务真正可用才显示已连接”+(隧道回来了但 Core 没响，不能把这次请求
+      // 当成已经恢复；如实告诉用户电脑上的 Sunday 还没有响应)。
+      if (!isUsable(await remoteStatus())) {
+        throw new TransportRpcError(undefined, '电脑上的 Sunday 还没有响应，请稍后重试')
+      }
       return await this.perform<TResponse>(request)
     }
   }
@@ -144,6 +154,7 @@ export class RemoteTransport implements LamToolsTransport {
         // multipart 和图片字节全被毁掉；现在按字节透传，并把 Content-Type 一起带过去)。
         const reply = (await invoke('p2p_call', {
           method: 'core_http',
+          timeoutMs: request.timeoutMs ?? 120_000,
           params: {
             method: request.method,
             path: request.path,
@@ -159,6 +170,7 @@ export class RemoteTransport implements LamToolsTransport {
       }
       const result = (await invoke('p2p_call', {
         method: request.method,
+        timeoutMs: request.timeoutMs ?? 120_000,
         params: request.params ?? {},
       })) as TResponse
       return result

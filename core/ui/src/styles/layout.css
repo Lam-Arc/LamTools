@@ -2639,8 +2639,28 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
     border-radius: 0;
     box-shadow: none;
   }
+  /* user:“一级入口收敛为四项，底部常驻”+(内容不压在底部导航下面；
+     有输入栏时让出输入栏 + 导航，没有输入栏时让出导航本身)。 */
+  .workspace-main {
+    padding-bottom: calc(var(--composer-height, 120px) + var(--mobile-bottom-nav-height, 0px));
+  }
+  .workspace-main--no-composer {
+    padding-bottom: calc(var(--space-6) + var(--mobile-bottom-nav-height, 0px));
+  }
   .workspace-shell--full-bleed .workspace-main {
     padding: 0;
+  }
+  /* user:“顶部栏：左侧返回、中间标题与设备状态、右侧更多菜单”+
+     (手机会话页顶栏贴到状态栏下沿：主区不再空出 20px，安全区由顶栏自己让)。 */
+  .workspace-shell--mobile-chat-detail .workspace-main {
+    padding-top: 0;
+  }
+  /* 标题条已经实打实占了一条，消息区上面的渐隐就多余了：去掉淡入遮罩，
+     第一条消息直接贴着顶栏下沿开始。 */
+  .workspace-shell--mobile-chat-detail .thread {
+    padding-top: 12px;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
   .send {
     min-width: 44px;

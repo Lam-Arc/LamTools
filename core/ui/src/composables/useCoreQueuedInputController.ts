@@ -46,22 +46,13 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
     draft.value = ''
   }
 
-  async function save(item: CoreQueuedInputControllerItem): Promise<boolean> {
-    if (editingId.value !== item.id || submittingItemIds.value.has(item.id)) return false
-    const text = draft.value.trim()
-    if (!text) {
-      cancelEdit()
-      return false
-    }
-    // Claim the item for the whole save: Enter + blur can otherwise fire two
-    // concurrent updates (audit 19 S3 — guide() already uses this pattern).
+  // user:“全做”+(同一条排队消息的编辑、删除、引导共用锁，从连线前一直持有到请求结束)。
+  async function mutateItem(item: CoreQueuedInputControllerItem, action: () => Promise<boolean>): Promise<boolean> {
+    if (submittingItemIds.value.has(item.id)) return false
     submittingItemIds.value = new Set([...submittingItemIds.value, item.id])
     try {
       await options.ensureConnected(item.thread_id)
-      if (text !== item.text) {
-        await options.updateQueueInput(item.thread_id, item.id, text)
-      }
-      return true
+      return await action()
     } catch (error) {
       reportError(error)
       return false
@@ -69,21 +60,31 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
       const next = new Set(submittingItemIds.value)
       next.delete(item.id)
       submittingItemIds.value = next
-      cancelEdit()
     }
   }
 
-  async function remove(item: CoreQueuedInputControllerItem): Promise<boolean> {
-    if (submittingItemIds.value.has(item.id)) return false
-    try {
-      await options.ensureConnected(item.thread_id)
-      if (editingId.value === item.id) cancelEdit()
-      await options.deleteQueueInput(item.thread_id, item.id)
-      return true
-    } catch (error) {
-      reportError(error)
+  async function save(item: CoreQueuedInputControllerItem): Promise<boolean> {
+    if (editingId.value !== item.id || submittingItemIds.value.has(item.id)) return false
+    const text = draft.value.trim()
+    if (!text) {
+      cancelEdit()
       return false
     }
+    return await mutateItem(item, async () => {
+      if (text !== item.text) {
+        await options.updateQueueInput(item.thread_id, item.id, text)
+      }
+      if (editingId.value === item.id) cancelEdit()
+      return true
+    })
+  }
+
+  async function remove(item: CoreQueuedInputControllerItem): Promise<boolean> {
+    return await mutateItem(item, async () => {
+      await options.deleteQueueInput(item.thread_id, item.id)
+      if (editingId.value === item.id) cancelEdit()
+      return true
+    })
   }
 
   // user:“排队项可拖拽上下移动重新排序”+(一次拖拽提交一份完整新顺序；写请求在途
@@ -107,15 +108,12 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
   }
 
   async function guide(item: CoreQueuedInputControllerItem): Promise<boolean> {
-    if (item.status !== 'queued' || !canGuide.value || submittingItemIds.value.has(item.id)) return false
-    submittingItemIds.value = new Set([...submittingItemIds.value, item.id])
+    if (item.status !== 'queued' || !canGuide.value) return false
     const turnId = options.activeTurnId.value
-    let text = item.text
-    if (editingId.value === item.id) {
-      text = draft.value.trim() || item.text
-    }
-    try {
-      await options.ensureConnected(item.thread_id)
+    // user:“及优化速度/逻辑”+(未修改的排队内容沿用服务端版本，保留技能展开和原始附件)。
+    const edited = editingId.value === item.id ? draft.value.trim() : ''
+    const text = edited && edited !== item.text.trim() ? edited : undefined
+    return await mutateItem(item, async () => {
       const result = await options.guideQueueInput(item.thread_id, turnId, item.id, text)
       if (!result.applied) {
         // 本机（手机原生宿主）不支持运行中引导：这条已被降级成"本轮结束后发送"，
@@ -125,17 +123,10 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
           : (result.reason || 'Queue guidance was not applied')
         return false
       }
-      cancelEdit()
+      if (editingId.value === item.id) cancelEdit()
       lastError.value = ''
       return true
-    } catch (error) {
-      reportError(error)
-      return false
-    } finally {
-      const next = new Set(submittingItemIds.value)
-      next.delete(item.id)
-      submittingItemIds.value = next
-    }
+    })
   }
 
   function reportError(error: unknown) {

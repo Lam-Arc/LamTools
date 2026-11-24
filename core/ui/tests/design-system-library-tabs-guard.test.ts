@@ -14,19 +14,23 @@ describe('library section keyboard navigation', () => {
   it('moves focus without switching and respects an open draft on activation', async () => {
     const wrapper = mount(LibraryHomeView, { attachTo: document.body, props: { client: {} as never, requestRpc: async () => ({}) } })
     const tabs = wrapper.findAll('[data-library-section]')
+    const sectionTab = (id: string) => wrapper.get(`[data-library-section="${id}"]`)
     expect(tabs[0].attributes('tabindex')).toBe('0')
     ;(tabs[0].element as HTMLElement).focus()
     await tabs[0].trigger('keydown', { key: 'ArrowRight' })
     expect(document.activeElement).toBe(tabs[1].element)
     expect(tabs[0].attributes('aria-selected')).toBe('true')
-    await tabs[1].trigger('click'); await flushPromises()
+
+    // 草稿保护只属于有编辑态的分区：先进记忆，再试切走。
+    await sectionTab('memory').trigger('click'); await flushPromises()
     state.editing = true
-    await tabs[1].trigger('keydown', { key: 'ArrowRight' })
-    await tabs[2].trigger('click'); await flushPromises()
-    expect(tabs[1].attributes('aria-selected')).toBe('true')
+    await sectionTab('memory').trigger('keydown', { key: 'ArrowRight' })
+    await sectionTab('plans').trigger('click'); await flushPromises()
+    expect(sectionTab('memory').attributes('aria-selected')).toBe('true')
+
     state.editing = false
-    await tabs[2].trigger('click'); await flushPromises()
-    expect(tabs[2].attributes('aria-selected')).toBe('true')
+    await sectionTab('plans').trigger('click'); await flushPromises()
+    expect(sectionTab('plans').attributes('aria-selected')).toBe('true')
     wrapper.unmount()
   })
 })

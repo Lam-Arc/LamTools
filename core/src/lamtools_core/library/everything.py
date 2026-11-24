@@ -20,12 +20,19 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from typing import Any, Iterable
+import urllib.request
+import zipfile
 
 _CREATE_NO_WINDOW = 0x08000000
+# voidtools 官方发布的 ES 命令行包；只在用户点「下载查询工具」时使用。
+ES_DOWNLOAD_URL = "https://www.voidtools.com/ES-1.1.0.26.zip"
+ES_MIN_BYTES = 20_000
+ES_MAX_BYTES = 10 * 1024 * 1024
 
 # 文件类型 → 扩展名。搜索时合并成一条 ext: 条件，交给 Everything 过滤。
 KIND_EXTENSIONS: dict[str, tuple[str, ...]] = {
@@ -218,6 +225,142 @@ def _decode_output(payload: bytes) -> str:
     return payload.decode("utf-8", "replace")
 
 
+def default_es_dir(data_dir: str | Path | None = None) -> Path:
+    """应用自己的工具目录；安装版指向可写的用户数据目录，不写 Program Files。"""
+    if data_dir:
+        return Path(data_dir) / "tools"
+    base = os.environ.get("APPDATA") or str(Path.home())
+    return Path(base) / "Sunday" / "tools"
+
+
+def _is_pe_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(2) == b"MZ"
+    except OSError:
+        return False
+
+
+def install_es(
+    target_dir: str | Path,
+    *,
+    url: str | None = None,
+    zip_bytes: bytes | None = None,
+    timeout: float = 90.0,
+) -> dict[str, Any]:
+    """把官方 ES 下载并放到应用数据目录；只在用户明确点击时调用。
+
+    user:“支持经过验证的安装引导或合法打包分发”“不静默安装第三方服务”
+    +(下载的是 voidtools 官方发布的单文件命令行工具，不装服务、不改 Everything
+    配置；失败时保留原状并说明原因，用户仍可手工放置 es.exe)。
+    """
+    target_dir = Path(target_dir)
+    target = target_dir / "es.exe"
+    if target.is_file() and target.stat().st_size >= ES_MIN_BYTES and _is_pe_file(target):
+        return {
+            "installed": False,
+            "already_present": True,
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "version": "",
+        }
+    target_dir.mkdir(parents=True, exist_ok=True)
+    payload = zip_bytes
+    if payload is None:
+        source = url or os.environ.get("SUNDAY_EVERYTHING_ES_URL") or ES_DOWNLOAD_URL
+        headers = {"User-Agent": "Sunday/1.0 (+https://lamtools.local)"}
+        try:
+            # 打包版用 requests（随包带 certifi），避免冻结解释器没有系统 CA。
+            import requests
+
+            # user:“全部审查，提交，发布”+(下载到上限即停止读流，避免把超大响应装进内存)。
+            collected = bytearray()
+            with requests.get(source, timeout=(10.0, timeout), headers=headers, stream=True) as response:
+                response.raise_for_status()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    collected.extend(chunk)
+                    if len(collected) > ES_MAX_BYTES:
+                        break
+            payload = collected
+        except ImportError:
+            try:
+                request = urllib.request.Request(source, headers=headers)
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    payload = response.read(ES_MAX_BYTES + 1)
+            except Exception as exc:  # noqa: BLE001
+                raise EverythingError(
+                    "install_failed",
+                    "下载 Everything 查询工具失败",
+                    hint="检查网络或代理后重试；也可以把官方 ES.exe 放到应用数据目录的 tools 文件夹。",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ) from exc
+        except Exception as exc:  # noqa: BLE001 - 网络栈异常类型很多，统一给出可操作提示
+            raise EverythingError(
+                "install_failed",
+                "下载 Everything 查询工具失败",
+                hint="检查网络或代理后重试；也可以把官方 ES.exe 放到应用数据目录的 tools 文件夹。",
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
+    if len(payload) > ES_MAX_BYTES:
+        raise EverythingError(
+            "install_failed",
+            "下载内容异常（超过预期大小）",
+            hint="稍后重试，或手工放置官方 ES.exe。",
+        )
+    if not payload:
+        raise EverythingError("install_failed", "下载内容为空", hint="稍后重试。")
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            member = next(
+                (name for name in archive.namelist() if name.lower().endswith("es.exe")),
+                "",
+            )
+            if not member:
+                raise EverythingError(
+                    "install_failed",
+                    "下载包里没有找到 es.exe",
+                    hint="稍后重试，或手工放置官方 ES.exe。",
+                )
+            if archive.getinfo(member).file_size > ES_MAX_BYTES:
+                raise EverythingError("install_failed", "下载内容异常（超过预期大小）")
+            data = archive.read(member)
+    except zipfile.BadZipFile as exc:
+        raise EverythingError(
+            "install_failed",
+            "下载内容不是有效的压缩包",
+            hint="稍后重试，或手工放置官方 ES.exe。",
+            detail=str(exc),
+        ) from exc
+    if len(data) < ES_MIN_BYTES or data[:2] != b"MZ":
+        raise EverythingError(
+            "install_failed",
+            "下载到的查询工具不可用",
+            hint="稍后重试，或从 voidtools 官方下载 ES.exe 手工放置。",
+        )
+    temporary = target.with_name("es.exe.download")
+    temporary.write_bytes(data)
+    os.replace(temporary, target)
+    version = ""
+    try:
+        completed = subprocess.run(
+            [str(target), "-version"],
+            capture_output=True,
+            timeout=10.0,
+            creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
+            check=False,
+        )
+        version = _decode_output(completed.stdout).strip().splitlines()[0] if completed.stdout else ""
+    except (OSError, subprocess.SubprocessError):
+        version = ""
+    return {
+        "installed": True,
+        "already_present": False,
+        "path": str(target),
+        "bytes": len(data),
+        "version": version,
+    }
+
+
 class EverythingProvider:
     """A thin, replaceable client over the local Everything index."""
 
@@ -239,18 +382,48 @@ class EverythingProvider:
         self._count_lock = threading.Lock()
 
     # -- discovery -----------------------------------------------------
+    def es_install_dir(self) -> Path:
+        return default_es_dir(self.data_dir)
+
+    def refresh(self) -> None:
+        """安装/移动 ES 后重新探测，不重启后端。"""
+        self._es_path = None
+        self._es_resolved = False
+        self._status = None
+        self._status_at = 0.0
+        with self._count_lock:
+            self._count_cache.clear()
+
     def _candidates(self) -> Iterable[Path]:
         if self._explicit_es:
             yield Path(self._explicit_es)
-        if self.data_dir is not None:
-            yield self.data_dir / "tools" / "es.exe"
-        # 开发/本机验证路径；发布版由安装包或数据目录提供，不依赖仓库位置。
-        repo_root = Path(__file__).resolve().parents[4]
-        yield repo_root / ".tools" / "everything" / "es.exe"
+        yield self.es_install_dir() / "es.exe"
+        # Everything 安装目录：有些用户会把 ES.exe 放在 Everything.exe 旁边。
+        installed = self._everything_install_path()
+        if installed:
+            yield Path(installed).parent / "es.exe"
         for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
             base = os.environ.get(env_name)
             if base:
                 yield Path(base) / "Everything" / "es.exe"
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            yield Path(local) / "Programs" / "Everything" / "es.exe"
+        # 打包版资源目录：安装器可以把 ES.exe 放在 resources/everything 下。
+        executable = Path(sys.executable).resolve().parent
+        bundle = getattr(sys, "_MEIPASS", "")
+        for base in (
+            Path(bundle) if bundle else None,
+            executable,
+            executable / "resources",
+            executable / "resources" / "everything",
+            executable / "everything",
+        ):
+            if base is not None:
+                yield base / "es.exe"
+        # 开发/本机验证路径；发布版不依赖仓库位置。
+        repo_root = Path(__file__).resolve().parents[4]
+        yield repo_root / ".tools" / "everything" / "es.exe"
         found = shutil.which("es.exe")
         if found:
             yield Path(found)
@@ -306,7 +479,7 @@ class EverythingProvider:
             raise EverythingError(
                 "missing_cli",
                 "没有找到 Everything 命令行工具（ES），暂时无法全盘搜索",
-                hint="安装 Everything 后把 ES.exe 放到应用数据目录的 tools 文件夹，或在 Everything 官方下载 ES。",
+                hint=f"在 Library 状态条点「下载查询工具」，或把官方 ES.exe 放到 {self.es_install_dir()}。",
             )
         creationflags = _CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
@@ -358,6 +531,8 @@ class EverythingProvider:
             "state": "ready",
             "available": False,
             "es_path": es_path or "",
+            "es_install_dir": str(self.es_install_dir()),
+            "can_install": bool(not es_path and os.name == "nt"),
             "everything_path": installed,
             "everything_version": "",
             "cli_version": "",
@@ -374,7 +549,8 @@ class EverythingProvider:
                     else "这台电脑上没有检测到 Everything"
                 ),
                 hint=(
-                    "把 ES.exe 放到应用数据目录的 tools 文件夹后重试。"
+                    f"点「下载查询工具」自动安装到 {self.es_install_dir()}，"
+                    "或把 voidtools 官方的 ES.exe 放到这个目录后重试。"
                     if installed
                     else "安装 Everything 后即可在 Library 内搜索整台电脑；目录浏览与资产功能不受影响。"
                 ),

@@ -100,7 +100,22 @@ try {
 
     # ---------- 1. 扫一次码完成配对 ----------
     $first = Invoke-P2p $PhoneDir @('--ticket', $ticket, '--method', 'whoami')
-    Check 'a fresh ticket pairs in one step' ($first.Code -eq 0 -and $first.Out -match 'RESULT' -and $first.Out -match 'P0-PC') $first.Out.Trim()
+    Check 'a fresh ticket waits for the computer to confirm' ($first.Code -ne 0 -and $first.Out -match 'DIAL FAILED') $first.Out.Trim()
+
+    $trustedBefore = (Invoke-Child @('devices', '--dir', $PcDir)).Out
+    Check 'a pending device is not in the trust store yet' (-not ($trustedBefore -match 'DEVICE\s+\S+\s+phone-a')) $trustedBefore.Trim()
+
+    $pending = (Invoke-Child @('pending', '--dir', $PcDir)).Out
+    Check 'the pending request is visible on the computer' ($pending -match 'PENDING\s+\S+\s+phone-a') $pending.Trim()
+    $pendingId = ''
+    foreach ($line in ($pending -split "`r?`n")) {
+        if ($line -match '^PENDING\s+(\S+)') { $pendingId = $Matches[1] }
+    }
+    $confirmed = if ($pendingId) { (Invoke-Child @('confirm', '--dir', $PcDir, '--id', $pendingId)).Out } else { '' }
+    Check 'the computer confirms the pairing' ($confirmed -match 'CONFIRMED') $confirmed.Trim()
+
+    $first = Invoke-P2p $PhoneDir @('--ticket', $ticket, '--method', 'whoami')
+    Check 'the confirmed device pairs and can call Core' ($first.Code -eq 0 -and $first.Out -match 'RESULT' -and $first.Out -match 'P0-PC') $first.Out.Trim()
     $resume = ''
     foreach ($line in ($first.Out -split "`r?`n")) {
         if ($line.StartsWith('RESUME ')) { $resume = $line.Substring(7).Trim() }

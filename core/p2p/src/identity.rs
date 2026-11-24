@@ -60,16 +60,13 @@ impl Identity {
     /// One endpoint per process: iroh keeps a single relay connection and a single hole
     /// punched path per peer, and two endpoints in one app would duplicate both.
     pub async fn endpoint(&self) -> Result<Endpoint> {
-        let relays = extra_relays();
+        let relays = configured_relays(&extra_relays())?;
         let mut builder = Endpoint::builder(presets::N0);
         if !relays.is_empty() {
             // user:“允许用户配置自己的中继服务”+(配了就只用配置的 relay，不再依赖公共节点；
             // 不配则用 presets::N0 自带的公共 relay，公共的只做回退)。
-            let urls: Vec<iroh::RelayUrl> = relays.iter().filter_map(|url| url.parse().ok()).collect();
-            if !urls.is_empty() {
-                println!("[sunday-p2p] using {} custom relay(s)", urls.len());
-                builder = builder.relay_mode(iroh::RelayMode::custom(urls));
-            }
+            println!("[sunday-p2p] using {} custom relay(s)", relays.len());
+            builder = builder.relay_mode(iroh::RelayMode::custom(relays));
         }
         // user:“手机端远控电脑连接不稳定，频繁断连”+(iroh 默认 30 秒空闲就关连接。手机端
         // 一条大回复正把写方向占住时，应用层心跳排在锁后面发不出去，28 秒后 QUIC 自己把
@@ -144,6 +141,30 @@ fn extra_relays() -> Vec<String> {
     found
 }
 
+// user:“p2p 与 relay 的稳定性核查，并按需优化”+(无效的自定义配置不能无声切到公共中继)。
+fn configured_relays(values: &[impl AsRef<str>]) -> Result<Vec<iroh::RelayUrl>> {
+    let mut urls = Vec::with_capacity(values.len());
+    let mut invalid = 0;
+    for value in values {
+        match value.as_ref().parse::<iroh::RelayUrl>() {
+            Ok(url) if matches!(url.scheme(), "http" | "https") && url.has_host() =>
+            {
+                if !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+            _ => invalid += 1,
+        }
+    }
+    if invalid > 0 && urls.is_empty() {
+        bail!("自定义中继地址无效，请检查 SUNDAY_P2P_RELAY 或 SUNDAY_P2P_RELAYS 中的 HTTP 或 HTTPS 地址");
+    }
+    if invalid > 0 {
+        eprintln!("[sunday-p2p] ignored {invalid} invalid custom relay URL(s)");
+    }
+    Ok(urls)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -166,4 +187,22 @@ fn hex_decode(text: &str) -> Result<Vec<u8>> {
         out.push((high << 4) | low);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod relay_stability_tests {
+    use super::*;
+
+    #[test]
+    fn relay_stability_invalid_explicit_relay_does_not_use_the_public_default() {
+        assert!(configured_relays(&["relay-without-scheme", "ftp://relay.example"]).is_err());
+        assert!(configured_relays(&[] as &[&str]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn relay_stability_keeps_valid_custom_relays_and_deduplicates_them() {
+        let relays = configured_relays(&["https://relay.example/", "invalid", "https://relay.example", "http://127.0.0.1:3340"]).unwrap();
+        assert_eq!(relays.len(), 2);
+        assert_eq!(relays[0].host_str(), Some("relay.example"));
+    }
 }

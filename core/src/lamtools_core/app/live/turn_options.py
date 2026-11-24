@@ -79,6 +79,7 @@ async def _fix_session_active_mode(
     thread_id: str,
     params: dict[str, Any],
     session_metadata: Mapping[str, Any],
+    persist_defaults: bool = True,
 ) -> tuple[dict[str, Any], str | None]:
     """Decide this session's run mode once and keep it for the rest of its life.
 
@@ -105,7 +106,7 @@ async def _fix_session_active_mode(
     chosen = normalize_composer_active_mode(requested)
     session_store = getattr(getattr(context, "host", None), "session_store", None)
     patch = getattr(session_store, "patch", None)
-    if thread_id and callable(patch):
+    if persist_defaults and thread_id and callable(patch):
         try:
             written = patch(
                 thread_id,
@@ -119,7 +120,9 @@ async def _fix_session_active_mode(
     return {**params, "active_mode": chosen}, chosen
 
 
-async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
+async def _resolve_turn_approval_policy(
+    *, context: "CoreLiveContext", params: dict[str, Any], persist_defaults: bool = True,
+) -> dict[str, Any]:
     """Resolve approval policy, tier configuration, and loadtools mode for a turn.
 
     Returns dict with keys: approval_policy, active_tier, tier_tools, active_mode, load_tools
@@ -191,7 +194,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
                         global_controls=global_value or global_controls,
                     )
                     patch = getattr(session_store, "patch", None)
-                    if callable(patch):
+                    if persist_defaults and callable(patch):
                         patched = patch(thread_id, metadata=canonical)
                         if inspect.isawaitable(patched):
                             await patched

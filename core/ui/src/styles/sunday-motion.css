@@ -13,11 +13,14 @@
 .sunday-motion-fade-enter-from,
 .sunday-motion-fade-leave-to { opacity: 0; }
 
+/* user:“添加供应商后背景变黑但配置卡片没出现”+(入场动画原先用 fill-mode: both，结束后仍留着
+   一个单位矩阵 transform；transform 会把 position: fixed 的子孙改成相对这块面板定位，供应商
+   卡片于是被推到屏幕外。改成 backwards：结束后回到元素自身样式，不再留下 transform)。 */
 .sunday-motion-row,
 .assistant-message--live,
 .process-stream--live,
 .settings-panel {
-  animation: stream-enter var(--motion-row-duration, var(--dur-base)) var(--ease-out) both;
+  animation: stream-enter var(--motion-row-duration, var(--dur-base)) var(--ease-out) backwards;
 }
 
 .settings-panel {

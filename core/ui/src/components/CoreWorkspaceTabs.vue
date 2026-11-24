@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { Bot, ChevronLeft, ChevronRight, Circle, FileText, Folder, Globe, Image, MessageCircle, Pencil, Plug, X } from 'lucide-vue-next'
 import { browserTabIcon } from '@/split/browserIcons'
 import { startWindowDragFromBlank } from '@/composables/useWindowDrag.ts'
@@ -56,6 +56,8 @@ const horizontal = computed(() => props.axis === 'horizontal')
 // user:“标签页过多时应该是这样的”+(按分屏内实际可用宽度，依次显示标题、图标、左右翻页键)。
 const iconOnly = computed(() => horizontal.value && props.tabs.length * TAB_WIDTH.title > available.value)
 const paged = computed(() => iconOnly.value && props.tabs.length * TAB_WIDTH.icon > available.value)
+// user:“找出 3 个及以上优化”+(键盘进入标签条只停一次，再用与标签排列方向一致的方向键切换)。
+const tabStopId = computed(() => props.tabs.find(tab => tab.id === props.activeId)?.id ?? props.tabs[0]?.id)
 let observer: ResizeObserver | undefined
 
 function measure() {
@@ -82,18 +84,40 @@ function turnPage(direction: -1 | 1) {
   readScroll()
 }
 
-function revealSelected() {
+function revealTab(control: HTMLElement) {
   const view = viewport.value
-  if (view && paged.value) {
-    const selected = view.querySelector<HTMLElement>('[aria-selected="true"]')
-    if (selected) {
-      const tab = selected.getBoundingClientRect()
-      const visible = view.getBoundingClientRect()
-      if (tab.left < visible.left) view.scrollLeft += tab.left - visible.left
-      else if (tab.right > visible.right) view.scrollLeft += tab.right - visible.right
-    }
-  }
+  if (!view || !paged.value) return
+  const tab = (control.closest('.ws2-tab') ?? control).getBoundingClientRect()
+  const visible = view.getBoundingClientRect()
+  if (tab.left < visible.left) view.scrollLeft += tab.left - visible.left
+  else if (tab.right > visible.right) view.scrollLeft += tab.right - visible.right
+}
+
+function revealSelected() {
+  const selected = viewport.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+  if (selected) revealTab(selected)
   readScroll()
+}
+
+function onTabKeydown(event: KeyboardEvent, index: number) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  const count = props.tabs.length
+  const previous = horizontal.value ? 'ArrowLeft' : 'ArrowUp'
+  const next = horizontal.value ? 'ArrowRight' : 'ArrowDown'
+  let target: number
+  if (event.key === previous) target = (index + count - 1) % count
+  else if (event.key === next) target = (index + 1) % count
+  else if (event.key === 'Home') target = 0
+  else if (event.key === 'End') target = count - 1
+  else return
+  event.preventDefault()
+  event.stopPropagation()
+  const control = viewport.value?.querySelectorAll<HTMLElement>('[role="tab"]')[target]
+  if (control) {
+    control.focus({ preventScroll: true })
+    revealTab(control)
+  }
+  if (props.tabs[target].id !== props.activeId) emit('select', props.tabs[target].id)
 }
 
 onMounted(() => {
@@ -104,7 +128,17 @@ onMounted(() => {
   }
 })
 onBeforeUnmount(() => observer?.disconnect())
-watch([() => props.activeId, () => props.tabs.length, available, paged], revealSelected, { flush: 'post' })
+const tabIds = computed(() => props.tabs.map(tab => tab.id))
+watch([() => props.activeId, tabIds, available, paged], revealSelected, { flush: 'post' })
+watch(tabIds, async (ids) => {
+  const focused = document.activeElement
+  if (!viewport.value?.contains(focused)) return
+  const tab = focused?.closest<HTMLElement>('[data-ws2-tab]')
+  if (!tab?.dataset.ws2Tab || ids.includes(tab.dataset.ws2Tab)) return
+  await nextTick()
+  if (document.activeElement !== document.body) return
+  viewport.value?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]')?.focus({ preventScroll: true })
+})
 
 function favicon(tab: SplitTab) { return tab.kind === 'browser' ? browserTabIcon(tab.id) : undefined }
 function tabIcon(tab: SplitTab) { return tabIcons[tab.kind as keyof typeof tabIcons] ?? Circle }
@@ -133,33 +167,38 @@ function tabIcon(tab: SplitTab) { return tabIcons[tab.kind as keyof typeof tabIc
       <div :id="viewportId" ref="viewport" class="ws2-tabs__viewport" @scroll.passive="readScroll">
         <div class="ws2-tabs__items" role="tablist" :aria-orientation="props.axis">
           <div
-            v-for="tab in props.tabs"
+            v-for="(tab, index) in props.tabs"
             :key="tab.id"
             class="ws2-tab"
             :class="{ 'is-active': tab.id === props.activeId }"
             :data-ws2-tab="tab.id"
-            role="tab"
-            :aria-selected="tab.id === props.activeId"
-            :aria-label="tab.title"
-            tabindex="0"
             :title="tab.title"
             @pointerdown="onPointerDown(tab.id, $event)"
             @click="emit('select', tab.id)"
-            @keydown.enter.self.prevent="emit('select', tab.id)"
-            @keydown.space.self.prevent="emit('select', tab.id)"
             @dblclick.stop="onRename(tab)"
           >
             <!-- user:“选中的那个标签页，显示为 x 键，点击可关闭，其余标签页使用图标”+(紧凑态让关闭键占满选中标签，仍保留标题提示)。 -->
-            <template v-if="!iconOnly || tab.id !== props.activeId">
-              <img v-if="favicon(tab)" class="ws2-tab__icon" :src="favicon(tab)" alt="" draggable="false">
-              <component :is="tabIcon(tab)" v-else class="ws2-tab__icon" aria-hidden="true" />
-              <span v-if="!iconOnly" class="ws2-tab__title">{{ tab.title }}</span>
-            </template>
+            <button
+              type="button"
+              class="ws2-tab__select"
+              role="tab"
+              :aria-selected="tab.id === props.activeId"
+              :aria-label="tab.title"
+              :tabindex="tab.id === tabStopId ? 0 : -1"
+              @keydown="onTabKeydown($event, index)"
+            >
+              <template v-if="!iconOnly || tab.id !== props.activeId">
+                <img v-if="favicon(tab)" class="ws2-tab__icon" :src="favicon(tab)" alt="" draggable="false">
+                <component :is="tabIcon(tab)" v-else class="ws2-tab__icon" aria-hidden="true" />
+                <span v-if="!iconOnly" class="ws2-tab__title">{{ tab.title }}</span>
+              </template>
+            </button>
             <button
               v-if="!iconOnly || tab.id === props.activeId"
               class="ws2-tab__close"
               type="button"
               :aria-label="`关闭 ${tab.title}`"
+              :tabindex="tab.id === props.activeId ? 0 : -1"
               @pointerdown.stop
               @click.stop="emit('close', tab.id)"
               @dblclick.stop

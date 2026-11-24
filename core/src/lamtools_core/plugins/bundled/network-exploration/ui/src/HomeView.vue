@@ -13,11 +13,31 @@ import {
   Globe,
   Download,
   Zap,
+  Network,
+  ChevronRight,
 } from "lucide-vue-next";
 import { bytes, nodeLabel, primaryNode, rate } from "./session.mjs";
 const props = defineProps({ session: Object });
 const emit = defineEmits(["navigate"]);
 const draft = ref("");
+// user:“当前网络类型和实际连接状态”“网络可达性与最近连接异常”+(概览直接给出连接方式、本机地址和最近一次检查结论)。
+const primaryInterface = computed(() => (props.session.interfaces || [])[0] || null);
+const localAddress = computed(
+  () => (primaryInterface.value?.ipv4 || [])[0] || "",
+);
+const gateway = computed(
+  () => (primaryInterface.value?.gateway || [])[0] || "",
+);
+const lastReport = computed(
+  () => (props.session.state?.reports || []).at(-1) || null,
+);
+const lastEvent = computed(() => (props.session.state?.events || []).at(-1) || null);
+const reachability = computed(() => {
+  if (!primaryInterface.value) return { text: "正在读取网络接口", tone: "" };
+  if (!localAddress.value) return { text: "没有拿到本机地址", tone: "warn" };
+  if (!gateway.value) return { text: "已连接，但没有默认网关", tone: "warn" };
+  return { text: "已连接", tone: "ok" };
+});
 const active = computed(() => Boolean(props.session.accelerated));
 const download = computed(() =>
   Number(props.session.state?.traffic?.download || 0),
@@ -121,6 +141,36 @@ async function startDownload() {
       </div>
     </section>
 
+    <!-- user:“当前网络类型和实际连接状态”“网络可达性与最近连接异常”+(一条状态带：连接方式、本机地址、最近检查，加一个检查入口)。 -->
+    <section class="nx-status-strip" data-network-strip>
+      <div class="nx-status-cell">
+        <span>连接方式</span>
+        <strong>{{ primaryInterface?.name || "读取中" }}</strong>
+        <em :class="`is-${reachability.tone}`">{{ reachability.text }}</em>
+      </div>
+      <div class="nx-status-cell">
+        <span>本机地址</span>
+        <strong>{{ localAddress || "—" }}</strong>
+        <em>{{ gateway ? `网关 ${gateway}` : "没有默认网关" }}</em>
+      </div>
+      <div class="nx-status-cell">
+        <span>最近检查</span>
+        <strong>{{
+          lastReport
+            ? `${lastReport.target} · ${lastReport.failures > 0 ? "有未通过项" : "通过"}`
+            : "还没检查过"
+        }}</strong>
+        <em>{{ lastEvent ? lastEvent.message : "暂无网络事件" }}</em>
+      </div>
+      <button
+        class="btn nx-button btn--secondary nx-status-action"
+        data-home-diagnose
+        @click="emit('navigate', 'diagnose')"
+      >
+        <Activity :size="15" />检查网络
+      </button>
+    </section>
+
     <div class="nx-home-grid">
       <section
         class="nx-quick-card"
@@ -162,8 +212,8 @@ async function startDownload() {
           </button>
           <button
             class="btn nx-button btn--quiet nx-quick-link"
-            data-home-open="overview"
-            @click="emit('navigate', 'overview')"
+            data-home-open="acceleration"
+            @click="emit('navigate', 'acceleration')"
           >
             详情<ArrowUpRight :size="13" />
           </button>
@@ -277,5 +327,19 @@ async function startDownload() {
         </div>
       </section>
     </div>
+
+    <!-- user:“已连接的 Sunday 设备”+(设备与互传统一从宿主设备页进入，概览只给入口和状态)。 -->
+    <button
+      class="nx-home-link"
+      data-home-open="devices"
+      @click="emit('navigate', 'devices')"
+    >
+      <span class="nx-quick-icon"><Network :size="18" :stroke-width="1.7" /></span>
+      <span class="nx-home-link-copy">
+        <strong>我的设备</strong>
+        <em>手机与电脑的配对、发文件和接收文件都在设备连接里</em>
+      </span>
+      <ChevronRight :size="16" />
+    </button>
   </div>
 </template>

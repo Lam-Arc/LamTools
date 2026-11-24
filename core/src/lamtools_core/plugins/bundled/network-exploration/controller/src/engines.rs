@@ -29,6 +29,50 @@ pub struct Engines {
     secret: String,
     client: reqwest::Client,
     proxy_started: Option<chrono::DateTime<chrono::Utc>>,
+    /// (同时下载数, 失败重试次数, 全局限速字节/秒)，由 Controller 在启动前写入。
+    pub download: (u64, u64, u64),
+}
+enum AriaRpcError {
+    Rejected,
+    Unconfirmed(&'static str),
+}
+
+impl AriaRpcError {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Rejected => "aria2 操作失败，请检查任务状态、文件权限或链接有效期",
+            Self::Unconfirmed(message) => message,
+        }
+    }
+}
+
+// user:“失败任务显示具体原因”+(aria2 的错误码翻成人话，界面不再只说「链接可能失效」)。
+pub fn aria_error_text(code: &str) -> String {
+    match code {
+        "1" => "下载内核报告未知错误",
+        "2" => "连接超时，源站没有在限定时间内响应",
+        "3" => "源站返回 404，文件不存在或链接已失效",
+        "4" => "连续多次找不到资源，链接可能已失效",
+        "5" => "下载速度过慢，被内核判定为失败",
+        "6" => "网络连接中断，请检查网络后继续",
+        "7" => "下载未完成，可以继续续传",
+        "8" => "源站不支持断点续传，只能重新下载",
+        "9" => "磁盘空间不足",
+        "10" => "分片长度不匹配，源文件可能已经变化",
+        "11" => "同一个文件正在下载中",
+        "13" => "目标文件已存在",
+        "16" => "无法创建文件，请检查目录权限",
+        "17" => "文件系统错误，请检查磁盘或目录",
+        "18" => "无法创建下载目录",
+        "19" => "域名解析失败，请检查 DNS 或网络",
+        "22" => "源站返回了无法识别的响应头",
+        "23" => "重定向次数过多",
+        "24" => "源站要求认证，链接可能过期或需要登录",
+        "29" => "源站无法处理这个请求，可能是临时故障",
+        "31" => "文件校验失败，内容和预期不一致",
+        _ => "下载失败，请检查链接与网络后重试",
+    }
+    .to_string()
 }
 fn free_port() -> Result<u16, String> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
@@ -289,6 +333,7 @@ impl Engines {
                 .build()
                 .map_err(|e| e.to_string())?,
             proxy_started: None,
+            download: (3, 5, 0),
         })
     }
     pub fn available(&self) -> Value {
@@ -640,14 +685,39 @@ impl Engines {
             .await
     }
     pub async fn aria_rpc(&self, method: &str, params: Vec<Value>) -> Reply {
+        self.aria_rpc_outcome(method, params)
+            .await
+            .map_err(|error| error.message().to_string())
+    }
+
+    // user:“修”+(明确拒绝和回执丢失分开处理，后者可能已在下载)。
+    async fn aria_rpc_outcome(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<Value, AriaRpcError> {
         let mut args = vec![json!(format!("token:{}", self.secret))];
         args.extend(params);
-        let response=self.client.post(format!("http://127.0.0.1:{}/jsonrpc",self.aria_port)).json(&json!({"jsonrpc":"2.0","id":"sunday","method":format!("aria2.{method}"),"params":args})).send().await.map_err(|_|"aria2 控制接口不可用")?;
-        let value: Value = response.json().await.map_err(|_| "aria2 返回无效数据")?;
-        if value.get("error").is_some() {
-            return Err("aria2 操作失败，请检查任务状态、文件权限或链接有效期".into());
+        let response = self
+            .client
+            .post(format!("http://127.0.0.1:{}/jsonrpc", self.aria_port))
+            .json(&json!({
+                "jsonrpc": "2.0", "id": "sunday", "method": format!("aria2.{method}"), "params": args
+            }))
+            .send()
+            .await
+            .map_err(|_| AriaRpcError::Unconfirmed("aria2 控制接口不可用"))?;
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|_| AriaRpcError::Unconfirmed("aria2 返回无效数据"))?;
+        if value["error"].is_object() {
+            return Err(AriaRpcError::Rejected);
         }
-        Ok(value["result"].clone())
+        value
+            .get("result")
+            .cloned()
+            .ok_or(AriaRpcError::Unconfirmed("aria2 返回无效数据"))
     }
     async fn start_aria(&mut self) -> Result<(), String> {
         if let Some(process) = self.aria.as_mut() {
@@ -656,6 +726,8 @@ impl Engines {
             }
         }
         self.aria_port = free_port()?;
+        // user:“并发数量、限速、重试策略可设置”+(设置页保存的值在启动内核时生效)。
+        let (concurrency, max_tries, overall_limit) = self.download;
         let binary = self.binary("aria2c")?;
         self.aria = Some(
             command(binary)
@@ -679,10 +751,11 @@ impl Engines {
                     "--auto-file-renaming=false",
                     "--allow-overwrite=false",
                     "--continue=true",
-                    "--max-tries=5",
+                    &format!("--max-tries={max_tries}"),
                     "--retry-wait=3",
-                    "--max-concurrent-downloads=3",
+                    &format!("--max-concurrent-downloads={concurrency}"),
                     "--check-certificate=true",
+                    &format!("--max-overall-download-limit={overall_limit}"),
                     "--console-log-level=error",
                     "--summary-interval=0",
                 ])
@@ -1109,9 +1182,16 @@ impl Controller {
         if !(1..=16).contains(&connections) {
             return Err("下载连接数应为 1–16".into());
         }
+        // user:“知不知道怎么修改下载默认位置”+(设置里存了默认目录就用它，没存才回落到插件私有目录)。
+        let configured = self.saved.settings["download"]["directory"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
         let dir = p["directory"]
             .as_str()
             .map(PathBuf::from)
+            .or(configured)
             .unwrap_or(self.data.join("downloads"));
         if !dir.is_absolute() {
             return Err("下载目录必须是绝对路径".into());
@@ -1170,17 +1250,43 @@ impl Controller {
             options["checksum"] = json!(format!("sha-256={hash}"));
         }
         options["all-proxy"] = json!(proxy_url);
+        // user:“接管时把 Cookie 和 User-Agent 传给 aria2”+(请求头只进加密请求记录，不回传、不写日志)。
+        let header_lines = crate::transfer::header_lines(&p["headers"]);
+        if !header_lines.is_empty() {
+            options["header"] = json!(header_lines);
+        }
+        let source = p["source"].as_str().unwrap_or("page");
         let cipher = protect(&json!({"url":url,"options":options}).to_string()).await?;
-        let record = json!({"gid":gid.clone(),"filename":name,"directory":dir.clone(),"host":parsed.host_str(),"route":route,"sha256":hash,"protected_request":cipher,"status":"waiting","created":chrono::Utc::now().to_rfc3339()});
-        self.saved.downloads.push(record);
-        self.persist()?;
+        let record = json!({"gid":gid.clone(),"filename":name,"directory":dir.clone(),"host":parsed.host_str(),"route":route,"source":source,"sha256":hash,"protected_request":cipher,"status":"waiting","created":chrono::Utc::now().to_rfc3339()});
+        // user:“修”+(先确认内核可用，再记录任务。明确拒绝时释放文件名，回执不明时保留任务供恢复)。
+        self.apply_download_settings();
         self.engines.start_aria().await?;
-        self.engines
-            .aria_rpc("addUri", vec![json!([url]), options])
-            .await?;
-        self.event("transfer", "新增下载任务");
-        self.persist()?;
-        Ok(json!({"gid":gid,"filename":name,"directory":dir,"route":route,"status":"waiting"}))
+        self.saved.downloads.push(record);
+        if let Err(error) = self.persist() {
+            self.saved.downloads.pop();
+            return Err(error);
+        }
+        let outcome = self
+            .engines
+            .aria_rpc_outcome("addUri", vec![json!([url]), options])
+            .await;
+        let status = match outcome {
+            Ok(result) if result.as_str() == Some(gid.as_str()) => "waiting",
+            Err(AriaRpcError::Rejected) => {
+                let rejected = self.saved.downloads.pop().expect("just persisted this download");
+                if self.persist().is_ok() {
+                    return Err(AriaRpcError::Rejected.message().into());
+                }
+                self.saved.downloads.push(rejected);
+                "recoverable"
+            }
+            _ => "recoverable",
+        };
+        let message = if status == "waiting" { "新增下载任务" } else { "下载任务等待确认" };
+        self.event("transfer", message);
+        // The task is already durable. A failure to save the activity log must not trigger a second download.
+        let _ = self.persist();
+        Ok(json!({"gid":gid,"filename":name,"directory":dir,"route":route,"status":status}))
     }
     pub async fn recover_downloads(&mut self) -> Reply {
         let saved = self.saved.downloads.clone();
@@ -1190,6 +1296,7 @@ impl Controller {
                 continue;
             }
             let gid = row["gid"].as_str().ok_or("下载记录缺少 ID")?;
+            self.apply_download_settings();
             self.engines.start_aria().await?;
             if self
                 .engines
@@ -1286,6 +1393,16 @@ impl Controller {
                 tasks.push(visible);
             }
         }
+        // user:“失败任务显示具体原因及恢复操作”+(错误码翻成人话，并标出这个来源能不能续传)。
+        for task in tasks.iter_mut() {
+            let code = task["errorCode"].as_str().unwrap_or("").to_string();
+            if task["status"] == "error" {
+                task["errorText"] = json!(aria_error_text(&code));
+            }
+            if code == "8" {
+                task["canResume"] = json!(false);
+            }
+        }
         Ok(json!({"tasks":tasks,"running":result["running"]}))
     }
     pub async fn transfer_action(&mut self, p: Value) -> Reply {
@@ -1364,6 +1481,29 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn aria_error_codes_become_actionable_reasons() {
+        // user:“失败任务显示具体原因”+(常见错误码必须给出可执行原因，未知码也要有兜底)。
+        assert!(aria_error_text("3").contains("404"));
+        assert!(aria_error_text("6").contains("中断"));
+        assert!(aria_error_text("8").contains("续传"));
+        assert!(aria_error_text("9").contains("磁盘"));
+        assert!(aria_error_text("19").contains("解析"));
+        assert!(aria_error_text("24").contains("认证"));
+        assert!(aria_error_text("999").contains("重试"));
+    }
+    #[tokio::test]
+    async fn failed_download_reports_a_readable_reason() {
+        // user:“失败任务显示具体原因及恢复操作”+(任务列表里直接带 errorText，界面不必自己猜)。
+        let dir = std::env::temp_dir().join(format!("failed-download-{}", uuid::Uuid::new_v4()));
+        let mut controller = crate::state::Controller::new(dir.clone()).unwrap();
+        controller.saved.downloads.push(json!({"gid":"bad", "filename":"x.zip", "status":"error", "errorCode":"3"}));
+        let list = controller.call("transfer.list", json!({})).await.unwrap();
+        let row = &list["tasks"][0];
+        assert_eq!(row["status"], "error");
+        assert!(row["errorText"].as_str().unwrap().contains("404"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn optimize_skips_builtin_targets_and_deduplicates() {
         // user:“继续进行网络工具插件的开发”+(自动选线只测真实节点，不把直连/拒绝当成代理线路)。

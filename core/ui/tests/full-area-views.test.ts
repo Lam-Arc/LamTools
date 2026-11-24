@@ -45,7 +45,8 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     expect(appSource).toMatch(/function onRailOpen\(view: AppRailView\): void \{[\s\S]*?closeFullArea\(\)[\s\S]*?openAccount\(\)[\s\S]*?openFullArea\(view\)/)
     expect(appSource).toMatch(/const railActiveView = computed<AppRailView>\(\(\) => \{/)
 
-    expect(appSource).toMatch(/data-mobile-footer-library[\s\S]{0,240}?@click="openFromRail\(openLibrary\)"/)
+    // user:“一级入口收敛为四项，底部常驻”+(手机的工作区入口改由底部导航触发 openLibrary)。
+    expect(appSource).toMatch(/function onMobileNavSelect[\s\S]*?key === 'workspace'[\s\S]*?openLibrary\(\)/)
     // 设置 / 插件 / 账号也走同一族整版界面。
     expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?settingsRef\.value\?\.requestSection\(section\)[\s\S]*?requestSettingsNavigation\(\(\) => \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === 'settings' \? null : 'settings'/)
     expect(appSource).toMatch(/function openPlugins\(section\?: string\): void \{[\s\S]*?openFullArea\('plugins'\)/)
@@ -166,7 +167,10 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     expect(registrySource).toMatch(/export const CORE_SETTINGS_SECTIONS: SettingsSection\[\]/)
     expect(registrySource).toMatch(/export const PLUGIN_SHELL_SECTIONS: SettingsSection\[\]/)
     expect(registrySource).toMatch(/export const PROJECT_SETTINGS_SECTIONS: SettingsSection\[\]/)
-    expect(settingsSource).toContain('const sections = CORE_SETTINGS_SECTIONS')
+    // 设置页仍以同一份清单为底；手机宿主给了插件入口时才多出一节（桌面不变）。
+    expect(settingsSource).toContain('...CORE_SETTINGS_SECTIONS')
+    expect(settingsSource).toContain('props.onOpenPlugins')
+    expect(settingsSource).toContain('function openPluginsPage(section: string): void')
     expect(pluginsSource).toContain('const sections = PLUGIN_SHELL_SECTIONS')
     expect(projectSource).toContain('const sections = PROJECT_SETTINGS_SECTIONS')
     // 桌面上内置导航退场，分区状态与宿主会话栏双向同步。

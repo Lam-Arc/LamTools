@@ -271,4 +271,26 @@ describe('MemoryView', () => {
     expect(client.list).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+  it('搜索没命中时说没有匹配并给一键清除，而不是说这片记忆还是空的', async () => {
+    const { wrapper } = mountView()
+    await settled()
+    await wrapper.get('[data-memory-project="proj-1"]').trigger('click')
+    await settled()
+
+    await wrapper.get('[data-memory-search]').setValue('zzz')
+    await settled()
+
+    expect(wrapper.get('[data-memory-no-results]').text()).toContain('没有匹配的文件')
+    expect(wrapper.find('[data-memory-empty]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('这个文件夹里还没有记忆文件')
+    // 搜索时文件夹让位给文件结果，不再摆着没被过滤的目录。
+    expect(wrapper.findAll('[data-memory-folder]')).toHaveLength(0)
+
+    await wrapper.get('[data-memory-clear-filters]').trigger('click')
+    await settled()
+    expect((wrapper.get('[data-memory-search]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.findAll('[data-memory-entry]').map(node => node.attributes('data-memory-entry'))).toEqual(['偏好.md'])
+    wrapper.unmount()
+  })
+
 })

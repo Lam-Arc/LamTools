@@ -969,12 +969,12 @@ body.library-drag-selecting .library-surface .library-row { cursor: crosshair; }
 }
 /* user:“文件树、资料库、预览器里对文件加「发送到设备」”+(设备清单贴在点击处；
    门面只接住空白点击，不改变资料墙的布局)。 */
-.materials-send-layer {
+.library-surface .materials-send-layer {
   position: fixed;
   inset: 0;
   z-index: 70;
 }
 
-.materials-send-menu {
+.library-surface .materials-send-menu {
   position: fixed;
 }

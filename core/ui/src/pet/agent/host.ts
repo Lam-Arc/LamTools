@@ -14,6 +14,7 @@ import {
   createCoreAppServerRuntimeState,
 } from '@/appServer/store.ts'
 import { selectTurnControl } from '@/appServer/selectors.ts'
+import { snapshotRevision } from '@/appServer/sessionState.ts'
 import {
   selectLatestActiveTurnId,
 } from '@/appServer/workbenchProjection.ts'
@@ -24,7 +25,7 @@ import { buildCoreComposerInputItems } from '@/composer/inputItems.ts'
 import { useCoreApprovalController, type CoreApprovalHandlingResult } from '@/composables/useCoreApprovalController.ts'
 import { useCoreWorkbenchProjectionController } from '@/composables/useCoreWorkbenchProjectionController.ts'
 import { isInternalSessionId } from '@/sessions/visibility.ts'
-import type { CoreInputItem, CoreMessage } from '@/types.ts'
+import type { CoreInputItem, CoreMessage, CoreMessageEditBasis } from '@/types.ts'
 import type { PetAgentClient } from './client.ts'
 
 export interface SessionBinding {
@@ -307,6 +308,22 @@ export class SessionChannel {
     // 与主界面回退后刷新一致：重建连接，重新读取持久化线程。
     this.close()
     await this.open()
+  }
+
+  // user:“全修”+(桌宠卡片走与主会话相同的历史版本保护和原子替换)。
+  readEditBasis(): CoreMessageEditBasis | undefined {
+    const snapshot = this.snapshot
+    if (snapshot?.thread_id === this.sessionId) {
+      return { threadId: this.sessionId, revision: snapshotRevision(snapshot) }
+    }
+  }
+
+  async replaceMessage(turnId: string, basis: CoreMessageEditBasis, text: string, attachments: CoreInputItem[]): Promise<void> {
+    if (basis.threadId !== this.sessionId) throw new Error('会话已切换，请重新操作')
+    if (!this.opened) await this.open()
+    await this.controller.startTurn(this.sessionId, buildCoreComposerInputItems(text, attachments), this.workRoot, {
+      replace_turn_id: turnId, expected_revision: basis.revision,
+    })
   }
 
   /** 暂停恢复：与主界面「继续运行」同一控制器方法（turn/resume）。 */

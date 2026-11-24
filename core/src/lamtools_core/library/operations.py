@@ -21,6 +21,7 @@ _logger = logging.getLogger(__name__)
 
 LIBRARY_OPERATION_NAMES: tuple[str, ...] = (
     "libraryfs.status",
+    "libraryfs.setup",
     "libraryfs.roots",
     "libraryfs.search",
     "libraryfs.browse",
@@ -100,6 +101,7 @@ def register_library_operations(
         catalog.register(name, wrapped, owner="library")
 
     register("libraryfs.status", lambda payload: service.status())
+    register("libraryfs.setup", lambda payload: service.install_engine())
     register("libraryfs.roots", lambda payload: service.roots())
     register("libraryfs.search", lambda payload: service.search(payload))
     register("libraryfs.browse", lambda payload: service.browse(

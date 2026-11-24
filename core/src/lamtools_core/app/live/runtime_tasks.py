@@ -475,7 +475,8 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”+(本回合没有
         # 消费的尾部引导在这里投成新回合；先投递，再走队列派发，一次收口)。
         try:
-            await hand_off_pending_guidance(context=context, thread_id=thread_id)
+            # user:“去找消息发送/引导/排队/分叉/编辑中最应优化/重构的地方”+(旧回合收尾只交接自己的引导)。
+            await hand_off_pending_guidance(context=context, thread_id=thread_id, completed_turn_id=turn_id)
         except BaseException:
             _logger.exception(
                 "[live:_run_core_turn] guidance handoff failed thread_id=%s", thread_id

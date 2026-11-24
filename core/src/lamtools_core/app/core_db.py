@@ -129,6 +129,9 @@ class CoreAppEvent(CoreDbBase):
               sqlite_where=text("client_message_id IS NOT NULL")),
         Index("idx_core_events_thread_item_seq", "thread_id", "item_id", "seq",
               sqlite_where=text("item_id IS NOT NULL")),
+        # user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(按会话和回合定位首尾事件，无需解码历史)。
+        Index("idx_core_events_thread_turn_seq", "thread_id", "turn_id", "seq",
+              sqlite_where=text("turn_id IS NOT NULL")),
     )
 
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -3597,6 +3600,10 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
     await connection.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_core_events_thread_item_seq "
         "ON core_app_events (thread_id, item_id, seq) WHERE item_id IS NOT NULL"
+    ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_core_events_thread_turn_seq "
+        "ON core_app_events (thread_id, turn_id, seq) WHERE turn_id IS NOT NULL"
     ))
     await connection.execute(text(
         "CREATE TABLE IF NOT EXISTS core_thread_outlines ("

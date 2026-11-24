@@ -12,11 +12,12 @@
 //! This is not the old `remote/` gateway: that one needs an account and a self-hosted
 //! relay and has no hole punching. Here the transport is iroh, no server of ours involved.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::Emitter;
@@ -28,6 +29,8 @@ pub struct PeerInfo {
     pub name: String,
     /// `direct` / `relay` / `unknown`。
     pub path: String,
+    /// 当前选中路径的往返延迟（毫秒）；0 表示还没测出来。
+    pub rtt_ms: u64,
     /// 这条连接上真的收到过 `initialize`。
     pub session: bool,
     /// 连上来的时间（Unix 秒）：当前那台断开时，用它挑一台还在线的当当前。
@@ -58,6 +61,7 @@ impl DeviceBook {
                 id: id.to_owned(),
                 name: name.to_owned(),
                 path: path.to_owned(),
+                rtt_ms: 0,
                 session: false,
                 since: now,
             });
@@ -93,9 +97,10 @@ impl DeviceBook {
     }
 
     /// 这条连接的路经变了（打洞成功 / 退回中继）。
-    pub fn path_changed(&mut self, id: &str, path: &str) {
+    pub fn path_changed(&mut self, id: &str, path: &str, rtt_ms: u64) {
         if let Some(peer) = self.peers.get_mut(id) {
             peer.path = path.to_owned();
+            peer.rtt_ms = rtt_ms;
         }
     }
 
@@ -297,10 +302,30 @@ impl TransferBook {
     }
 }
 
+// user:“三项全做”+(配对码和失效时间作为一份状态同时写入和读取)。
+#[derive(Clone, Default)]
+struct PairingCode {
+    ticket: String,
+    expires_at: u64,
+    revision: u64,
+}
+
+type PairingCodeSlot = Arc<(Mutex<PairingCode>, Condvar)>;
+
+fn publish_pairing_code(slot: &PairingCodeSlot, ticket: String, expires_at: u64) {
+    let mut code = slot.0.lock().unwrap_or_else(|error| error.into_inner());
+    if code.ticket != ticket || code.expires_at != expires_at {
+        let revision = code.revision + 1;
+        *code = PairingCode { ticket, expires_at, revision };
+        slot.1.notify_all();
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct P2pHostState {
     child: Arc<Mutex<Option<Child>>>,
-    ticket: Arc<Mutex<String>>,
+    startup: Arc<Mutex<()>>,
+    pairing_code: PairingCodeSlot,
     port: Arc<Mutex<u16>>,
     /// 连上来的设备名册：谁在线、当前用哪一台、各自走直连还是中继。
     ///
@@ -315,6 +340,7 @@ pub struct P2pHostState {
     transfers: Arc<Mutex<TransferBook>>,
     /// 最近一次启动传输进程用的后端地址：进程死掉之后照它重启。
     api_base: Arc<Mutex<String>>,
+    core_address: Arc<Mutex<String>>,
     /// 守护线程已经起来（一个进程只要一条）。
     supervisord: Arc<AtomicBool>,
     /// 宿主正在退出：守护线程不要再拉起新进程。
@@ -326,8 +352,6 @@ pub struct P2pHostState {
     /// user:“缺失或启动失败时给明确错误（用户可读），不得表现为「远程连接默默不可用」”+
     /// (以前失败只写进日志，界面上就是一张空白页；现在把原因留在状态里，设备页直接显示)。
     error: Arc<Mutex<Option<String>>>,
-    /// 当前票据的过期时间（Unix 秒）。0 表示没有票据。
-    expires_at: Arc<Mutex<u64>>,
     /// 状态通道解析失败的原因：坏了就明说，不静默退回旧状态。
     ///
     /// user:“SESSION 依赖解析子进程 stdout 文本（弱契约）→ 改为结构化状态通道（或至少
@@ -351,6 +375,37 @@ pub struct P2pHostState {
     /// user:“支持取消”+(取消在本端就是让发送进程停下来；发送进程是宿主起的，
     /// 只有宿主手里有它的句柄，所以句柄必须留在状态里，不能扔在命令的栈上)。
     send_child: Arc<Mutex<Option<(String, Child)>>>,
+    send_requests: Arc<Mutex<std::collections::VecDeque<OutgoingTransfer>>>,
+}
+
+#[derive(Clone)]
+struct OutgoingTransfer {
+    id: String,
+    source: PathBuf,
+    ticket: String,
+    name: String,
+}
+
+impl P2pHostState {
+    fn pairing_code(&self) -> PairingCode {
+        self.pairing_code
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    fn pairing_code_snapshot(&self, running: bool) -> PairingCode {
+        let code = self.pairing_code();
+        if running {
+            code
+        } else {
+            PairingCode {
+                revision: code.revision,
+                ..PairingCode::default()
+            }
+        }
+    }
 }
 
 fn data_dir() -> PathBuf {
@@ -507,28 +562,40 @@ fn binary() -> Result<PathBuf, String> {
 ///
 /// user:“发布版本启动后 P2P 服务能真的起来：给出启动状况的可见状态（运行/未运行/失败原因）”
 /// +(调用方只要能读到状态就行，不必各自再记一遍)。
-fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), String> {
-    let result = ensure_child_once(api_base, state);
+fn ensure_child(api_base: &str, state: &P2pHostState, manual: bool) -> Result<(String, u16), String> {
+    let _startup = state
+        .startup
+        .lock()
+        .map_err(|_| "传输进程状态不可用".to_owned())?;
+    if manual {
+        state.stopping.store(false, Ordering::SeqCst);
+    } else if state.stopping.load(Ordering::SeqCst) {
+        return Err("已停止远程访问".to_owned());
+    }
+    let ready_address = state.core_address.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    let address = if ready_address.is_empty() { api_base } else { &ready_address };
+    let result = ensure_child_once(address, state);
     if let Ok(mut slot) = state.error.lock() {
-        *slot = match &result {
-            Ok(_) => None,
-            Err(error) => Some(error.clone()),
-        };
+        *slot = result.as_ref().err().cloned();
     }
     result
 }
 
 fn ensure_child_once(api_base: &str, state: &P2pHostState) -> Result<(String, u16), String> {
-    // 宿主可以重新开始服务了；守护线程据此恢复工作。
-    state.stopping.store(false, Ordering::SeqCst);
-    let mut guard = state.child.lock().map_err(|_| "传输进程状态不可用".to_string())?;
-    if let Some(child) = guard.as_mut() {
-        if child.try_wait().ok().flatten().is_none() {
-            let ticket = state.ticket.lock().map_err(|_| "票据不可用".to_string())?.clone();
-            let port = *state.port.lock().map_err(|_| "端口不可用".to_string())?;
-            return Ok((ticket, port));
+    {
+        let mut guard = state.child.lock().map_err(|_| "传输进程状态不可用".to_string())?;
+        if let Some(child) = guard.as_mut() {
+            if child
+                .try_wait()
+                .map_err(|error| format!("无法读取传输进程状态：{error}"))?
+                .is_none()
+            {
+                let ticket = state.pairing_code().ticket;
+                let port = *state.port.lock().map_err(|_| "端口不可用".to_string())?;
+                return Ok((ticket, port));
+            }
+            *guard = None;
         }
-        *guard = None;
     }
 
     let parsed = url::Url::parse(api_base.trim()).map_err(|_| "本地后端地址无效".to_string())?;
@@ -561,7 +628,7 @@ fn ensure_child_once(api_base: &str, state: &P2pHostState) -> Result<(String, u1
         .arg(port.to_string())
         .arg("--core-token")
         .arg(core_token)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -571,44 +638,42 @@ fn ensure_child_once(api_base: &str, state: &P2pHostState) -> Result<(String, u1
     }
     let mut child = command.spawn().map_err(|error| format!("启动传输进程失败：{error}"))?;
 
-    let stdout = child.stdout.take().ok_or_else(|| "传输进程没有输出".to_string())?;
-    let mut reader = BufReader::new(stdout);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut ticket = String::new();
-    let mut expires_at: u64 = 0;
-    let mut line = String::new();
-    while std::time::Instant::now() < deadline {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim();
-                if let Some(value) = trimmed.strip_prefix("TICKET ") {
-                    ticket = value.to_owned();
-                }
-                // 配对二维码有有效期：记下来，界面上要能看见它还剩多久。
-                if let Some(value) = trimmed.strip_prefix("EXPIRES ") {
-                    expires_at = value.parse().unwrap_or(0);
-                }
-                if trimmed == "READY" {
-                    break;
-                }
-            }
-            Err(_) => break,
+    let log_path = data_dir().join("p2p.log");
+    if let Some(stderr) = child.stderr.take() {
+        spawn_log_reader(
+            log_path.clone(),
+            BufReader::new(stderr),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+    let startup = child
+        .stdout
+        .take()
+        .ok_or_else(|| "传输进程没有输出".to_owned())
+        .and_then(|stdout| {
+            let (send, receive) = mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                let result = read_transport_startup(&mut reader).map(|code| (reader, code));
+                let _ = send.send(result);
+            });
+            wait_for_transport_startup(receive, &state.stopping, Duration::from_secs(30))
+        });
+    let (reader, PairingCode { ticket, expires_at, .. }) = match startup {
+        Ok(startup) => startup,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
         }
-    }
-    if ticket.is_empty() {
-        let _ = child.kill();
-        return Err("传输进程没有给出票据".to_owned());
-    }
-    if let Ok(mut slot) = state.ticket.lock() {
-        *slot = ticket.clone();
-    }
+    };
+    publish_pairing_code(&state.pairing_code, ticket.clone(), expires_at);
     if let Ok(mut slot) = state.port.lock() {
         *slot = port;
-    }
-    if let Ok(mut slot) = state.expires_at.lock() {
-        *slot = expires_at;
     }
     if let Ok(mut slot) = state.api_base.lock() {
         *slot = api_base.trim().to_owned();
@@ -617,42 +682,82 @@ fn ensure_child_once(api_base: &str, state: &P2pHostState) -> Result<(String, u1
     // 继续读传输进程的输出：网络变化会打一行新的 TICKET，配对失败时会有 PEER 和错误。
     // user:“连不上……一点反应都没有”+(排障需要证据；之前 READY 之后就不再读管道，
     // 对端是否连到、中继是否可用全都丢了)。
-    let log_path = data_dir().join("p2p.log");
-    let ticket_slot = Arc::clone(&state.ticket);
+    let ticket_slot = Arc::clone(&state.pairing_code);
     let devices_slot = Arc::clone(&state.devices);
-    let stderr = child.stderr.take();
-    let expires_slot = Arc::clone(&state.expires_at);
     let protocol_slot = Arc::clone(&state.protocol_error);
     let transfers_slot = Arc::clone(&state.transfers);
     spawn_log_reader(
-        log_path.clone(),
+        log_path,
         reader,
         Some(ticket_slot),
         Some(devices_slot),
-        Some(expires_slot),
         Some(protocol_slot),
         Some(transfers_slot),
         // `serve` 不是为某一个文件起的：接收侧的进度本来就没有源文件。
         None,
     );
-    if let Some(stderr) = stderr {
-        spawn_log_reader(
-            log_path,
-            BufReader::new(stderr),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-    }
-
-    *guard = Some(child);
+    *state.child.lock().unwrap_or_else(|error| error.into_inner()) = Some(child);
     // 进程起来之后交给守护线程：它死了（崩溃、被系统收掉）就照原来的地址重启，
     // 否则手机要等到用户手动打开「设备连接」才能重新连上。
     supervise(state);
     Ok((ticket, port))
+}
+
+// user:“修完之后，去找远程连接/跨网通信/跨设备使用中最不稳定/问题最大的地方 修掉，并列出候选”+
+// (等待就绪与读取子进程输出分开，静默或只输出半行都不能卡住桌面)。
+fn wait_for_transport_startup<T>(
+    receive: mpsc::Receiver<Result<T, String>>,
+    stopping: &AtomicBool,
+    timeout: Duration,
+) -> Result<T, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if stopping.load(Ordering::SeqCst) {
+            return Err("已停止远程访问".to_owned());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("远程访问启动超时，请检查网络或中继设置后重试".to_owned());
+        }
+        match receive.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("传输进程在就绪前退出".to_owned());
+            }
+        }
+    }
+}
+
+fn read_transport_startup(reader: &mut impl BufRead) -> Result<PairingCode, String> {
+    let mut code = PairingCode::default();
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("无法读取传输进程启动状态：{error}"))?;
+        let line = line.trim();
+        if line == "READY" {
+            return if code.ticket.is_empty() {
+                Err("传输进程没有给出配对码".to_owned())
+            } else {
+                Ok(code)
+            };
+        }
+        match sunday_p2p_status::parse_line(line) {
+            Some(Ok(sunday_p2p_status::StatusEvent::Ticket { ticket, expires_at })) => {
+                code.ticket = ticket;
+                code.expires_at = expires_at;
+            }
+            // user:“p2p 与 relay 的稳定性核查，并按需优化”+(把中继配置错误送回桌面，方便直接修正)。
+            Some(Ok(sunday_p2p_status::StatusEvent::StartupFailed { message })) => return Err(message),
+            _ => {
+                if let Some(ticket) = line.strip_prefix("TICKET ") {
+                    code.ticket = ticket.to_owned();
+                } else if let Some(expiry) = line.strip_prefix("EXPIRES ") {
+                    code.expires_at = expiry.parse().unwrap_or(0);
+                }
+            }
+        }
+    }
+    Err("传输进程在就绪前退出".to_owned())
 }
 
 /// 一条常驻线程盯着传输进程。
@@ -691,10 +796,7 @@ fn supervise(state: &P2pHostState) {
         if !exited {
             continue;
         }
-        if let Ok(mut guard) = host.child.lock() {
-            *guard = None;
-        }
-        if let Err(error) = ensure_child(&api, &host) {
+        if let Err(error) = ensure_child(&api, &host, false) {
             eprintln!("[sunday] p2p supervisor: {error}");
         }
     });
@@ -709,9 +811,8 @@ fn supervise(state: &P2pHostState) {
 fn spawn_log_reader(
     path: PathBuf,
     mut reader: BufReader<impl std::io::Read + Send + 'static>,
-    ticket: Option<Arc<Mutex<String>>>,
+    ticket: Option<PairingCodeSlot>,
     devices: Option<Arc<Mutex<DeviceBook>>>,
-    expires: Option<Arc<Mutex<u64>>>,
     protocol_error: Option<Arc<Mutex<Option<String>>>>,
     transfers: Option<Arc<Mutex<TransferBook>>>,
     // 这个进程是本端为哪一个本机文件起的（只有 `send` 子命令才有）。
@@ -725,6 +826,7 @@ fn spawn_log_reader(
             .open(&path)
             .ok();
         let mut line = String::new();
+        let mut legacy_ticket = None;
         loop {
             line.clear();
             match reader.read_line(&mut line) {
@@ -740,7 +842,6 @@ fn spawn_log_reader(
                             event,
                             ticket.as_ref(),
                             devices.as_ref(),
-                            expires.as_ref(),
                             transfers.as_ref(),
                             source.as_deref(),
                         ),
@@ -756,12 +857,19 @@ fn spawn_log_reader(
                             }
                         }
                         // 不是状态行：按旧格式认（老进程还在打这些）。
-                        None => apply_legacy_line(
-                            trimmed,
-                            ticket.as_ref(),
-                            devices.as_ref(),
-                            expires.as_ref(),
-                        ),
+                        None => {
+                            if let Some(value) = trimmed.strip_prefix("TICKET ") {
+                                legacy_ticket = Some(value.to_owned());
+                            } else if let Some(value) = trimmed.strip_prefix("EXPIRES ") {
+                                if let (Some(slot), Some(code), Ok(expiry)) =
+                                    (ticket.as_ref(), legacy_ticket.take(), value.parse())
+                                {
+                                    publish_pairing_code(slot, code, expiry);
+                                }
+                            } else {
+                                apply_legacy_line(trimmed, devices.as_ref());
+                            }
+                        }
                     }
                     if let Some(file) = file.as_mut() {
                         let _ = writeln!(file, "{trimmed}");
@@ -776,9 +884,8 @@ fn spawn_log_reader(
 /// 收下一条结构化状态。
 fn apply_status_event(
     event: sunday_p2p_status::StatusEvent,
-    ticket: Option<&Arc<Mutex<String>>>,
+    ticket: Option<&PairingCodeSlot>,
     devices: Option<&Arc<Mutex<DeviceBook>>>,
-    expires: Option<&Arc<Mutex<u64>>>,
     transfers: Option<&Arc<Mutex<TransferBook>>>,
     source: Option<&str>,
 ) {
@@ -789,15 +896,9 @@ fn apply_status_event(
             expires_at,
         } => {
             if let Some(slot) = ticket {
-                if let Ok(mut current) = slot.lock() {
-                    *current = value;
-                }
+                publish_pairing_code(slot, value, expires_at);
             }
-            if let Some(slot) = expires {
-                if let Ok(mut current) = slot.lock() {
-                    *current = expires_at;
-                }
-            }
+            audit("ticket", json!({ "expiresAt": expires_at }));
         }
         StatusEvent::Peer {
             peer,
@@ -814,13 +915,15 @@ fn apply_status_event(
             } else {
                 path
             };
+            audit("peer", json!({ "id": &peer, "name": &name, "path": &path }));
             if let Some(book) = devices {
                 if let Ok(mut book) = book.lock() {
                     book.connect(&peer, &name, &path, now_secs());
                 }
             }
         }
-        StatusEvent::PeerClosed { peer, .. } => {
+        StatusEvent::PeerClosed { peer, reason } => {
+            audit("peer_closed", json!({ "id": &peer, "reason": &reason }));
             if let Some(book) = devices {
                 if let Ok(mut book) = book.lock() {
                     book.close(&peer);
@@ -828,16 +931,21 @@ fn apply_status_event(
             }
         }
         StatusEvent::Session { peer } => {
+            audit("session", json!({ "id": &peer }));
             if let Some(book) = devices {
                 if let Ok(mut book) = book.lock() {
                     book.session(&peer);
                 }
             }
         }
-        StatusEvent::Path { peer, path } => {
+        StatusEvent::Path {
+            peer,
+            path,
+            rtt_ms,
+        } => {
             if let Some(book) = devices {
                 if let Ok(mut book) = book.lock() {
-                    book.path_changed(&peer, &path);
+                    book.path_changed(&peer, &path, rtt_ms);
                 }
             }
         }
@@ -885,6 +993,7 @@ fn apply_status_event(
             peer,
             from,
         } => {
+            audit("received", json!({ "transferId": &transfer_id, "path": &path, "from": &from }));
             if let Some(book) = transfers {
                 if let Ok(mut book) = book.lock() {
                     book.received(ReceivedFile {
@@ -900,7 +1009,7 @@ fn apply_status_event(
             }
         }
         // 这些由别的字段承载（票据过期时间、中继摘要、Core 事实），这里不额外记。
-        StatusEvent::Relay { .. } | StatusEvent::Core { .. } => {}
+        StatusEvent::Relay { .. } | StatusEvent::Core { .. } | StatusEvent::StartupFailed { .. } => {}
     }
 }
 
@@ -910,26 +1019,8 @@ fn apply_status_event(
 /// 认不出的行当日志留在文件里。
 fn apply_legacy_line(
     trimmed: &str,
-    ticket: Option<&Arc<Mutex<String>>>,
     devices: Option<&Arc<Mutex<DeviceBook>>>,
-    expires: Option<&Arc<Mutex<u64>>>,
 ) {
-    if let Some(value) = trimmed.strip_prefix("TICKET ") {
-        if let Some(slot) = ticket {
-            if let Ok(mut current) = slot.lock() {
-                *current = value.to_owned();
-            }
-        }
-        return;
-    }
-    if let Some(value) = trimmed.strip_prefix("EXPIRES ") {
-        if let Some(slot) = expires {
-            if let Ok(mut current) = slot.lock() {
-                *current = value.parse().unwrap_or(0);
-            }
-        }
-        return;
-    }
     let (kind, rest) = match trimmed.split_once(' ') {
         Some((kind, rest)) => (kind, rest),
         None => (trimmed, ""),
@@ -980,7 +1071,8 @@ fn apply_legacy_line(
         "PATH" => {
             if let Some(book) = devices {
                 if let Ok(mut book) = book.lock() {
-                    book.path_changed(&peer, &path);
+                    // 旧格式没有 RTT，保持 0，不拿旧值冒充新测量。
+                    book.path_changed(&peer, &path, 0);
                 }
             }
         }
@@ -996,30 +1088,61 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 一条审计记录：JSON Lines，时间戳 + 稳定事件名 + 字段。
+fn audit_record(event: &str, fields: Value, at: u64) -> Value {
+    json!({ "at": at, "event": event, "fields": fields })
+}
+
+/// user:“审计远程访问、授权和拒绝操作”+(追加写 `p2p-audit.jsonl`；票据只记过期时间，
+/// 不把可用的配对票写进日志)。
+fn audit(event: &str, fields: Value) {
+    let record = audit_record(event, fields, now_secs());
+    let path = data_dir().join("p2p-audit.jsonl");
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "{record}");
+    }
+}
+
 /// The text the phone pastes. Starts the transport on first use.
 ///
 /// 异步命令：启动要等中继和 READY（最长 30 秒），不能把 IPC 线程堵在那里让整个窗口没反应。
 #[tauri::command]
 pub async fn p2p_ticket(
     api_base: String,
+    renew: Option<bool>,
     state: tauri::State<'_, P2pHostState>,
 ) -> Result<Value, String> {
     let host = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_child(&api_base, &host))
-        .await
-        .map_err(|error| error.to_string())?
-        .map(|(ticket, port)| {
-            // user:“记住用户是否开启远程访问（持久化）”+(生成了二维码就等于用户想开；
-            // 下次启动要自己恢复，不用再点一遍)。
-            let mut prefs = read_prefs();
-            if !prefs.auto_connect {
-                prefs.auto_connect = true;
-                if let Err(error) = write_prefs(&prefs) {
-                    eprintln!("[sunday] cannot persist remote access switch: {error}");
-                }
-            }
-            json!({ "ticket": ticket, "port": port })
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, port) = ensure_child(&api_base, &host, true)?;
+        // user:“三项全做”+(本次启动和换码不修改开机选项，只有显式设置才写入偏好)。
+        let code = if renew == Some(true) {
+            renew_pairing_code(&host)?
+        } else {
+            host.pairing_code()
+        };
+        Ok(json!({ "ticket": code.ticket, "expiresAt": code.expires_at, "pairingCodeRevision": code.revision, "port": port }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn renew_pairing_code(state: &P2pHostState) -> Result<PairingCode, String> {
+    let mut child = state.child.lock().map_err(|_| "传输进程状态不可用".to_owned())?;
+    let code = state.pairing_code.0.lock().unwrap_or_else(|error| error.into_inner());
+    let previous = code.ticket.clone();
+    let stdin = child.as_mut().and_then(|child| child.stdin.as_mut())
+        .ok_or_else(|| "无法向传输服务请求新配对码".to_owned())?;
+    writeln!(stdin, "renew-ticket").map_err(|error| format!("无法请求新配对码：{error}"))?;
+    drop(child);
+    let (code, _) = state.pairing_code.1
+        .wait_timeout_while(code, std::time::Duration::from_secs(5), |code| code.ticket == previous)
+        .unwrap_or_else(|error| error.into_inner());
+    if code.ticket.is_empty() || code.ticket == previous {
+        return Err("传输服务未返回新配对码，请重试".to_owned());
+    }
+    Ok(code.clone())
 }
 
 /// The ticket as an SVG QR code.
@@ -1074,7 +1197,7 @@ pub async fn p2p_serve_start(
     state: tauri::State<'_, P2pHostState>,
 ) -> Result<Value, String> {
     let host = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_child(&api_base, &host))
+    tauri::async_runtime::spawn_blocking(move || ensure_child(&api_base, &host, true))
         .await
         .map_err(|error| error.to_string())?
         .map(|(ticket, port)| json!({ "serving": true, "ticket": ticket, "port": port }))
@@ -1087,15 +1210,19 @@ pub async fn p2p_serve_start(
 /// 下一次启动又拉起第二个，旧的那个永远指着已经死掉的 Core 端口。)
 pub fn stop(state: &P2pHostState) {
     state.stopping.store(true, Ordering::SeqCst);
+    let _startup = state.startup.lock().unwrap_or_else(|error| error.into_inner());
+    state.stopping.store(true, Ordering::SeqCst);
+    stop_transport(state);
+}
+
+fn stop_transport(state: &P2pHostState) {
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
     }
-    if let Ok(mut ticket) = state.ticket.lock() {
-        ticket.clear();
-    }
+    publish_pairing_code(&state.pairing_code, String::new(), 0);
     // user:“设备切换：多设备时切换当前连接”+(停止之后名册必须清空：留着上一批设备，
     // 下次启动第一眼就显示成「有设备在线」)。
     if let Ok(mut book) = state.devices.lock() {
@@ -1106,9 +1233,6 @@ pub fn stop(state: &P2pHostState) {
     }
     if let Ok(mut probe) = state.probe.lock() {
         probe.invalidate();
-    }
-    if let Ok(mut expires) = state.expires_at.lock() {
-        *expires = 0;
     }
     // user:“只有业务真正可用才显示「已连接电脑」”+(停止之后不能留着上一台的
     // 「会话已恢复」；名册整体清空已经包含这一条)。
@@ -1128,18 +1252,40 @@ pub fn stop(state: &P2pHostState) {
     }
 }
 
+// user:“全部处理并继续寻找”+(由本机 Core 发布新地址驱动恢复，设备页无需在线或轮询)。
+pub fn core_ready(state: &P2pHostState, api_base: &str) {
+    *state.core_address.lock().unwrap_or_else(|error| error.into_inner()) = api_base.to_owned();
+    let _startup = state.startup.lock().unwrap_or_else(|error| error.into_inner());
+    let previous = state.api_base.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    if !needs_core_rebind(state.stopping.load(Ordering::SeqCst), &previous, api_base) {
+        return;
+    }
+    stop_transport(state);
+    // 守护线程在新地址启动失败时也能继续恢复。
+    *state.api_base.lock().unwrap_or_else(|error| error.into_inner()) = api_base.to_owned();
+    let result = ensure_child_once(api_base, state);
+    *state.error.lock().unwrap_or_else(|error| error.into_inner()) = result.err();
+}
+
+fn needs_core_rebind(stopped: bool, current: &str, ready: &str) -> bool {
+    !stopped && !current.is_empty() && current != ready
+}
+
+#[test]
+fn a_new_core_port_rebinds_only_an_enabled_service() {
+    let old = "http://127.0.0.1:8787";
+    let new = "http://127.0.0.1:8788";
+    assert!(needs_core_rebind(false, old, new));
+    assert!(!needs_core_rebind(true, old, new));
+    assert!(!needs_core_rebind(false, "", new));
+    assert!(!needs_core_rebind(false, new, new));
+}
+
 #[tauri::command]
 pub fn p2p_serve_stop(state: tauri::State<'_, P2pHostState>) -> Result<Value, String> {
     stop(state.inner());
-    // user:“记住用户是否开启远程访问”+(主动停止等于关掉开关：下次启动不该自己又起来)。
-    let mut prefs = read_prefs();
-    if prefs.auto_connect {
-        prefs.auto_connect = false;
-        if let Err(error) = write_prefs(&prefs) {
-            eprintln!("[sunday] cannot persist remote access switch: {error}");
-        }
-    }
-    Ok(json!({ "serving": false, "autoConnect": prefs.auto_connect }))
+    // user:“三项全做”+(停止本次访问，不覆盖用户单独保存的开机选项)。
+    Ok(json!({ "serving": false, "autoConnect": read_prefs().auto_connect }))
 }
 
 /// 状态查询：顺带把 Core 探一次，必要时把传输进程挪到新端口。
@@ -1159,44 +1305,27 @@ pub async fn p2p_status(
             running = child.try_wait().ok().flatten().is_none();
         }
     }
-    let ticket = state.ticket.lock().map(|ticket| ticket.clone()).unwrap_or_default();
+    let PairingCode { ticket, expires_at, revision } = state.pairing_code_snapshot(running);
     let (current, peers) = {
         let book = state.devices.lock().unwrap_or_else(|slot| slot.into_inner());
         (book.current().cloned(), book.list())
     };
     let error = state.error.lock().ok().and_then(|slot| slot.clone());
     let protocol_error = state.protocol_error.lock().ok().and_then(|slot| slot.clone());
-    let expires_at = *state.expires_at.lock().unwrap_or_else(|slot| slot.into_inner());
 
-    // 端口对账：Core 换端口重启之后，传输进程还指着旧端口，所有 RPC 都会失败。
-    // user:“Core 重启后自动恢复”+(这里发现端口变了就重启传输进程，而不是等用户手动点)。
     let wanted = api_base
         .as_deref()
         .and_then(|value| url::Url::parse(value.trim()).ok())
         .and_then(|parsed| parsed.port());
     let started_port = *state.port.lock().unwrap_or_else(|slot| slot.into_inner());
-    if let Some(port) = wanted {
-        if running && started_port != 0 && started_port != port {
-            // 端口变了：上一次探测结论当场作废，否则新端口会被旧结论冒充。
-            if let Ok(mut probe) = state.probe.lock() {
-                probe.invalidate();
-            }
-            let host = state.inner().clone();
-            let base = api_base.clone().unwrap_or_default();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                stop(&host);
-                match ensure_child(&base, &host) {
-                    Ok(_) => eprintln!("[sunday] p2p transport restarted on port {port}"),
-                    Err(reason) => eprintln!("[sunday] p2p restart failed: {reason}"),
-                }
-            })
-            .await;
-        }
-    }
 
     // user:“p2p_status 每次全量探测 Core（阻塞上限 ~2 秒）→ 加短 TTL 缓存”+(1.5 秒内
     // 复用上一次结论；换端口或超时就重新真探——旧结论只能是「刚看过」，不能变成常驻)。
-    let core = match wanted {
+    // user:“三项全做”+(状态更新为了取新配对码时，用正在服务的 Core 判定已有连接)。
+    let probe_port = (running && !peers.is_empty() && started_port != 0)
+        .then_some(started_port)
+        .or(wanted);
+    let core = match probe_port {
         Some(port) => probe_cached_async(state.inner().clone(), port).await,
         None => CoreState::Unknown,
     };
@@ -1236,6 +1365,7 @@ pub async fn p2p_status(
                 "id": peer.id,
                 "name": peer.name,
                 "path": peer.path,
+                "rttMs": peer.rtt_ms,
                 "session": peer.session,
                 "current": current_id.as_deref() == Some(peer.id.as_str()),
             })
@@ -1247,6 +1377,7 @@ pub async fn p2p_status(
         "serving": running,
         "ticket": ticket,
         "expiresAt": expires_at,
+        "pairingCodeRevision": revision,
         "expiresIn": expires_at.saturating_sub(now),
         // connected 保留给旧界面（= 有设备在线）；新界面请看 view / layers。
         "connected": peer_connected,
@@ -1255,7 +1386,12 @@ pub async fn p2p_status(
         "deviceName": current.as_ref().map(|peer| peer.name.clone()).unwrap_or_default(),
         // user:“真实路径显示：区分直连/中继，默认放在连接详情里”+(当前那台此刻走的路)。
         "path": current.as_ref().map(|peer| peer.path.clone()).unwrap_or_else(|| "unknown".to_owned()),
+        "rttMs": current.as_ref().map(|peer| peer.rtt_ms).unwrap_or(0),
+        "auditLog": data_dir().join("p2p-audit.jsonl").to_string_lossy(),
         "devices": device_list,
+        // user:“电脑显示待确认设备，用户确认配对”+(扫码只登记申请；这里给界面
+        // 一份待确认名册，确认后才写可信名单)。
+        "pending": pending_devices(),
         // user:“只有业务真正可用才显示已连接”+(view 是唯一权威：connected/degraded/connecting/
         // waiting/offline；reason 是一句原因的稳定标识)。
         "view": view,
@@ -1359,8 +1495,7 @@ pub fn p2p_resume_state(state: tauri::State<'_, P2pHostState>) -> Result<Value, 
         let book = state.devices.lock().unwrap_or_else(|slot| slot.into_inner());
         (book.current().cloned(), book.list())
     };
-    let ticket = state.ticket.lock().map(|ticket| ticket.clone()).unwrap_or_default();
-    let expires_at = *state.expires_at.lock().unwrap_or_else(|slot| slot.into_inner());
+    let PairingCode { ticket, expires_at, .. } = state.pairing_code_snapshot(running);
     let port = *state.port.lock().unwrap_or_else(|slot| slot.into_inner());
     let now = now_secs();
     let prefs = read_prefs();
@@ -1430,7 +1565,7 @@ fn snapshot_now(state: &P2pHostState) -> Value {
         let book = state.devices.lock().unwrap_or_else(|slot| slot.into_inner());
         (book.current().cloned(), book.list())
     };
-    let expires_at = *state.expires_at.lock().unwrap_or_else(|slot| slot.into_inner());
+    let PairingCode { expires_at, revision, .. } = state.pairing_code_snapshot(running);
     let error = state.error.lock().ok().and_then(|slot| slot.clone());
     // 没人连的时候不探 Core：空转时一次端口连接都不该有。
     let core = if peers.is_empty() || !running {
@@ -1495,16 +1630,22 @@ fn snapshot_now(state: &P2pHostState) -> Value {
         "peer": current_id,
         "deviceName": current.as_ref().map(|peer| peer.name.clone()).unwrap_or_default(),
         "path": current.as_ref().map(|peer| peer.path.clone()).unwrap_or_else(|| "unknown".to_owned()),
+        "rttMs": current.as_ref().map(|peer| peer.rtt_ms).unwrap_or(0),
+        // user:“三项全做”+(通过状态通知页面换码，具体配对码和有效期一次读取)。
+        "pairingCodeRevision": revision,
         "expiresIn": expires_at.saturating_sub(now),
         "view": view,
         "reason": reason,
+        "error": error,
         "devices": peers.iter().map(|peer| json!({
             "id": peer.id,
             "name": peer.name,
             "path": peer.path,
+            "rttMs": peer.rtt_ms,
             "session": peer.session,
             "current": current_id.as_deref() == Some(peer.id.as_str()),
         })).collect::<Vec<Value>>(),
+        "pending": pending_devices(),
         // 传输进度与落盘名册：界面据此画进度条、给「打开预览/所在文件夹」的入口。
         "transfers": transfers,
         "received": received,
@@ -1548,14 +1689,43 @@ pub fn p2p_send_file(
     ticket: String,
     name: Option<String>,
 ) -> Result<Value, String> {
-    let source = PathBuf::from(path.trim());
     if path.trim().is_empty() {
         return Err("没有选中文件".to_owned());
     }
+    start_file_transfer(state.inner(), OutgoingTransfer {
+        id: outgoing_transfer_id()?,
+        source: PathBuf::from(path.trim()),
+        ticket,
+        name: name.unwrap_or_default(),
+    })
+}
+
+fn outgoing_transfer_id() -> Result<String, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|error| format!("无法生成传输编号：{error}"))?;
+    Ok(nonce.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+// user:“全部处理并继续寻找”+(重试沿用原传输编号与原接收设备，当前选择的设备不参与重试)。
+#[tauri::command]
+pub fn p2p_retry_transfer(state: tauri::State<'_, P2pHostState>, id: String) -> Result<Value, String> {
+    let mut transfer = state.send_requests.lock().map_err(|_| "发送记录不可用".to_owned())?
+        .iter().find(|transfer| transfer.id == id).cloned()
+        .ok_or_else(|| "找不到原发送记录，请从文件重新发送".to_owned())?;
+    if state.transfers.lock().is_ok_and(|book| {
+        book.transfers.iter().any(|row| row.id == id && row.state == "cancelled")
+    }) {
+        transfer.id = outgoing_transfer_id()?;
+    }
+    start_file_transfer(state.inner(), transfer)
+}
+
+fn start_file_transfer(state: &P2pHostState, transfer: OutgoingTransfer) -> Result<Value, String> {
+    let source = &transfer.source;
     if !source.is_file() {
         return Err("找不到这个文件（可能已经被移动或删除）".to_owned());
     }
-    if ticket.trim().is_empty() {
+    if transfer.ticket.trim().is_empty() {
         return Err("缺少对方的地址票，先在「设备连接」里重新扫码配对".to_owned());
     }
     // 上限与传输层一致（8 GiB）：先在这里拦，省得起了进程再失败。
@@ -1565,16 +1735,24 @@ pub fn p2p_send_file(
     }
     let dir = data_dir();
     std::fs::create_dir_all(&dir).ok();
+    let mut slot = state.send_child.lock().map_err(|_| "发送进程状态不可用".to_owned())?;
+    if let Some((_, existing)) = slot.as_mut() {
+        if existing.try_wait().map_err(|error| format!("无法读取发送状态：{error}"))?.is_none() {
+            return Err("已有文件正在发送，请等待完成或取消后重试".to_owned());
+        }
+    }
     let mut command = Command::new(binary()?);
     command
         .arg("send")
         .arg("--dir")
         .arg(&dir)
         .arg("--ticket")
-        .arg(ticket.trim())
+        .arg(transfer.ticket.trim())
+        .arg("--transfer-id")
+        .arg(&transfer.id)
         .arg("--file")
         .arg(&source);
-    let requested = name.unwrap_or_default();
+    let requested = transfer.name.trim();
     if !requested.trim().is_empty() {
         command.arg("--as").arg(requested.trim());
     }
@@ -1598,7 +1776,6 @@ pub fn p2p_send_file(
             None,
             None,
             None,
-            None,
             Some(Arc::clone(&state.transfers)),
             // 源文件跟着这一条进度走：界面「重试」才知道该重发哪一个。
             Some(source_text.clone()),
@@ -1614,26 +1791,26 @@ pub fn p2p_send_file(
             None,
             None,
             None,
-            None,
         );
     }
-    if let Ok(mut slot) = state.send_child.lock() {
-        // 只留一个发送进程：上一条还没结束就先停掉（传输是顺序的）。
-        if let Some((_, existing)) = slot.as_mut() {
-            let _ = existing.kill();
-            let _ = existing.wait();
-        }
-        *slot = Some((source_text.clone(), child));
-    }
-    Ok(json!({
+    *slot = Some((transfer.id.clone(), child));
+    let result = json!({
         "started": true,
+        "transferId": transfer.id,
         "source": source_text,
         "name": source
             .file_name()
             .and_then(|item| item.to_str())
             .map(|item| if requested.trim().is_empty() { item.to_owned() } else { requested.trim().to_owned() })
             .unwrap_or_default(),
-    }))
+    });
+    let mut requests = state.send_requests.lock().unwrap_or_else(|error| error.into_inner());
+    requests.retain(|request| request.id != transfer.id);
+    requests.push_back(transfer);
+    if requests.len() > 128 {
+        requests.pop_front();
+    }
+    Ok(result)
 }
 
 /// 取消一条传输。
@@ -1645,16 +1822,28 @@ pub fn p2p_cancel_transfer(
     state: tauri::State<'_, P2pHostState>,
     id: String,
 ) -> Result<Value, String> {
+    // user:“全修”+(接收方取消交给持有部分文件的进程处理，等它推送取消结果)。
+    if state.transfers.lock().is_ok_and(|book| {
+        book.transfers.iter().any(|row| row.id == id && row.direction == "receive")
+            && book.is_active(&id)
+    }) {
+        let mut child = state.child.lock().map_err(|_| "传输进程状态不可用".to_owned())?;
+        let stdin = child.as_mut().and_then(|child| child.stdin.as_mut())
+            .ok_or_else(|| "接收服务已停止，无法取消这笔传输".to_owned())?;
+        let id_json = serde_json::to_string(&id).map_err(|error| error.to_string())?;
+        writeln!(stdin, "cancel-receive {id_json}").map_err(|error| format!("未能取消接收：{error}"))?;
+        return Ok(json!({ "requested": true, "id": id }));
+    }
     let mut stopped = false;
     if let Ok(mut slot) = state.send_child.lock() {
-        if let Some((_, child)) = slot.as_mut() {
+        if let Some((_, child)) = slot.as_mut().filter(|(active, _)| active == &id) {
             let _ = child.kill();
             let _ = child.wait();
             stopped = true;
+            *slot = None;
         }
-        *slot = None;
     }
-    let recorded = state
+    let recorded = stopped && state
         .transfers
         .lock()
         .map(|mut book| book.cancel(&id))
@@ -1851,7 +2040,7 @@ mod tests {
             trusted: true,
             path: "direct".to_owned(),
         };
-        apply_status_event(trusted, None, Some(&book), None, None, None);
+        apply_status_event(trusted, None, Some(&book), None, None);
         {
             let book = book.lock().unwrap();
             let current = book.current().expect("peer 进了名册");
@@ -1867,21 +2056,21 @@ mod tests {
             Some(&book),
             None,
             None,
-            None,
         );
         assert!(book.lock().unwrap().current().unwrap().session);
         apply_status_event(
             sunday_p2p_status::StatusEvent::Path {
                 peer: "node-1".to_owned(),
                 path: "relay".to_owned(),
+                rtt_ms: 42,
             },
             None,
             Some(&book),
             None,
             None,
-            None,
         );
         assert_eq!(book.lock().unwrap().current().unwrap().path, "relay");
+        assert_eq!(book.lock().unwrap().current().unwrap().rtt_ms, 42);
         apply_status_event(
             sunday_p2p_status::StatusEvent::PeerClosed {
                 peer: "node-1".to_owned(),
@@ -1889,7 +2078,6 @@ mod tests {
             },
             None,
             Some(&book),
-            None,
             None,
             None,
         );
@@ -1911,7 +2099,6 @@ mod tests {
             Some(&book),
             None,
             None,
-            None,
         );
         assert!(book.lock().unwrap().is_empty());
     }
@@ -1920,11 +2107,11 @@ mod tests {
     #[test]
     fn legacy_lines_still_reach_the_book() {
         let book = std::sync::Arc::new(Mutex::new(DeviceBook::default()));
-        apply_legacy_line("PEER node-9 trusted=true", None, Some(&book), None);
+        apply_legacy_line("PEER node-9 trusted=true", Some(&book));
         assert_eq!(book.lock().unwrap().current_id().as_deref(), Some("node-9"));
-        apply_legacy_line("SESSION node-9", None, Some(&book), None);
+        apply_legacy_line("SESSION node-9", Some(&book));
         assert!(book.lock().unwrap().current().unwrap().session);
-        apply_legacy_line("PEER-ERROR node-9 boom", None, Some(&book), None);
+        apply_legacy_line("PEER-ERROR node-9 boom", Some(&book));
         assert!(book.lock().unwrap().is_empty());
     }
 
@@ -2013,6 +2200,7 @@ mod tests {
 /// 开发版不自动起：dev 实例和已安装的正式版共用 `%APPDATA%/Sunday/p2p`，两个传输进程
 /// 抢同一个身份与名单没有意义，开发时按需点「生成配对二维码」即可。
 pub fn autostart(api_base: String, state: P2pHostState) {
+    core_ready(&state, &api_base);
     // user:“Sunday 启动且 Core 就绪后自动恢复传输服务（确认它依赖开关与 Core 就绪，
     // 而不是无条件起）”+(开关关着就不起；开发版默认不自动起，避免和正式版抢同一个身份)。
     let forced = std::env::var("SUNDAY_P2P_AUTOSTART").as_deref() == Ok("1");
@@ -2044,7 +2232,7 @@ pub fn autostart(api_base: String, state: P2pHostState) {
             eprintln!("[sunday] p2p autostart skipped: core is not ready");
             return;
         }
-        match ensure_child(&api_base, &state) {
+        match ensure_child(&api_base, &state, false) {
             Ok(_) => eprintln!("[sunday] p2p transport started on launch"),
             Err(error) => eprintln!("[sunday] p2p transport failed to start: {error}"),
         }
@@ -2063,6 +2251,91 @@ pub fn p2p_config_set(auto_connect: bool) -> Result<Value, String> {
     prefs.auto_connect = auto_connect;
     write_prefs(&prefs)?;
     Ok(json!({ "autoConnect": prefs.auto_connect }))
+}
+
+/// 从 `p2p-pairing.json` 里取出待确认设备。
+///
+/// 宿主不链接 `sunday-p2p`（iroh 的 windows 依赖会撞车），但两边读写的是同一份文件；
+/// 这里只解释 `pending` 这一层，不猜别的字段。
+fn pending_from_json(text: &str) -> Vec<Value> {
+    let Ok(parsed) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(map) = parsed.get("pending").and_then(|value| value.as_object()) else {
+        return Vec::new();
+    };
+    let mut pending: Vec<Value> = map
+        .values()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?;
+            Some(json!({
+                "id": id,
+                "name": item.get("name").and_then(|value| value.as_str()).unwrap_or(""),
+                "requestedAt": item.get("requested_at").and_then(|value| value.as_u64()).unwrap_or(0),
+                "expiresAt": item.get("expires_at").and_then(|value| value.as_u64()).unwrap_or(0),
+            }))
+        })
+        .collect();
+    pending.sort_by_key(|item| item.get("requestedAt").and_then(|value| value.as_u64()).unwrap_or(0));
+    pending
+}
+
+fn pending_devices() -> Vec<Value> {
+    let path = data_dir().join("p2p-pairing.json");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => pending_from_json(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 确认 / 拒绝都由传输程序改文件：它同时握着可信名单和一次性票，宿主不另写一套。
+fn run_pairing_command(action: &str, id: &str) -> Result<Value, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("缺少设备 id".to_owned());
+    }
+    let mut command = Command::new(binary()?);
+    command
+        .arg(action)
+        .arg("--dir")
+        .arg(data_dir())
+        .arg("--id")
+        .arg(id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("无法执行配对确认：{error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    audit(action, json!({ "id": id, "output": text }));
+    Ok(json!({ "ok": true, "output": text, "pending": pending_devices() }))
+}
+
+/// 待确认设备列表。
+#[tauri::command]
+pub fn p2p_pending() -> Result<Value, String> {
+    Ok(json!({ "pending": pending_devices() }))
+}
+
+/// 电脑确认一台待确认设备：写可信名单并消费这张票。
+#[tauri::command]
+pub fn p2p_confirm_device(id: String) -> Result<Value, String> {
+    run_pairing_command("confirm", &id)
+}
+
+/// 电脑拒绝一台待确认设备：票作废，设备进入撤销名单。
+#[tauri::command]
+pub fn p2p_reject_device(id: String) -> Result<Value, String> {
+    run_pairing_command("reject", &id)
 }
 
 /// user:“允许撤销授权”+(传输进程把名单放在自己的目录里，这里改同一份文件)。
@@ -2122,6 +2395,7 @@ pub fn p2p_revoke(id: String) -> Result<Value, String> {
     }
     std::fs::write(&path, serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
+    audit("revoke", json!({ "id": id, "removed": removed }));
     Ok(json!({ "removed": removed }))
 }
 
@@ -2144,5 +2418,92 @@ pub fn p2p_allow(id: String) -> Result<Value, String> {
         std::fs::write(&path, serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
     }
+    audit("allow", json!({ "id": id, "allowed": allowed }));
     Ok(json!({ "allowed": allowed }))
+}
+
+#[cfg(test)]
+mod transport_startup_tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn relay_stability_forwards_the_actual_startup_error() {
+        let error = sunday_p2p_status::StatusEvent::StartupFailed { message: "自定义中继地址无效".into() };
+        let mut stdout = Cursor::new(error.render());
+        assert_eq!(read_transport_startup(&mut stdout).err().as_deref(), Some("自定义中继地址无效"));
+    }
+
+    // user:“修完之后，去找远程连接/跨网通信/跨设备使用中最不稳定/问题最大的地方 修掉，并列出候选”+
+    // (传输进程不输出时，桌面仍在规定时间内报告失败)。
+    #[test]
+    fn transport_startup_times_out_even_with_an_open_pipe() {
+        let (_send, receive) = mpsc::channel::<Result<(), String>>();
+        let started = Instant::now();
+        let result = wait_for_transport_startup(receive, &AtomicBool::new(false), Duration::from_millis(30));
+        assert!(result.unwrap_err().contains("超时"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn transport_startup_does_not_treat_a_ticket_as_ready() {
+        let mut reader = Cursor::new(b"TICKET sample\nEXPIRES 123\n");
+        let result = read_transport_startup(&mut reader);
+        assert!(result.err().unwrap().contains("就绪"));
+    }
+
+    #[test]
+    fn transport_startup_waits_for_ready_and_keeps_following_output() {
+        let mut reader = Cursor::new(b"TICKET sample\nEXPIRES 123\nREADY\nPEER phone\n");
+        let code = read_transport_startup(&mut reader).unwrap();
+        assert_eq!(code.ticket, "sample");
+        assert_eq!(code.expires_at, 123);
+        let mut next_line = String::new();
+        reader.read_line(&mut next_line).unwrap();
+        assert_eq!(next_line, "PEER phone\n");
+    }
+
+    #[test]
+    fn transport_startup_honors_manual_stop() {
+        let (_send, receive) = mpsc::channel::<Result<(), String>>();
+        let result = wait_for_transport_startup(receive, &AtomicBool::new(true), Duration::from_secs(30));
+        assert!(result.unwrap_err().contains("已停止"));
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    /// user:“电脑显示待确认设备，用户确认配对”+(宿主读传输进程写的同一份文件)。
+    #[test]
+    fn reads_pending_pairings_from_the_transport_file() {
+        let text = r#"{"used":{},"pending":{"abc":{"id":"phone-1","name":"Phone","requested_at":10,"expires_at":300}}}"#;
+        let pending = pending_from_json(text);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["id"], "phone-1");
+        assert_eq!(pending[0]["name"], "Phone");
+        assert_eq!(pending[0]["expiresAt"], 300);
+    }
+
+    #[test]
+    fn a_broken_pairing_file_never_looks_like_a_pending_device() {
+        assert!(pending_from_json("not json").is_empty());
+        assert!(pending_from_json("{}").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    #[test]
+    fn audit_records_are_stable_json_lines() {
+        let record = audit_record("revoke", json!({ "id": "phone-1" }), 42);
+        assert_eq!(record["at"], 42);
+        assert_eq!(record["event"], "revoke");
+        assert_eq!(record["fields"]["id"], "phone-1");
+    }
 }

@@ -112,6 +112,15 @@ async function runOne(origin: string, request: AgentRequest): Promise<void> {
       const url = String(((request.args ?? {}) as Record<string, unknown>).url ?? '')
       if (tab) window.dispatchEvent(new CustomEvent('sunday:browser-agent-tab', { detail: { tab, url } }))
     }
+    // user:“这是工具返回值和实际状态不同步”+(界面收养点击已经创建的原生标签，工具与界面共用同一个标签 ID)。
+    if (request.command === 'browser_act' && payload && typeof payload === 'object') {
+      const result = payload as { sourceTab?: string; openedTabs?: Array<{ tab: string; url: string }> }
+      for (const { tab, url } of result.openedTabs ?? []) {
+        window.dispatchEvent(new CustomEvent('sunday:browser-agent-tab', {
+          detail: { tab, url, opener: result.sourceTab },
+        }))
+      }
+    }
   } catch (thrown) {
     ok = false
     error = normalizeError(thrown)

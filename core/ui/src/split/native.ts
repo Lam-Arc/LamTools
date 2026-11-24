@@ -187,8 +187,19 @@ async function dispatchBrowserNative(id: string, action: string, options: Record
   switch (action) {
     case 'create': {
       // 已经有原生 webview 时，重复 create 等价于同步一次矩形。
-      if (browserTabs.has(id)) return browserNative(id, 'bounds', options)
-      const { tab } = await splitNative<{ tab: string }>('browser_open', { url: String(options.url ?? ''), profile: String(options.profile ?? 'normal') })
+      // user:“进来页之后要能切、能返回”+(映射可能指向一个已经不存在的网页（进程重启、
+      // 宿主回收、或这个标签号本来就没被宿主创建过）：那时只补矩形会让页面永远空白。
+      // 所以先问一次状态，确实还活着才走“只同步矩形”，否则丢掉映射重新创建)。
+      if (browserTabs.has(id)) {
+        const alive = await splitNative<Record<string, unknown>>('browser_state', { tab: browserTab(id) })
+          .then(state => !(state && state.missing))
+          .catch(() => false)
+        // 复用时不在这里补矩形：这一次的 options 是创建参数，没有坐标系，
+        // 下发出去只会把网页缩成 1×1；矩形由调用方（或组件自己的 sync）随后给。
+        if (alive) return
+        forgetBrowserTab(id)
+      }
+      const { tab } = await splitNative<{ tab: string }>('browser_open', { url: String(options.url ?? ''), profile: String(options.profile ?? 'normal'), key: id })
       browserTabs.set(id, tab)
       return splitNative<void>('browser_bounds', { tab, ...boundsArgs(options) })
     }
@@ -378,4 +389,39 @@ export async function subscribeBrowserEvents(callback: (event: BrowserNativeEven
     },
   ))
   return () => { for (const stop of off) stop() }
+}
+
+// user:“接管开关默认关闭，只有前端确认 EasyNet 就绪才打开”+(这三个命令只做薄封装，决策留在宿主)。
+export async function browserDownloadTakeover(enabled: boolean): Promise<boolean> {
+  return splitNative<boolean>('browser_download_takeover', { enabled })
+}
+
+export async function browserDownloadHeaders(tab: string, url: string): Promise<void> {
+  return splitNative<void>('browser_download_headers', { tab, url })
+}
+
+export async function browserDownloadRetry(tab: string, url: string): Promise<void> {
+  return splitNative<void>('browser_download_retry', { tab, url })
+}
+
+/** 接管的请求头事件；调用方自己按 tab+url 配对，不做分屏映射。 */
+export async function subscribeBrowserDownloadHeaders(
+  callback: (payload: { tab: string; url: string; cookie: string; userAgent: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ tab: string; url: string; cookie: string; userAgent: string }>(
+    'lamtools://browser-download-headers',
+    ({ payload }) => callback(payload),
+  )
+}
+
+/** 浏览器拦到一个可接管的下载。 */
+export async function subscribeBrowserDownloadRequests(
+  callback: (payload: { tab: string; url: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ tab: string; url: string }>('lamtools://browser-download-request', ({ payload }) => callback(payload))
+}
+
+/** 告诉浏览器新的网络出口；已打开的网页不受影响，之后创建的才用新出口。 */
+export async function browserNetworkState(mode: 'accelerator' | 'system' | 'direct', endpoint = ''): Promise<boolean> {
+  return splitNative<boolean>('browser_network_state', { mode, endpoint })
 }

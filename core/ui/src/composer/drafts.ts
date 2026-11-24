@@ -53,14 +53,16 @@ export function writeComposerDraft(
   storage: ComposerDraftStorage | null | undefined,
   threadId: string | null | undefined,
   text: string,
-): void {
-  if (!storage || !threadId) return
+): boolean {
+  // user:“全做”+(存储不可用时由会话草稿的内存备份接住引导)。
+  if (!storage || !threadId) return false
   try {
     const key = composerDraftStorageKey(threadId)
     if (text) storage.setItem(key, text)
     else storage.removeItem(key)
+    return true
   } catch {
-    // A restricted storage context must never break composing.
+    return false
   }
 }
 

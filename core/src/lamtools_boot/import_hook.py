@@ -85,6 +85,10 @@ class PatchLoader(importlib.abc.Loader):
         create = getattr(self.original, "create_module", None)
         return create(spec) if callable(create) else None
 
+    def __getattr__(self, name: str) -> Any:
+        # user:“修”+(补丁加载器保留原加载器可选的资源读取接口)。
+        return getattr(self.original, name)
+
     def exec_module(self, module: ModuleType) -> None:
         self.original.exec_module(module)
         for name, path in self.patches.items():
@@ -120,16 +124,9 @@ class OverrideFinder(importlib.abc.MetaPathFinder):
         original = importlib.machinery.PathFinder.find_spec(fullname, path)
         if original is None or original.loader is None:
             return None
-        loader = PatchLoader(original.loader, patches)
-        spec = importlib.util.spec_from_loader(
-            fullname,
-            loader,
-            origin=original.origin,
-            is_package=original.submodule_search_locations is not None,
-        )
-        if spec is not None and original.submodule_search_locations is not None:
-            spec.submodule_search_locations = list(original.submodule_search_locations)
-        return spec
+        # user:“修”+(原模块的文件位置、缓存路径和包搜索路径随规格一起保留)。
+        original.loader = PatchLoader(original.loader, patches)
+        return original
 
 
 def install_overrides(table: OverrideTable | dict[str, Path]) -> OverrideFinder:

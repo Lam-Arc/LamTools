@@ -72,7 +72,6 @@
      消息、输入栏、设置页一起按可用宽度铺开；想收窄改这一个变量即可。) */
   --content-fill-width: 100%;
   --keyboard-inset: 0px;
-  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   /* --native-keyboard-inset is published by a host whose window does not shrink
      with the keyboard (the Android shell runs edge-to-edge), where the shared
      viewport measurement cannot see it. Either source lifts the composer. */
@@ -1290,6 +1289,17 @@ body.sidebar-is-resizing .floating-composer {
   .sidebar-resize-handle { display: none; }
   .workspace-shell { --right-drawer-width: var(--layout-right-drawer-width, 100vw); }
   .workspace-shell { --main-x-padding: 14px; }
+  /* user:“一级入口收敛为四项，底部常驻”+
+     (底部导航高度：输入栏、内容区都要为它让位，键盘弹起时输入栏仍在导航条之上)。 */
+  .workspace-shell {
+    --mobile-bottom-nav-height: 56px;
+    --composer-bottom-offset: calc(max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom)) + var(--mobile-bottom-nav-height) + var(--shell-bottom-inset, 0px));
+  }
+  /* user:“会话内不需要下面的导航栏”+(详情页隐藏导航后，这一截高度必须归零：
+     输入栏、内容区都按同一个变量让位，否则底部会留一条 56px 的空档)。 */
+  .workspace-shell--mobile-chat-detail {
+    --mobile-bottom-nav-height: 0px;
+  }
   .edge { display: none; }
   .workspace-drawer {
     z-index: var(--z-popover, 60);
@@ -1552,4 +1562,65 @@ body.sidebar-is-resizing .floating-composer {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
   }
+}
+
+/* Mobile page mode keeps the chat header (back + tab drawer) above the page. */
+.split-slot--mobile.split-slot--open {
+  top: calc(var(--native-safe-area-top, 0px) + 52px);
+  padding-top: 0;
+}
+/* user:“桌面的分屏标签页对于手机来说，等于换页”+(手机上的页是整块屏幕：会话栏当出口，
+   内容从它下面铺满；抽屉与返回都在会话栏上，页里不再压第二套控件)。 */
+.mobile-page {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: calc(var(--native-safe-area-top, 0px) + 52px);
+  /* 手机主界面那一层在 300：页必须压在上面，否则会话内容会盖住网页。 */
+  z-index: 320;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--theme-main-background, var(--background));
+  color: var(--theme-main-text, var(--foreground));
+}
+/* 手机网页页：一条地址栏 + 一块留给原生网页的区域（原生 View 由宿主按这块矩形摆上去）。 */
+.mobile-page-web {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.mobile-page-web__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #222) 10%, transparent);
+}
+
+.mobile-page-web__url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--theme-main-text, #222) 72%, transparent);
+}
+
+.mobile-page-web__action {
+  border: 0;
+  background: none;
+  color: var(--theme-main-text, #222);
+  font-size: 13px;
+  padding: 4px 6px;
+}
+
+.mobile-page-web__surface {
+  flex: 1;
+  min-height: 0;
 }

@@ -60,6 +60,7 @@ function filesLabel(count: number): string {
       <span v-if="submission.attachments.length" class="submission-status__meta">{{ filesLabel(submission.attachments.length) }}</span>
       <span v-if="submission.state === 'failed' || submission.state === 'unknown'" class="submission-status__actions">
         <button
+          v-if="!submission.needsReopen"
           type="button"
           class="btn btn--ghost submission-status__action"
           :disabled="busy"
@@ -68,8 +69,9 @@ function filesLabel(count: number): string {
         >
           {{ submission.state === 'unknown' ? t('确认接收结果') : t('重试') }}
         </button>
+        <!-- user:“全做”+(历史替换失败可重试原操作，不能退回普通发送编辑入口)。 -->
         <button
-          v-if="submission.state === 'failed' && canEdit && submission.intent !== 'resume'"
+          v-if="submission.state === 'failed' && canEdit && submission.intent !== 'resume' && !submission.replaceTurnId"
           type="button"
           class="btn btn--ghost submission-status__action"
           :disabled="busy"

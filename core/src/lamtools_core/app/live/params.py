@@ -11,6 +11,7 @@ from .context import CoreLiveContext
 SERIALIZED_SESSION_OPERATIONS = frozenset({
     "thread.start",
     "turn.start",
+    "turn.replace",  # user:“全做”+(编辑与正常发送使用同一会话锁)。
     "turn.resume",
     "turn.pause",
     "turn.cancel",

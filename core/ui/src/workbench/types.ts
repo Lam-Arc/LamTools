@@ -50,7 +50,7 @@ export interface WorkbenchRuntimeOptions {
    * accepted. Desktop and mobile shells can therefore share the same
    * composer controls and transport semantics.
    */
-  getTurnOptions?: () => Record<string, unknown> | Promise<Record<string, unknown>>
+  getTurnOptions?: (context?: { historicalEdit: boolean }) => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Shared UI controls the projection's shallow-thinking state. */
   shallowThinking?: Readonly<Ref<boolean>>
   /** Called when the live composer accepts a submission, with the trimmed text. */
@@ -133,7 +133,7 @@ export interface WorkbenchRuntime {
   queueInput(text: string): Promise<void>
   respondApproval(requestId: string, decision: string, guidance?: string): Promise<void>
   loadCommandCatalog(): Promise<boolean>
-  setTurnOptionsProvider(provider: () => Record<string, unknown> | Promise<Record<string, unknown>>): void
+  setTurnOptionsProvider(provider: NonNullable<WorkbenchRuntimeOptions['getTurnOptions']>): void
   setShallowThinking(value: boolean): void
   setComposerCallbacks(callbacks: WorkbenchComposerCallbacks): void
   startTurn(

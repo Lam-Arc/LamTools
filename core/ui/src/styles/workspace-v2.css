@@ -316,6 +316,26 @@ body:has(.workspace-shell--browser-live),
   text-overflow: ellipsis;
 }
 
+/* user:“找出 3 个及以上优化”+(切换与关闭各自拥有焦点，延续原来的标签外观)。 */
+.ws2-tab__select {
+  display: flex;
+  flex: 1 1 auto;
+  align-self: stretch;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: inherit;
+}
+.ws2-tabs--icons .ws2-tab__select { justify-content: center; }
+.ws2-tab__select:focus-visible { position: relative; z-index: 1; outline-offset: -2px; }
+
 .ws2-tab__close {
   flex: 0 0 auto;
   display: inline-flex;
@@ -338,11 +358,14 @@ body:has(.workspace-shell--browser-live),
 .ws2-tab:is(:hover, :focus-within) .ws2-tab__close { opacity: .7; }
 .ws2-tab__close:hover { opacity: 1; background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
 .ws2-tabs--icons .ws2-tab__close {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   opacity: 1;
   border-radius: inherit;
 }
+.ws2-tabs--icons .ws2-tab__close:focus-visible { outline-offset: -2px; }
 
 /* 分隔条：12px 命中，视觉只在 hover 时出现一条细线。 */
 .ws2-divider {

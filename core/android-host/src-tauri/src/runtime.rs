@@ -349,7 +349,8 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     // tree is cleared; the layout is now filesDir/runtime/userdata bound over
     // /root/.sunday.
     let userdata = path_of(app).join("userdata");
-    let legacy = rootfs_dir(app).join("root/.sunday");
+    let previous_rootfs = rootfs_dir(app);
+    let legacy = previous_rootfs.join("root/.sunday");
     if legacy.exists() && !userdata.exists() {
         if let Err(error) = copy_tree(&legacy, &userdata) {
             println!("[sunday] could not carry user data forward: {error}");
@@ -357,6 +358,13 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
             println!("[sunday] carried user data out of the runtime tree");
         }
     }
+
+    // user:“修”+(先迁移旧版数据库，再更新安装记录或清理旧镜像)。
+    crate::runtime_database::migrate_legacy_database(
+        &previous_rootfs.join("opt/sunday/data"),
+        &userdata.join("data"),
+    )
+    .map_err(|error| format!("cannot migrate the existing session database: {error}"))?;
 
     let rootfs = path_of(app).join(format!("rootfs-{}", sanitise(&manifest.runtime_version)));
     if rootfs.exists() {

@@ -14,8 +14,149 @@ import {
   type CoreSyncChangeNotification,
 } from '../src/appServer'
 import { TransportRpcError } from '../src/transport'
+import { pendingKey, pendingWritesFor, rememberPendingWrite, settlePendingWrite } from '../src/appServer/pendingWrites'
 
 describe('core appServer runtime store', () => {
+  it('checks saved writes on reopen without resending them', async () => {
+    const threadId = 'thread-1'
+    const now = Date.now()
+    for (const id of ['old-sent', 'old-unconfirmed']) rememberPendingWrite({
+      key: pendingKey(threadId, id), threadId, clientMessageId: id,
+      method: 'turn/start', createdAt: now, expiresAt: now + 60_000,
+    })
+    const received: CoreAppEvent = { event_id: 'receipt', seq: 1, thread_id: threadId,
+      method: 'turn/accepted', client_message_id: 'old-sent', created_at: '', payload: {} }
+    const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+      if (method === 'thread/writeReceipts') return { events: [received] }
+      if (method === 'thread/resume') return { snapshot: snapshot(2, 'completed') }
+      return {}
+    })
+    const onResponseEvent = vi.fn()
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, { onResponseEvent, createClient: () => fakeClient(request) })
+    try {
+      await controller.connect(threadId)
+      await vi.waitFor(() => expect(onResponseEvent).toHaveBeenCalledWith(received))
+      expect(request).toHaveBeenCalledWith('thread/writeReceipts', {
+        thread_id: threadId, client_message_ids: ['old-sent', 'old-unconfirmed'],
+      }, expect.any(Number))
+      expect(request.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)
+      expect(pendingWritesFor(threadId).map(write => write.clientMessageId)).toEqual(['old-unconfirmed'])
+    } finally {
+      controller.disconnect()
+      for (const id of ['old-sent', 'old-unconfirmed']) settlePendingWrite(pendingKey(threadId, id))
+    }
+  })
+
+  it('refreshes a stale historical edit without automatically retrying it', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+      if (method === 'thread/resume') return { snapshot: snapshot(2, 'completed') }
+      if (method === 'thread/read') return { snapshot: versionedSnapshot(9, 'completed', 9) }
+      if (method === 'turn/replace') throw new TransportRpcError(-32600, 'Revision conflict', { code: 'REVISION_CONFLICT' })
+      return {}
+    })
+    const controller = createCoreAppServerRuntimeController(runtime, { createClient: () => fakeClient(request) })
+    await controller.connect('thread-1')
+    await expect(controller.startTurn('thread-1', 'edited', undefined, {
+      replace_turn_id: 'old', expected_revision: 1,
+    }, 'conflict-edit')).rejects.toThrow()
+    expect(request.mock.calls.filter(([method]) => method === 'turn/replace')).toEqual([
+      ['turn/replace', expect.objectContaining({ expected_revision: 1 }), expect.any(Number)],
+    ])
+    expect(runtime.state?.snapshot_seq).toBe(9)
+  })
+
+  // user:“及优化速度/逻辑”+(桌面发送携带闲时派发选项，队列编辑被拒时提示未保存)。
+  it('requests desktop queue wake-up and surfaces an edit refused after dispatch', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+      if (method === 'thread/resume') return { snapshot: snapshot(1, 'completed') }
+      if (method === 'queue/update') return { applied: false, reason: 'queue_item_unavailable', events: [] }
+      return {}
+    })
+    const controller = createCoreAppServerRuntimeController(runtime, { createClient: () => fakeClient(request) })
+    await controller.connect('thread-1')
+    await controller.queueInput('thread-1', 'late text', {}, 'queue-request')
+    expect(request).toHaveBeenCalledWith('queue/create', expect.objectContaining({ dispatch_if_idle: true }), expect.any(Number))
+    await expect(controller.updateQueueInput('thread-1', 'sent-item', 'edited')).rejects.toThrow('修改未保存')
+  })
+
+  // user:“全做”+(编辑提交后重载原会话并接受更低的对话游标，迟到的回执不影响当前会话)。
+  it('reloads a committed replacement once and never reloads a different selected thread', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const reads: string[] = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const rollback: CoreAppEvent = { event_id: 'rollback-1', thread_id: 'thread-1', seq: 2,
+      method: 'session/rollback', created_at: '', payload: { snapshot_required: true } }
+    const accepted: CoreAppEvent = { event_id: 'accept-1', thread_id: 'thread-1', seq: 3,
+      method: 'turn/accepted', turn_id: 'replacement', created_at: '', payload: { rollback_event_id: 'rollback-1' } }
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: callbacks => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method, params) => {
+          if (method === 'turn/replace') return { events: [rollback, accepted] }
+          if (method === 'thread/read') {
+            reads.push(String(params.thread_id))
+            return { snapshot: snapshot(3, 'running') }
+          }
+          if (method === 'thread/resume') return { snapshot: {
+            ...snapshot(reads.length ? 3 : 99, 'running'), thread_id: params.thread_id,
+          } }
+          return {}
+        })
+      },
+    })
+    await controller.connect('thread-1')
+    expect(runtime.state?.snapshot_seq).toBe(99)
+    await controller.startTurn('thread-1', 'changed', undefined, { replace_turn_id: 'old', expected_revision: 0 }, 'edit-request')
+    await vi.waitFor(() => expect(runtime.state?.snapshot_seq).toBe(3))
+    onEvent?.(rollback)
+    expect(reads).toEqual(['thread-1'])
+    await controller.switchThread('thread-2')
+    onEvent?.(accepted)
+    expect(runtime.state?.thread_id).toBe('thread-2')
+    expect(reads).toEqual(['thread-1'])
+  })
+
+  it('acknowledges a queue replay without recreating its deleted item', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const accepted: CoreAppEvent = {
+      event_id: 'queue-accept', thread_id: 'thread-1', item_id: 'deleted-item', seq: 2,
+      method: 'queue/itemAccepted', created_at: '', client_message_id: 'queue-request',
+      payload: { queue_item_id: 'deleted-item', input: [{ type: 'text', text: 'old' }] },
+    }
+    const onResponseEvent = vi.fn()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      onResponseEvent,
+      createClient: () => fakeClient(async (method) => {
+        if (method === 'queue/create') return { queue_item: null, accepted: true, replayed: true, events: [accepted] }
+        if (method === 'thread/resume') return { snapshot: snapshot(1, 'completed') }
+        return {}
+      }),
+    })
+    await controller.connect('thread-1')
+    await controller.queueInput('thread-1', 'old', {}, 'queue-request')
+    expect(onResponseEvent).toHaveBeenCalledWith(accepted)
+    expect(runtime.state?.queue || []).toEqual([])
+  })
+
+  it('recognizes a persisted guidance receipt without changing old guidance outcomes', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method !== 'turn/steer') return {}
+        const events = params.client_message_id === 'durable'
+          ? [{ method: 'turn/steered', payload: { guidance_id: 'durable' } }]
+          : []
+        return { applied: true, events }
+      }),
+    })
+    await controller.connect('thread-1')
+    expect((await controller.steerTurn('thread-1', 'turn-1', 'first', 'durable')).serverOwnsRecovery).toBe(true)
+    expect((await controller.steerTurn('thread-1', 'turn-1', 'second', 'legacy')).serverOwnsRecovery).toBeUndefined()
+  })
+
   it('explicit Resume reopens the same turn while preserving completed items', () => {
     const initial = snapshot(2, 'cancelled')
     initial.turns = { 'turn-1': { turn_id: 'turn-1', status: 'cancelled', items: ['complete'] } }

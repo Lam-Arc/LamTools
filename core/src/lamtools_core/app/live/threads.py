@@ -19,6 +19,35 @@ from ..thread_outline import build_thread_outline, normalize_thread_outline_char
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 
 
+async def handle_thread_write_receipts_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    from .params import _thread_id_from_params
+
+    thread_id = _thread_id_from_params(params)
+    ids = params.get("client_message_ids")
+    if (not thread_id or not isinstance(ids, list) or not 1 <= len(ids) <= 100
+        or any(not isinstance(value, str) or not value or len(value) > 128 for value in ids)):
+        return CoreLiveOperationOutcome(response=rpc_error(
+            request_id, code=INVALID_REQUEST, message="thread_id and 1–100 client_message_ids are required",
+        ))
+    session_store = context.host.session_store
+    if not await _thread_is_reachable(session_store, thread_id):
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found"))
+
+    # user:“全修”+(断线后按原编号和会话查询已提交的接收事件，不会再次执行写请求)。
+    events = []
+    methods = {"turn/accepted", "turn/started", "turn/steered", "queue/itemAccepted"}
+    async with context.session_factory() as db:
+        for client_id in dict.fromkeys(ids):
+            receipt = await context.persistence.find_client_event(
+                db, thread_id=thread_id, client_message_id=client_id, methods=methods,
+            )
+            if receipt is not None:
+                events.append(receipt.to_dict())
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"events": events}))
+
+
 async def _try_rust_wire_page(
     *,
     context: CoreLiveContext,

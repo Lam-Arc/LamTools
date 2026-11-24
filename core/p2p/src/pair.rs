@@ -167,6 +167,47 @@ pub fn verify(
 
 /// 一次性消费记录，落盘在出票方的数据目录里。
 ///
+/// 一次等待电脑确认的配对申请。
+///
+/// user:“电脑显示待确认设备，用户确认配对”+(扫码只算提出申请；确认之前不能写进
+/// 可信名单，也不能让任何远程调用通过)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingDevice {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    pub requested_at: u64,
+    pub expires_at: u64,
+}
+
+/// 一次配对申请的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingRequest {
+    /// 已登记，等电脑确认。
+    Waiting,
+    /// 同一张票正在给另一台设备申请。
+    TicketBusy,
+    /// 这张票已经用过 / 作废。
+    TicketUsed,
+}
+
+#[test]
+fn relay_stability_address_rotation_keeps_only_an_existing_pairing_request_alive() {
+    let mut grants = PairingGrants::default();
+    assert_eq!(grants.request("claimed", "device", "Device", 300, 1), PairingRequest::Waiting);
+    grants.retire_after_address_change("claimed", 300);
+    grants.retire_after_address_change("unclaimed", 300);
+    assert_eq!(grants.request("claimed", "device", "Device", 300, 2), PairingRequest::Waiting);
+    assert_eq!(grants.request("claimed", "other", "Other", 300, 2), PairingRequest::TicketBusy);
+    assert_eq!(grants.request("unclaimed", "other", "Other", 300, 2), PairingRequest::TicketUsed);
+    grants.retire("claimed", 300);
+    assert_eq!(grants.request("claimed", "device", "Device", 300, 3), PairingRequest::TicketUsed);
+    assert_eq!(grants.request("older", "device", "Device", 300, 3), PairingRequest::Waiting);
+    grants.retire_after_address_change("older", 300);
+    assert_eq!(grants.request("newer", "device", "Device", 300, 4), PairingRequest::Waiting);
+    assert_eq!(grants.request("older", "other", "Other", 300, 4), PairingRequest::TicketUsed);
+}
+
 /// user:“用过即失效”+(只放在内存里的话，传输进程重启一次，同一张码又能用；所以和可信
 /// 名单一样写文件，进程重启后仍然记得哪些随机数已经用过)。
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -174,8 +215,14 @@ pub struct PairingGrants {
     /// nonce → 票据过期时间。
     #[serde(default)]
     used: BTreeMap<String, u64>,
+    /// nonce → 等待确认的设备。
+    #[serde(default)]
+    pending: BTreeMap<String, PendingDevice>,
     #[serde(skip)]
     path: PathBuf,
+    /// 文件身份：(修改时间纳秒, 长度)。宿主确认/拒绝时会改同一个文件，传输进程据此重读。
+    #[serde(skip)]
+    stamp: Option<(u64, u64)>,
 }
 
 impl PairingGrants {
@@ -184,17 +231,20 @@ impl PairingGrants {
         if !path.exists() {
             return Ok(Self {
                 used: BTreeMap::new(),
+                pending: BTreeMap::new(),
                 path,
+                stamp: None,
             });
         }
         let text = std::fs::read_to_string(&path).context("cannot read p2p-pairing.json")?;
         let mut grants: Self =
             serde_json::from_str(&text).context("p2p-pairing.json is not valid JSON")?;
         grants.path = path;
+        grants.stamp = file_stamp(&grants.path);
         Ok(grants)
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
         if self.path.as_os_str().is_empty() {
             return Ok(());
         }
@@ -202,11 +252,100 @@ impl PairingGrants {
         let temporary = self.path.with_extension("tmp");
         std::fs::write(&temporary, text).context("cannot write the pairing grants")?;
         std::fs::rename(&temporary, &self.path).context("cannot install the pairing grants")?;
+        self.stamp = file_stamp(&self.path);
         Ok(())
+    }
+
+    /// 宿主确认/拒绝之后，传输进程在握手前按文件时间戳重读。
+    pub fn reload_if_stale(&mut self) -> Result<bool> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+        let current = file_stamp(&self.path);
+        if current == self.stamp {
+            return Ok(false);
+        }
+        let Some(dir) = self.path.parent() else {
+            return Ok(false);
+        };
+        let reloaded = Self::load(dir)?;
+        self.used = reloaded.used;
+        self.pending = reloaded.pending;
+        self.stamp = file_stamp(&self.path);
+        Ok(true)
     }
 
     pub fn is_used(&self, nonce: &str) -> bool {
         self.used.contains_key(nonce)
+    }
+
+    /// 登记一次配对申请；确认之前票不算被消费。
+    pub fn request(
+        &mut self,
+        nonce: &str,
+        id: &str,
+        name: &str,
+        expires_at: u64,
+        now: u64,
+    ) -> PairingRequest {
+        if self.used.contains_key(nonce) {
+            return PairingRequest::TicketUsed;
+        }
+        if let Some(existing) = self.pending.get(nonce) {
+            if existing.id != id {
+                return PairingRequest::TicketBusy;
+            }
+        }
+        // 同一台设备重新扫了一张新码：旧申请作废，避免确认到一张已经换掉的码。
+        let used = &mut self.used;
+        self.pending.retain(|previous, device| {
+            if previous != nonce && device.id == id {
+                used.insert(previous.clone(), device.expires_at);
+                false
+            } else {
+                true
+            }
+        });
+        self.pending.insert(
+            nonce.to_owned(),
+            PendingDevice {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                requested_at: now,
+                expires_at,
+            },
+        );
+        PairingRequest::Waiting
+    }
+
+    pub fn pending_devices(&self) -> Vec<PendingDevice> {
+        self.pending.values().cloned().collect()
+    }
+
+    pub fn pending_for(&self, id: &str) -> Option<&PendingDevice> {
+        self.pending.values().find(|device| device.id == id)
+    }
+
+    /// 电脑确认：移出待确认，票从此作废。
+    pub fn confirm(&mut self, id: &str) -> Option<PendingDevice> {
+        let nonce = self
+            .pending
+            .iter()
+            .find(|(_, device)| device.id == id)
+            .map(|(nonce, _)| nonce.clone())?;
+        let device = self.pending.remove(&nonce)?;
+        self.used.insert(nonce, device.expires_at);
+        Some(device)
+    }
+
+    /// 电脑拒绝：同样把票作废，设备由 TrustStore 记入撤销名单。
+    pub fn reject(&mut self, id: &str) -> Option<PendingDevice> {
+        self.confirm(id)
+    }
+
+    /// 设备已经在可信名单里 / 被撤销：旧申请不再展示。
+    pub fn cancel(&mut self, id: &str) {
+        self.pending.retain(|_, device| device.id != id);
     }
 
     /// 用掉一张票。返回 `false` 表示它已经被用过（重复使用要被拒绝）。
@@ -220,7 +359,15 @@ impl PairingGrants {
 
     /// 作废一张还没用过的票（重新生成二维码时，旧码立刻失效）。
     pub fn retire(&mut self, nonce: &str, expires_at: u64) {
+        self.pending.remove(nonce);
         self.used.insert(nonce.to_owned(), expires_at);
+    }
+
+    // user:“p2p 与 relay 的稳定性核查，并按需优化”+(自动换路时保留已经绑定到申请设备的配对码)。
+    pub fn retire_after_address_change(&mut self, nonce: &str, expires_at: u64) {
+        if !self.pending.contains_key(nonce) {
+            self.retire(nonce, expires_at);
+        }
     }
 
     /// 清理早就过期的记录，文件不会无限长大。
@@ -228,7 +375,29 @@ impl PairingGrants {
         let horizon = now.saturating_sub(KEEP_USED_AFTER_EXPIRY_SECS);
         self.used
             .retain(|_, expires_at| *expires_at >= horizon.min(now));
+        let expired: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, device)| device.expires_at <= now)
+            .map(|(nonce, _)| nonce.clone())
+            .collect();
+        for nonce in expired {
+            if let Some(device) = self.pending.remove(&nonce) {
+                // 过期申请也不能让同一张票以后复活。
+                self.used.insert(nonce, device.expires_at);
+            }
+        }
     }
+}
+
+fn file_stamp(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let nanos = modified
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    Some((nanos, metadata.len()))
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -276,6 +445,60 @@ mod tests {
             id: EndpointId::from(secret.public()),
             addrs,
         }
+    }
+
+
+    /// user:“电脑显示待确认设备，用户确认配对”+(扫码只登记申请，确认前票不作废)。
+    #[test]
+    fn a_ticket_waits_for_confirmation_before_it_is_consumed() {
+        let mut grants = PairingGrants::default();
+        let nonce = new_nonce();
+        assert_eq!(
+            grants.request(&nonce, "phone-1", "Phone", 2_000, 1_000),
+            PairingRequest::Waiting
+        );
+        assert_eq!(grants.pending_devices().len(), 1);
+        assert!(!grants.is_used(&nonce));
+        let confirmed = grants.confirm("phone-1").expect("pending");
+        assert_eq!(confirmed.name, "Phone");
+        assert!(grants.is_used(&nonce));
+        assert!(grants.pending_devices().is_empty());
+    }
+
+    /// 同一张票不能同时给两台设备申请。
+    #[test]
+    fn a_pending_ticket_cannot_be_shared_by_another_device() {
+        let mut grants = PairingGrants::default();
+        let nonce = new_nonce();
+        assert_eq!(
+            grants.request(&nonce, "phone-1", "Phone", 2_000, 1_000),
+            PairingRequest::Waiting
+        );
+        assert_eq!(
+            grants.request(&nonce, "tablet-9", "Tablet", 2_000, 1_010),
+            PairingRequest::TicketBusy
+        );
+    }
+
+    /// 待确认记录落盘；过期后自动作废，同一张票不能复活。
+    #[test]
+    fn pending_survives_a_restart_and_expires_into_the_used_list() {
+        let dir = std::env::temp_dir().join(format!("sunday-pending-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nonce = new_nonce();
+        let mut grants = PairingGrants::load(&dir).unwrap();
+        assert_eq!(
+            grants.request(&nonce, "phone-1", "Phone", 2_000, 1_000),
+            PairingRequest::Waiting
+        );
+        grants.save().unwrap();
+
+        let mut reloaded = PairingGrants::load(&dir).unwrap();
+        assert_eq!(reloaded.pending_devices().len(), 1);
+        reloaded.prune(3_000);
+        assert!(reloaded.pending_devices().is_empty());
+        assert!(reloaded.is_used(&nonce));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// user:“扫码即可完成配对”+(一张正常票据应当能解出地址，并且带着还没用过的随机数)。

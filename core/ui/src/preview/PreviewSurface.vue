@@ -10,7 +10,7 @@
     <PreviewImageViewer
       v-if="imageDocument"
       ref="imageViewer"
-      :src="imageDocument.url"
+      :src="imageSource || imageDocument.url"
       :name="imageDocument.title"
       :annotating="annotating"
       :load-original="loadOriginal"
@@ -25,7 +25,7 @@
     <PreviewMediaPlayer
       v-else-if="mediaDocument"
       ref="mediaPlayer"
-      :src="mediaDocument.url"
+      :src="mediaSource || mediaDocument.url"
       :mime="mediaDocument.mime"
       :title="mediaDocument.title"
       :load-timeout-ms="loadTimeoutMs"
@@ -134,6 +134,9 @@ const props = withDefaults(defineProps<{
   loadOriginal?: (() => Promise<Blob>) | null
   /** 原始字节：PDF 由 pdfjs 自己画，需要完整字节。 */
   loadBytes?: (() => Promise<Uint8Array>) | null
+  /** 宿主已经取到字节并做好的 blob 地址（安卓没有 /api 代理，图片/音视频必须走这条）。 */
+  imageSource?: string
+  mediaSource?: string
 }>(), {
   interactive: true,
   canOpenWithDefaultApp: false,
@@ -144,6 +147,8 @@ const props = withDefaults(defineProps<{
   annotating: false,
   loadOriginal: null,
   loadBytes: null,
+  imageSource: '',
+  mediaSource: '',
 })
 
 defineEmits<{

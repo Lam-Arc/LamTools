@@ -177,12 +177,6 @@ async function optimize() {
           </button>
         </div>
       </div>
-      <button
-        class="btn nx-button btn--quiet nx-add-profile"
-        @click="$emit('import')"
-      >
-        <Plus :size="14" />添加或更新订阅
-      </button>
     </template>
     <div v-else class="nx-empty nx-empty--small">
       <Radio :size="24" /><strong>{{

@@ -244,11 +244,87 @@ describe('WikiView chrome', () => {
       const scroll = vi.fn()
       ;(heading.element as HTMLElement).scrollIntoView = scroll
 
-      await wrapper.get(`[data-wiki-article] a[href="#${encodeURIComponent('案例授权分层评论与私信类能力')}"]`).trigger('click')
+      const anchor = wrapper.findAll('[data-wiki-article] a')
+        .find(link => decodeURIComponent(link.attributes('href') ?? '') === '#案例授权分层评论与私信类能力')
+      expect(anchor).toBeTruthy()
+      await anchor!.trigger('click')
       expect(scroll).toHaveBeenCalled()
       expect(wrapper.findAll('[data-wiki-toc-item]').length).toBeGreaterThan(3)
     } finally {
       wrapper.unmount()
     }
+  })
+})
+
+
+describe('WikiView recovery', () => {
+  function mountWith(rpc: ReturnType<typeof vi.fn>) {
+    return mount(WikiView, {
+      props: { requestRpc: rpc },
+      global: { stubs: { MarkdownRenderer: InlineMarkdown } },
+      attachTo: document.body,
+    })
+  }
+
+  it('文档列表读取失败时说清楚并给重试', async () => {
+    let fail = true
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'library.wiki.list') {
+        if (fail) throw new Error('boom')
+        return { articles: ARTICLES, navigation: NAVIGATION }
+      }
+      if (method === 'library.wiki.read') {
+        const slug = String(params?.slug ?? '')
+        return { slug, title: TITLES[slug] ?? slug, content: CONTENT[slug] ?? '' }
+      }
+      return {}
+    })
+    const wrapper = mountWith(rpc)
+    await settle()
+
+    expect(wrapper.get('[data-wiki-error]').text()).toContain('文档列表读取失败')
+    expect(wrapper.get('[data-wiki-retry]').exists()).toBe(true)
+
+    fail = false
+    await wrapper.get('[data-wiki-retry]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-wiki-error]').exists()).toBe(false)
+    expect(wrapper.get('[data-wiki-active-title]').text()).toContain('Sunday Wiki 目录')
+    wrapper.unmount()
+  })
+
+  it('正文读取失败时重试会重新读同一篇', async () => {
+    let failRead = true
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'library.wiki.list') return { articles: ARTICLES, navigation: NAVIGATION }
+      if (method === 'library.wiki.read') {
+        if (failRead) throw new Error('boom')
+        const slug = String(params?.slug ?? '')
+        return { slug, title: TITLES[slug] ?? slug, content: CONTENT[slug] ?? '' }
+      }
+      return {}
+    })
+    const wrapper = mountWith(rpc)
+    await settle()
+
+    expect(wrapper.get('[data-wiki-error]').text()).toContain('读取失败')
+    failRead = false
+    await wrapper.get('[data-wiki-retry]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-wiki-article]').text()).toContain('Sunday Wiki 目录')
+    wrapper.unmount()
+  })
+
+  it('没有随包文档时说明并给重试', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'library.wiki.list') return { articles: [], navigation: { index: '', groups: [] } }
+      return {}
+    })
+    const wrapper = mountWith(rpc)
+    await settle()
+
+    expect(wrapper.get('[data-wiki-empty]').text()).toContain('没有随包文档')
+    expect(wrapper.get('[data-wiki-retry]').exists()).toBe(true)
+    wrapper.unmount()
   })
 })

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'src/lamtools_core/plugins/bundled/
 
 def _runtime(tmp_path):
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
-    plugin = host.get('network-exploration')
+    plugin = host.get('easynet')
     assert plugin is not None
     context = PluginContext(
         work_root=tmp_path,

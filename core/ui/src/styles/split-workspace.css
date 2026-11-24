@@ -85,6 +85,11 @@
    右侧留白收到分界线旁 8px，边界本身交给 .ws2-divider 那条常显的 1px 细线；左侧通道保持不变。
    线程的 width / 负外边距 / 内边距用同一组变量推，盒子不会因为只改一侧而溢出主区)。 */
 .workspace-shell--split .workspace-main { --main-right-padding: 0px; padding-right: calc(var(--ws2-yield-right, 0px) + var(--main-right-padding)); }
+/* user:“分屏布局下，消息流尾部区域会低于输入框上沿，导致尾部消息被遮挡”+
+   (分屏主区用输入框实测高度预留底部空间，同时保留浮窗让位所需的空间)。 */
+.workspace-shell--split .workspace-main:not(.workspace-main--no-composer) {
+  padding-bottom: max(var(--ws2-yield-bottom, 0px), calc(var(--composer-height, 120px) + var(--composer-rest-bottom, 16px)));
+}
 .workspace-shell--split .thread {
   width: calc(100% + var(--main-x-padding) + var(--main-right-padding));
   margin-left: calc(-1 * var(--main-x-padding));
@@ -111,7 +116,8 @@
   max-width: calc(var(--composer-column-width) - var(--space-2) * 2);
 }
 .workspace-shell--split .composer-root--floating > .floating-composer { transition: none; }
-.workspace-shell--split.workspace-shell--composer-center .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--space-4)); transform: translateX(-50%); }
+/* user:“尾部消息被遮挡”+(分屏输入框与主区的底部留白使用同一间距)。 */
+.workspace-shell--split.workspace-shell--composer-center .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--composer-rest-bottom, 16px)); transform: translateX(-50%); }
 @media (prefers-reduced-motion: reduce) { .split-workspace *, .split-entry { transition: none !important; animation: none !important; } }
 
 /* user:“标签和角铁太难看，重新设计”+(头部图标使用主区文字色的轻量幽灵按钮，不再是一排浅色方块)。 */

@@ -64,7 +64,11 @@ TERMUX_POOL="https://packages.termux.dev/apt/termux-main/pool/main"
 PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_RELEASE"
 PIP_INDEX="${PIP_INDEX_URL:-https://pypi.org/simple}"
 
-RUNTIME_VERSION="1-$(date -u +%Y%m%d%H%M)"
+# user:“桌面端如果更新，手机端应该能够做到无需独立维护自动同步升级”+(版本号里带上核心
+# 版本：核心一动运行时就换号，装上新包时宿主据此整体替换 rootfs，而不是像现在这样
+# 静静地继续跑 0.3.38 的旧后端，把新界面发来的参数一律拒掉)。
+CORE_STAMP="$(sed -n 's/^version = "\([^"]*\)".*$/\1/p' "$CORE_DIR/pyproject.toml" | head -1 | tr -d '\r')"
+RUNTIME_VERSION="1-${CORE_STAMP:-unknown}-$(date -u +%Y%m%d%H%M)"
 
 log() { printf '\033[1;34m[runtime %s]\033[0m %s\n' "$ABI" "$*" >&2; }
 die() { printf '\033[1;31m[runtime %s] error:\033[0m %s\n' "$ABI" "$*" >&2; exit 1; }
@@ -217,6 +221,10 @@ def main() -> int:
         "--port", port,
         "--data-dir", "/root/.sunday/data",
         "--work-root", "/root/.sunday/work",
+        # user:“桌面端如果更新，手机端应该能够做到无需独立维护自动同步升级”+(数据库
+        # 必须落在绑定进容器的 userdata 里：以前它跟着安装目录走 /opt/sunday/data，
+        # 换运行时整个 rootfs 被替换，会话和消息一起消失)。
+        "--core-db", "/root/.sunday/data/core.db",
     ])
 
 if __name__ == "__main__":
@@ -229,6 +237,11 @@ if __name__ == "__main__":
         raise SystemExit(3)
 PY
 sed -i 's/\r$//' "$ROOTFS/opt/sunday/start_core.py"
+# The database must live in the bind-mounted userdata, never in this image: a version
+# bump replaces the whole rootfs, and a DB that moved with it would take every session,
+# message and attachment with it.
+grep -q -- '"--core-db", "/root/.sunday/data/core.db"' "$ROOTFS/opt/sunday/start_core.py" \
+  || die "start_core.py does not pin --core-db inside /root/.sunday: updating the runtime would wipe the database"
 
 # ---------------------------------------------------------------- proot binaries
 JNI="$OUT/$ABI/jniLibs/$ANDROID_ABI"

@@ -216,9 +216,8 @@ export function useComposerLayout(options: ComposerLayoutOptions) {
     }
     if (typeof ResizeObserver === 'undefined') return
 
-    resizeObserver = new ResizeObserver(() => {
-      measureComposer()
-    })
+    // user:“尾部消息被遮挡”+(下一帧同步输入框的高度，避免在尺寸通知里同步改变消息区布局)。
+    resizeObserver = new ResizeObserver(scheduleMeasure)
     resizeObserver.observe(composer)
   }
 

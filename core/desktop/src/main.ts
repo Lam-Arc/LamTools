@@ -130,6 +130,12 @@ async function init() {
   }
 
   if (!apiBase) throw new Error('Sunday backend API unavailable')
+  // user:“全部处理并继续寻找”+(Core 换端口时，重新绑定所有使用旧地址的本机界面服务)。
+  await listen('backend-address-changed', () => window.location.reload())
+  if (await invoke<string>('get_api_base') !== apiBase) {
+    window.location.reload()
+    return
+  }
   const transport = createDirectTransport({ apiBase: `${apiBase}/api/core` })
   const runtime = createLamToolsRuntime({
     transport,

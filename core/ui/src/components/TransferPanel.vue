@@ -164,7 +164,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** 重试一次发送：由发起方重新走「发送到设备」，这里只负责请求。 */
-  (event: 'retry', payload: { path: string; name: string }): void
+  (event: 'retry', payload: { id: string; path: string; name: string }): void
 }>()
 
 const book = useTransferBookLifecycle({ invoke: props.invoke, now: props.now, listenToHost: !props.previewServices })
@@ -177,7 +177,8 @@ function retrySource(row: TransferRow): string {
 function onRetry(row: TransferRow): void {
   const path = retrySource(row)
   if (!path) return
-  emit('retry', { path, name: row.name })
+  // user:“全部处理并继续寻找”+(重试把传输编号交给原发送进程的管理方)。
+  emit('retry', { id: row.id, path, name: row.name })
 }
 
 /** 预览：一律走 `preview/` 的统一链路（灯箱），不在这里另写一套按扩展名分派。 */

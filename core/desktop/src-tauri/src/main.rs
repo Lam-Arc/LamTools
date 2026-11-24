@@ -1209,6 +1209,10 @@ fn main() {
             browser::browser_diagnostics,
             browser::browser_downloads,
             browser::browser_download,
+            browser::browser_download_takeover,
+            browser::browser_download_headers,
+            browser::browser_download_retry,
+            browser::browser_network_state,
             // user:“让 Agent Loop 能直接调用：打开/切换标签、快照、点击、输入、等待、截图”+
             // (M4 新增 5 条：只读 snapshot/screenshot，写操作 act/waitFor 走 human-owned 闸门)。
             browser::browser_snapshot,
@@ -1244,11 +1248,15 @@ fn main() {
             // user:“Android 前后台恢复”+(手机宿主回到前台时一次取全恢复所需的快照)。
             p2p_host::p2p_resume_state,
             p2p_host::p2p_devices,
+            p2p_host::p2p_pending,
+            p2p_host::p2p_confirm_device,
+            p2p_host::p2p_reject_device,
             p2p_host::p2p_revoke,
             p2p_host::p2p_allow,
             // user:“发送入口…选中后开始传输”“支持取消”“完成后可「打开所在文件夹」”+
             // (发送是宿主起一个 `sunday-p2p send` 进程；取消停掉它；定位交给系统文件管理器)。
             p2p_host::p2p_send_file,
+            p2p_host::p2p_retry_transfer,
             p2p_host::p2p_cancel_transfer,
             p2p_host::p2p_reveal_path,
             // user:“记住用户是否开启远程访问（持久化）”+(设备页的开关读写它；不新增窗口，
@@ -1362,8 +1370,17 @@ fn start_backend(
     app: &tauri::AppHandle,
     state: &BackendState,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    start_backend_with_preferred_port(app, state, None)
+}
+
+fn start_backend_with_preferred_port(
+    app: &tauri::AppHandle,
+    state: &BackendState,
+    mut preferred: Option<u16>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let result = backend_startup::retry_port_conflict(
-        || start_backend_attempt(app, state), || stop_backend(state),
+        || start_backend_attempt(app, state, preferred.take()),
+        || stop_backend(state),
     );
     if result.is_err() { stop_backend(state); }
     result
@@ -1372,11 +1389,14 @@ fn start_backend(
 fn start_backend_attempt(
     app: &tauri::AppHandle,
     state: &BackendState,
+    preferred: Option<u16>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let started_at = Instant::now();
     // user:“你给开发版改一下端口吧”+(开发实例优先用固定端口，被占时才退回随机空闲端口，
     // 避免和其它实例抢同一个监听。)
-    let port = if cfg!(debug_assertions) {
+    let port = if let Some(port) = preferred.filter(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok()) {
+        port
+    } else if cfg!(debug_assertions) {
         std::env::var("LAMTOOLS_DEV_BACKEND_PORT")
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
@@ -1838,36 +1858,64 @@ fn close_backend_job(state: &BackendState) {
 #[cfg(not(windows))]
 fn close_backend_job(_state: &BackendState) {}
 
-/// Poll the backend child process; if it exits outside the normal shutdown
-/// path (child was still registered), emit a `backend-crashed` event so the
-/// frontend can surface a recovery banner (audit 20 S3).
+/// Recover an exited backend or report the failure to the frontend.
 fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(2));
-        let state = app_handle.state::<BackendState>();
-        let mut guard = match state.child.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-        if guard.is_none() {
-            // Normal shutdown: stop_backend already took the child.
-            return;
-        }
-        // user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(异常退出原来只打
-        // 一行 eprintln、退出码被 _status 丢掉，事后完全无法判定是崩溃还是被外部
-        // 结束；这里把 reason 和 code 一起落盘。)
-        let (exited, code) = match guard.as_mut().map(|child| child.try_wait()) {
-            Some(Ok(Some(status))) => (true, exit_code_label(&status)),
-            Some(Ok(None)) => (false, String::new()),
-            _ => (true, "unknown".to_string()), // try_wait error — treat as gone
-        };
-        if exited {
-            *guard = None;
-            drop(guard);
-            close_backend_job(state.inner());
-            append_shell_log(&format!("backend exit reason=crash code={code} at={}", iso_stamp()));
-            let _ = app_handle.emit("backend-crashed", ());
-            return;
+    thread::spawn(move || {
+        let mut last_recovery = None::<Instant>;
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            let state = app_handle.state::<BackendState>();
+            let mut guard = match state.child.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+            if guard.is_none() {
+                // Normal shutdown: stop_backend already took the child.
+                return;
+            }
+            // user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(异常退出原来只打
+            // 一行 eprintln、退出码被 _status 丢掉，事后完全无法判定是崩溃还是被外部
+            // 结束；这里把 reason 和 code 一起落盘。)
+            let (exited, code) = match guard.as_mut().map(|child| child.try_wait()) {
+                Some(Ok(Some(status))) => (true, exit_code_label(&status)),
+                Some(Ok(None)) => (false, String::new()),
+                _ => (true, "unknown".to_string()), // try_wait error — treat as gone
+            };
+            if exited {
+                *guard = None;
+                drop(guard);
+                close_backend_job(state.inner());
+                append_shell_log(&format!("backend exit reason=crash code={code} at={}", iso_stamp()));
+                if state.quitting.load(Ordering::SeqCst) {
+                    return;
+                }
+                // user:“全部处理并继续寻找”+(Core 崩溃后有限恢复，优先重用原来的本机地址)。
+                if last_recovery.is_some_and(|started| started.elapsed() < Duration::from_secs(60)) {
+                    let _ = app_handle.emit("backend-crashed", ());
+                    return;
+                }
+                last_recovery = Some(Instant::now());
+                let previous = state.api_base.lock().ok().and_then(|value| value.clone());
+                let preferred = previous.as_deref()
+                    .and_then(|base| url::Url::parse(base).ok())
+                    .and_then(|url| url.port());
+                let api_base = match start_backend_with_preferred_port(&app_handle, state.inner(), preferred) {
+                    Ok(api_base) if !state.quitting.load(Ordering::SeqCst) => api_base,
+                    Ok(_) => return,
+                    Err(error) => {
+                        append_shell_log(&format!("backend restart failed: {error}"));
+                        let _ = app_handle.emit("backend-crashed", ());
+                        return;
+                    }
+                };
+                if let Ok(mut slot) = state.api_base.lock() {
+                    *slot = Some(api_base.clone());
+                }
+                if previous.as_deref() != Some(api_base.as_str()) {
+                    let _ = app_handle.emit("backend-address-changed", ());
+                }
+                p2p_host::core_ready(app_handle.state::<p2p_host::P2pHostState>().inner(), &api_base);
+            }
         }
     });
 }

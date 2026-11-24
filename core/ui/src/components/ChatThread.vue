@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, messageTurnActive(msg), messageTurnStatus(msg), messageActiveTurnId(msg), lockedMessageIds.has(msg.id), autoPlotMath, decisionsDisabled]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, messageTurnActive(msg), messageTurnStatus(msg), messageActiveTurnId(msg), lockedMessageIds.has(msg.id), autoPlotMath, decisionsDisabled, readEditBasis]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -23,6 +23,7 @@
       :turn-active="messageTurnActive(msg)"
       :turn-status="messageTurnStatus(msg)"
       :locked-message-ids="lockedMessageIds"
+      :read-edit-basis="readEditBasis"
       :auto-plot-math="autoPlotMath"
       :sub-agent-rows-inert="subAgentRowsInert"
       :decisions-disabled="decisionsDisabled"
@@ -57,7 +58,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import type { CoreAttachment, CoreMessage } from '@/types.ts'
+import type { CoreMessage, CoreMessageEditBasis, CoreMessageEditRequest } from '@/types.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 import type { CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
 import { assistantSegmentTurnId } from '@/appServer/selectors.ts'
@@ -101,6 +102,8 @@ const props = withDefaults(
     turnStatus?: string
     /** 最后一次上下文压缩边界之前的消息 id：编辑/分叉/回退入口在这些回合隐藏。 */
     lockedMessageIds?: Set<string>
+    /** user:“全修”+(编辑入口读取版本时不使整条消息列表随每次回执重绘)。 */
+    readEditBasis?: () => CoreMessageEditBasis | undefined
     /** Automatically plot supported display-math formulas in final answers. */
     autoPlotMath?: boolean
     /** 面板内部：子代理行明确不可点（点击不抛事件、无障碍标注不可交互）。 */
@@ -155,7 +158,7 @@ const emit = defineEmits<{
   'question-skip': [payload: { partId: string; groupId: string }]
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
-  'edit-message': [payload: EditMessagePayload]
+  'edit-message': [payload: CoreMessageEditRequest]
   'open-sub-agent': [ref: CoreSubAgentRef]
 }>()
 
@@ -169,13 +172,6 @@ interface DecisionOption {
 interface AssistantActionPayload {
   turnId: string
   content: string
-}
-
-interface EditMessagePayload {
-  turnId: string
-  content: string
-  /** 原消息附件（已上传，随编辑重新发送，无需重新上传） */
-  attachments?: CoreAttachment[]
 }
 
 // Stable function references (not inline arrows) so MessageView props keep
@@ -210,7 +206,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   emit('rollback-message', payload)
 }
 
-function onEditMessage(payload: EditMessagePayload): void {
+function onEditMessage(payload: CoreMessageEditRequest): void {
   emit('edit-message', payload)
 }
 

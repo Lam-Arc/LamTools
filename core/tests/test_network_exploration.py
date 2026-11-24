@@ -23,30 +23,35 @@ ROOT = Path(__file__).resolve().parents[1] / 'src/lamtools_core/plugins/bundled/
 
 def test_manifest_has_a_navigable_page_right_region_and_no_duplicate_agent_tools(tmp_path):
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
-    plugin = host.get('network-exploration')
+    plugin = host.get('easynet')
     assert plugin is not None
     ui = read_ui(plugin)
     assert any(page.id == 'network' and page.navigation for page in ui.pages)
     # user:“左侧入口就保留3个就行”+(左侧插件入口由可导航页面提供，不再声明空的 appRail 区域)。
     assert 'right' in {item.region for item in ui.regions}
-    assert plugin.raw.get('tools', []) == []
+    # user:“把 download 给做成一个工具”+(插件只声明自己那一份工具文件，不再复制宿主已有的工具)。
+    assert plugin.raw.get('tools', []) == ['./tools.jsonc']
+    from lamtools_core.plugin_system.capabilities import read_capabilities
+
+    names = [tool.name for tool in read_capabilities(plugin).tools]
+    assert names == ['network_download']
 
 
 def test_system_proxy_operations_are_auto_allowed_on_desktop(tmp_path):
-    # user:“network-exploration.system.apply 修改或恢复所选网络配置；我不希望这个东西再出现了，桌面可把它自动允许掉”+(系统代理的应用与恢复不再逐次弹审批，其他系统操作仍按原权限)。
+    # user:“easynet.system.apply 修改或恢复所选网络配置；我不希望这个东西再出现了，桌面可把它自动允许掉”+(系统代理的应用与恢复不再逐次弹审批，其他系统操作仍按原权限)。
     from lamtools_core.plugin_system.operation_bridge import read_operations
 
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
-    plugin = host.get('network-exploration')
+    plugin = host.get('easynet')
     assert plugin is not None
     permissions = {spec.name: spec.permission for spec in read_operations(plugin)}
-    assert permissions['network-exploration.system.apply'] == 'auto_allow'
-    assert permissions['network-exploration.system.restore'] == 'auto_allow'
+    assert permissions['easynet.system.apply'] == 'auto_allow'
+    assert permissions['easynet.system.restore'] == 'auto_allow'
 
 
 async def test_host_controls_one_rust_service_and_persistent_state(tmp_path):
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
-    plugin = host.get('network-exploration')
+    plugin = host.get('easynet')
     assert plugin is not None
     context = PluginContext(work_root=tmp_path, data_dir=tmp_path, permission_service=ApprovalGate(work_root=tmp_path, tool_permissions={}))
     handle = load_plugin_backend(plugin, context)
@@ -55,15 +60,15 @@ async def test_host_controls_one_rust_service_and_persistent_state(tmp_path):
     catalog = OperationCatalog()
     register_plugin_system_operations(catalog, host)
     try:
-        states = await asyncio.gather(*(catalog.execute('network-exploration.status', {}) for _ in range(3)))
+        states = await asyncio.gather(*(catalog.execute('easynet.status', {}) for _ in range(3)))
         assert all(result.status == 'ok' for result in states)
         assert len({result.payload['controller_pid'] for result in states}) == 1
         assert states[0].payload['proxy']['running'] is False
-        config = await catalog.execute('network-exploration.settings.update', {'revision': 0, 'settings': {'sample_seconds': 5}})
+        config = await catalog.execute('easynet.settings.update', {'revision': 0, 'settings': {'sample_seconds': 5}})
         assert config.status == 'ok'
-        stale = await catalog.execute('network-exploration.settings.update', {'revision': 0, 'settings': {'sample_seconds': 30}})
+        stale = await catalog.execute('easynet.settings.update', {'revision': 0, 'settings': {'sample_seconds': 30}})
         assert stale.status == 'error'
-        invalid = await catalog.execute('network-exploration.diagnose', {'target': 'example.com; whoami'})
+        invalid = await catalog.execute('easynet.diagnose', {'target': 'example.com; whoami'})
         assert invalid.status == 'error'
         process = handle.value.process
     finally:
@@ -108,14 +113,14 @@ async def test_real_aria2_download_pause_restart_resume_and_hash(tmp_path):
     worker.start()
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
     context = PluginContext(work_root=tmp_path, data_dir=tmp_path)
-    handle = load_plugin_backend(host.get('network-exploration'), context)
+    handle = load_plugin_backend(host.get('easynet'), context)
     await start_plugin_backend(handle, context)
-    remember_context('network-exploration', handle.context)
+    remember_context('easynet', handle.context)
     catalog = OperationCatalog()
     register_plugin_system_operations(catalog, host)
 
     async def invoke(method, params=None):
-        result = await catalog.execute('network-exploration.' + method, params or {})
+        result = await catalog.execute('easynet.' + method, params or {})
         assert result.status == 'ok', result.payload
         return result.payload
 
@@ -137,7 +142,7 @@ async def test_real_aria2_download_pause_restart_resume_and_hash(tmp_path):
         assert 0 < int(paused['completedLength']) < len(content)
         await stop_plugin_backend(handle)
         await start_plugin_backend(handle, context)
-        remember_context('network-exploration', handle.context)
+        remember_context('easynet', handle.context)
         recovered = await wait_for_task(gid, lambda task: task.get('status') == 'paused')
         assert recovered['status'] == 'paused'
         ranges.clear()
@@ -152,7 +157,7 @@ async def test_real_aria2_download_pause_restart_resume_and_hash(tmp_path):
         assert (handle.value.data_dir / 'downloads/sample.bin').read_bytes() == content
     finally:
         await stop_plugin_backend(handle)
-        forget_context('network-exploration')
+        forget_context('easynet')
         server.shutdown()
         server.server_close()
         worker.join()
@@ -173,13 +178,13 @@ async def test_integrated_mihomo_forwards_without_system_proxy_or_tun(tmp_path):
     worker.start()
     host = PluginHost(roots=[ROOT.parent], state_path=tmp_path / 'ledger.json')
     context = PluginContext(work_root=tmp_path, data_dir=tmp_path)
-    handle = load_plugin_backend(host.get('network-exploration'), context)
+    handle = load_plugin_backend(host.get('easynet'), context)
     await start_plugin_backend(handle, context)
-    remember_context('network-exploration', handle.context)
+    remember_context('easynet', handle.context)
     catalog = OperationCatalog()
     register_plugin_system_operations(catalog, host)
     async def invoke(method, params=None):
-        result = await catalog.execute('network-exploration.' + method, params or {})
+        result = await catalog.execute('easynet.' + method, params or {})
         assert result.status == 'ok', result.payload
         return result.payload
     try:
@@ -200,7 +205,7 @@ async def test_integrated_mihomo_forwards_without_system_proxy_or_tun(tmp_path):
         assert not (handle.value.data_dir / 'runtime/mihomo.yaml').exists()
     finally:
         await stop_plugin_backend(handle)
-        forget_context('network-exploration')
+        forget_context('easynet')
         server.shutdown()
         server.server_close()
         worker.join()

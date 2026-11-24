@@ -139,6 +139,31 @@ def test_write_actions_forward_only_structured_instructions():
     assert outcome["value"]["trust"] == "untrusted"
 
 
+def test_click_popup_returns_new_tab_without_listing_tabs():
+    # user:“后来他调 tabs 才看到 tt2685 和 tt2687 已经是视频页了”+(一次 click 回执就能定位新页)。
+    def respond(request: dict) -> None:
+        assert request["command"] == "browser_act"
+        assert request["args"]["tab"] == "t1"
+        browser_agent.submit_result({
+            "id": request["id"],
+            "ok": True,
+            "payload": {
+                "tab": "t2",
+                "url": "https://example.com/video",
+                "sourceTab": "t1",
+                "navigated": True,
+                "openedTabs": [{"tab": "t2", "url": "https://example.com/video"}],
+            },
+        })
+
+    outcome = _run_with_host(_call(action="click", tab="t1", ref="e26"), respond)
+    result = outcome["value"]
+    assert result["url"] == "https://example.com/video"
+    assert result["content"]["tab"] == "t2"
+    assert result["content"]["sourceTab"] == "t1"
+    assert result["content"]["openedTabs"][0]["tab"] == "t2"
+
+
 def test_high_risk_intent_needs_explicit_approval():
     seen: dict = {}
 

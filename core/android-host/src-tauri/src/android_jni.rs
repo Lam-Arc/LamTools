@@ -109,8 +109,9 @@ pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativePublis
     _class: JClass,
     keyboard: jni::sys::jint,
     top: jni::sys::jint,
+    bottom: jni::sys::jint,
 ) {
-    crate::publish_insets(keyboard as i64, top as i64);
+    crate::publish_insets(keyboard as i64, top as i64, bottom as i64);
 }
 
 /// The floating ring: its bridge class, cached the same way the picker caches its own.
@@ -195,6 +196,80 @@ mod overlay {
     }
 }
 
+/// 后台连接服务：与悬浮环同一套 JNI 桥模式，只换一个 Kotlin 类。
+///
+/// user:“优先保证连接的稳定”+(界面只表达开/关，Rust 通过这个薄桥调用 Android 服务；
+/// 真正的连接仍然只有 `sunday-p2p` 一套)。
+#[cfg(target_os = "android")]
+mod connection {
+    use std::sync::OnceLock;
+
+    use jni::objects::{GlobalRef, JValue};
+    use jni::JavaVM;
+
+    static VM: OnceLock<JavaVM> = OnceLock::new();
+    static CLASS: OnceLock<Pinned> = OnceLock::new();
+
+    struct Pinned(GlobalRef);
+
+    unsafe impl Send for Pinned {}
+    unsafe impl Sync for Pinned {}
+
+    pub fn remember(env: &mut jni::JNIEnv) {
+        if VM.get().is_none() {
+            if let Ok(vm) = env.get_java_vm() {
+                let _ = VM.set(vm);
+            }
+        }
+        if CLASS.get().is_none() {
+            if let Ok(class) = env.find_class("com/lamtools/sunday/core/ConnectionServiceBridge") {
+                if let Ok(global) = env.new_global_ref(class) {
+                    let _ = CLASS.set(Pinned(global));
+                }
+            }
+        }
+    }
+
+    pub fn call_unit(method: &str) -> Result<(), String> {
+        let vm = VM
+            .get()
+            .ok_or_else(|| "the Android runtime is not ready".to_owned())?;
+        let class = CLASS
+            .get()
+            .ok_or_else(|| "the connection service bridge is not ready".to_owned())?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|error| error.to_string())?;
+        env.call_static_method(&class.0, method, "()V", no_args())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn no_args() -> &'static [JValue<'static, 'static>] {
+        &[]
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn connection_call_unit(_method: &str) -> Result<(), String> {
+    Err("the connection service only exists on Android".to_owned())
+}
+
+#[cfg(target_os = "android")]
+pub fn connection_call_unit(method: &str) -> Result<(), String> {
+    connection::call_unit(method)
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_ConnectionServiceBridge_nativeRegister(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    connection::remember(&mut env);
+    println!("[sunday] connection service bridge registered");
+}
+
 /// False everywhere except Android, where the ring really exists.
 #[cfg(not(target_os = "android"))]
 pub fn overlay_call_bool(_method: &str) -> Result<bool, String> {
@@ -264,4 +339,15 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativePipMode(
 ) {
     overlay::remember(&mut env);
     crate::publish_pip_mode(active != 0);
+}
+
+/// 内置浏览器的桥：把 Kotlin 的 `BrowserBridge` 交出来，宿主才能给它下发矩形与导航。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_BrowserBridge_nativeRegister(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    crate::browser_host::remember(&mut env);
+    println!("[sunday] browser bridge registered");
 }

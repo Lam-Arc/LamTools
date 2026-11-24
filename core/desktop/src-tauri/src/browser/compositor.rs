@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
 use crate::browser::webview::Bounds;
-use crate::browser::{BrowserError, EVENT_PENDING_TAB};
+use crate::browser::BrowserError;
 
 #[cfg(windows)]
 fn pixel_size(bounds: Bounds) -> (i32, i32) {
@@ -158,6 +158,35 @@ mod win {
 
     thread_local! {
         static HOST: RefCell<Option<CompositorHost>> = const { RefCell::new(None) };
+    }
+
+    /// 前端下发的网络出口：`accelerator` 用 EasyNet 的本机加速端口，`system` 回到系统代理，
+    /// `direct` 不走代理。None 表示还没同步过，按原来的系统代理行为走。
+    static NETWORK_OVERRIDE: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+    fn network_override() -> Option<(String, String)> {
+        NETWORK_OVERRIDE.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 记录新出口并丢掉已缓存的环境，让之后创建的网页用新出口（已打开的不受影响）。
+    pub fn set_network_state(mode: &str, endpoint: &str) -> bool {
+        let mode = match mode.trim() {
+            "accelerator" | "direct" | "system" => mode.trim().to_string(),
+            _ => "system".to_string(),
+        };
+        if let Ok(mut slot) = NETWORK_OVERRIDE.lock() {
+            *slot = Some((mode, endpoint.trim().to_string()));
+        }
+        clear_environment_cache();
+        true
+    }
+
+    pub fn clear_environment_cache() {
+        HOST.with(|cell| {
+            if let Some(host) = cell.borrow_mut().as_mut() {
+                host.envs.clear();
+            }
+        });
     }
 
     fn take_pwstr(ptr: PWSTR) -> String {
@@ -383,7 +412,14 @@ mod win {
     fn build_environment_options() -> ICoreWebView2EnvironmentOptions {
         // user:“我在 Chrome 或者 Edge 搜索就是毫秒级响应，这里要卡很久”+
         // (把 Windows 系统代理显式传给合成 WebView2 环境，避免 WinHTTP 为 Direct 时直连超时)
-        let (proxy, bypass) = windows_system_proxy();
+        // user:“EasyNet 开了加速，浏览器立刻用上”+(出口由前端下发，没有下发时仍按系统代理)。
+        let (proxy, bypass) = match network_override() {
+            Some((mode, endpoint)) if mode == "accelerator" && !endpoint.is_empty() => {
+                (Some(endpoint), Some("localhost;127.*".to_string()))
+            }
+            Some((mode, _)) if mode == "direct" => (None, None),
+            _ => windows_system_proxy(),
+        };
         let args = format_environment_args(
             &crate::pet::browser_args_from_env(),
             proxy.as_deref(),
@@ -679,9 +715,8 @@ mod win {
                             if unsafe { args.Uri(&mut uri) }.is_ok() {
                                 let url = take_pwstr(uri);
                                 let _ = unsafe { args.SetHandled(true) };
-                                let _ = pop_app.emit_to(
-                                    "main",
-                                    EVENT_PENDING_TAB,
+                                crate::browser::emit_pending_tab(
+                                    &pop_app,
                                     crate::browser::PendingTabPayload {
                                         tab: pop_tab.clone(),
                                         url,

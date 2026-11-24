@@ -27,6 +27,7 @@ from .everything import (
     KIND_EXTENSIONS,
     SearchSpec,
     compile_query,
+    install_es,
 )
 from .file_ops import operate as operate_files
 from .file_ops import open_with_system, reveal_in_explorer
@@ -147,6 +148,7 @@ class LibraryFileService:
         self._thumb_cache: OrderedDict[str, tuple[float, str, bytes]] = OrderedDict()
         self._thumb_bytes = 0
         self._thumb_lock = threading.Lock()
+        self._engine_install: asyncio.Task[dict[str, Any]] | None = None
         self._siblings_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     # -- engine --------------------------------------------------------
@@ -155,6 +157,28 @@ class LibraryFileService:
         payload["asset_count"] = await self.store.count()
         payload["collections"] = len(await self.store.list_collections())
         return payload
+
+    async def install_engine(self) -> dict[str, Any]:
+        """用户点「下载查询工具」时安装官方 ES；不静默、不装服务。"""
+        # user:“修”+(多个请求共享一次安装，等待方断线也不会取消后台安装)。
+        task = self._engine_install
+        if task is None or task.done():
+            task = asyncio.create_task(self._install_engine(), name="library-everything-install")
+            self._engine_install = task
+            task.add_done_callback(self._finish_engine_install)
+        return await asyncio.shield(task)
+
+    def _finish_engine_install(self, task: asyncio.Task[dict[str, Any]]) -> None:
+        if self._engine_install is task:
+            self._engine_install = None
+        if not task.cancelled():
+            task.exception()  # The last waiter may have disconnected.
+
+    async def _install_engine(self) -> dict[str, Any]:
+        installation = await asyncio.to_thread(install_es, self.provider.es_install_dir())
+        self.provider.refresh()
+        status = await self.status()
+        return {"installation": installation, "status": status}
 
     # -- search --------------------------------------------------------
     async def search(self, payload: dict[str, Any]) -> dict[str, Any]:

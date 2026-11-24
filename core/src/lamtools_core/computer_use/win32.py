@@ -17,6 +17,11 @@ from dataclasses import dataclass
 
 IS_WINDOWS = os.name == "nt"
 
+# user:“运行失败 module 'ctypes' has no attribute 'WINFUNCTYPE'”+(这个模块是平台能力层，
+# 会被别处无条件 import；ctypes.WINFUNCTYPE 只有 Windows 才有，导入期不许炸。Windows 上
+# 行为不变，其它平台用一个不会被调用的占位类型)。
+WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+
 if IS_WINDOWS:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -362,7 +367,7 @@ def _last_error(prefix: str) -> Win32Error:
 # 显示器与虚拟桌面
 # ---------------------------------------------------------------------------
 
-_MONITOR_ENUM_PROC = ctypes.WINFUNCTYPE(
+_MONITOR_ENUM_PROC = WINFUNCTYPE(
     w.BOOL, w.HMONITOR, w.HDC, ctypes.POINTER(w.RECT), w.LPARAM
 )
 
@@ -543,7 +548,7 @@ def process_is_elevated(pid: int) -> bool:
     return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
 
 
-_ENUM_PROC = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+_ENUM_PROC = WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 
 
 def list_windows(*, exclude_pids: set[int] | None = None, include_hidden: bool = False) -> list[WindowInfo]:

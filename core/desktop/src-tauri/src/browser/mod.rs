@@ -52,6 +52,9 @@ pub const EVENT_SITE_DATA: &str = "lamtools://browser-site-data";
 pub const EVENT_DOWNLOAD: &str = "lamtools://browser-download";
 /// 越权自检结果（网页里能不能摸到 Tauri IPC）：只在诊断命令触发时发出。
 pub const EVENT_DIAGNOSTICS: &str = "lamtools://browser-diagnostics";
+/// 浏览器拦到一个可接管的下载，问前端要不要交给 EasyNet。
+/// 接管的请求头（Cookie / User-Agent）读完回传；前端等到这条再投递。
+pub const EVENT_DOWNLOAD_HEADERS: &str = "lamtools://browser-download-headers";
 /// 标签被关掉（含 Agent 自己关的）：界面据此把对应的分屏标签一起收掉，
 /// 否则会留下「原生网页已经没了、分屏还在」的死标签，表现为只看到一张首页。
 pub const EVENT_TAB_CLOSED: &str = "lamtools://browser-closed";
@@ -120,6 +123,7 @@ pub struct BrowserRuntime {
     pub downloads: download::DownloadRegistry,
     /// user:“ref 只在当前快照内有效”+(每个标签一份台账：上一份快照的编号立刻失效，写操作前先对账)。
     pub refs: HashMap<String, bridge::RefLedger>,
+    click_popups: HashMap<String, Vec<PendingTabPayload>>,
 }
 
 /// 一个等用户确认的权限请求。`ticket` 在 Windows 上是 COM deferral，只能回 UI 线程解析。
@@ -151,7 +155,17 @@ impl BrowserRuntime {
             certificate_allows: HashSet::new(),
             downloads: download::DownloadRegistry::new(),
             refs: HashMap::new(),
+            click_popups: HashMap::new(),
         }
+    }
+
+    fn capture_click_popup(&mut self, payload: &PendingTabPayload) -> bool {
+        let Some(popups) = self.click_popups.get_mut(&payload.tab) else { return false };
+        if !matches!(self.tabs.get(&payload.tab), Ok(tab) if tab.ownership.owner() == bridge::Owner::Agent) {
+            return false;
+        }
+        popups.push(payload.clone());
+        true
     }
 }
 
@@ -228,9 +242,44 @@ pub struct PendingTabPayload {
     pub user_initiated: bool,
 }
 
-/// 网页申请新窗口：Rust 只负责拦下来并通知前端，标签由前端布局模型创建。
+// user:“这是工具返回值和实际状态不同步”+(点击期间把原生新窗口请求交给该次操作，普通弹窗仍交给分屏)。
 pub fn emit_pending_tab(app: &AppHandle, payload: PendingTabPayload) {
+    if with_runtime(|rt| Ok(rt.capture_click_popup(&payload))).unwrap_or(false) {
+        return;
+    }
     let _ = app.emit_to("main", EVENT_PENDING_TAB, payload);
+}
+
+struct ClickPopupCapture {
+    app: AppHandle,
+    tab: Option<String>,
+}
+
+impl ClickPopupCapture {
+    fn begin(app: &AppHandle, tab: &str) -> Result<Self, BrowserError> {
+        with_runtime(|rt| {
+            if rt.click_popups.contains_key(tab) {
+                return Err(BrowserError::new("busy", "这个标签已有点击操作在执行", true));
+            }
+            rt.click_popups.insert(tab.to_string(), Vec::new());
+            Ok(())
+        })?;
+        Ok(Self { app: app.clone(), tab: Some(tab.to_string()) })
+    }
+
+    fn take(&mut self) -> Vec<PendingTabPayload> {
+        let Some(tab) = self.tab.take() else { return Vec::new() };
+        with_runtime(|rt| Ok(rt.click_popups.remove(&tab).unwrap_or_default())).unwrap_or_default()
+    }
+}
+
+impl Drop for ClickPopupCapture {
+    fn drop(&mut self) {
+        // 页面应答失败或调用取消时，已经发生的弹窗仍交给原来的前端处理流程。
+        for popup in self.take() {
+            let _ = self.app.emit_to("main", EVENT_PENDING_TAB, popup);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -324,6 +373,36 @@ pub struct DownloadPayload {
     pub record: download::DownloadRecord,
 }
 
+/// 只带三个白名单头的搬运结构；Cookie 不落盘、不进日志。
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadHeaders {
+    pub cookie: String,
+    pub user_agent: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadHeadersPayload {
+    pub tab: String,
+    pub url: String,
+    pub cookie: String,
+    pub user_agent: String,
+}
+
+pub fn emit_download_headers(app: &AppHandle, tab: &str, url: &str, headers: DownloadHeaders) {
+    let _ = app.emit_to(
+        "main",
+        EVENT_DOWNLOAD_HEADERS,
+        DownloadHeadersPayload {
+            tab: tab.to_string(),
+            url: url.to_string(),
+            cookie: headers.cookie,
+            user_agent: headers.user_agent,
+        },
+    );
+}
+
 pub fn emit_download(app: &AppHandle, tab: &str, record: download::DownloadRecord) {
     let _ = app.emit_to("main", EVENT_DOWNLOAD, DownloadPayload { tab: tab.to_string(), record });
 }
@@ -385,7 +464,7 @@ pub fn emit_fullscreen(app: &AppHandle, payload: FullscreenPayload) {
     let _ = app.emit_to("main", EVENT_FULLSCREEN, payload);
 }
 
-fn view_for(app: &AppHandle, tab: &str) -> Result<tauri::Webview, BrowserError> {
+pub(crate) fn view_for(app: &AppHandle, tab: &str) -> Result<tauri::Webview, BrowserError> {
     let label = label_for(tab).ok_or_else(BrowserError::tab_not_found)?;
     app.get_webview(&label).ok_or_else(BrowserError::tab_not_found)
 }
@@ -427,6 +506,16 @@ pub async fn browser_open(
     let engine = SearchEngine::default_engine();
     let target = url_policy::navigation_target(&url, &engine)?;
     let profile = BrowserProfile::parse(profile.as_deref().unwrap_or(""))?;
+    open_browser_tab(&app, &webview, target, opener_tab, profile).await
+}
+
+async fn open_browser_tab(
+    app: &AppHandle,
+    webview: &tauri::Webview,
+    target: url::Url,
+    opener_tab: Option<String>,
+    profile: BrowserProfile,
+) -> Result<OpenPayload, BrowserError> {
     // user:“临时会话不可用必须明确报错，绝不静默建成共享会话标签”+(隔离路径不存在时先把门关上)。
     if matches!(profile, BrowserProfile::Incognito) && !platform_win::supports_incognito() {
         return Err(temporary_session_unavailable());
@@ -434,7 +523,7 @@ pub async fn browser_open(
     let tab = with_runtime(|rt| rt.tabs.open_with_profile(target.to_string(), opener_tab, profile.clone()))?;
     let window = webview.window().clone();
     // user:“后台标签不销毁但也不可见”+(新标签先按 1×1 离屏创建，等前端下发 bounds 再显示)。
-    if let Err(error) = webview::create(&app, &window, &tab, &target, Bounds::hidden(), &profile).await {
+    if let Err(error) = webview::create(app, &window, &tab, &target, Bounds::hidden(), &profile).await {
         let _ = with_runtime(|rt| rt.tabs.close(&tab).map(|_| ()));
         // user:“失败后的降级方案需要重新批准”+(临时会话建不起来就是「不可用」，不退化成共享会话)。
         if matches!(profile, BrowserProfile::Incognito) {
@@ -446,7 +535,7 @@ pub async fn browser_open(
         }
         return Err(error);
     }
-    emit_state(&app, &tab);
+    emit_state(app, &tab);
     // user:“去掉原生命中区（LamToolsSnapOverlay）”+(命中区已删除：不再需要把子窗口抬到网页之上，
     // 窗口按钮由前端 DOM 直接调 `minimize_window` / `toggle_maximize_window`。
     // 原因见 `windows_snap_layout.rs` 顶部注释：`[snap-click]`/`[window-ctl]` 长期 0 命中，
@@ -1263,6 +1352,69 @@ pub fn browser_download(
     }
 }
 
+/// user:“修”+(保留命令兼容性，桌面下载事件无法确认原请求可重放，报告接管未开启)。
+#[tauri::command]
+pub fn browser_download_takeover(webview: tauri::Webview, enabled: bool) -> Result<bool, BrowserError> {
+    url_policy::require_main(&webview)?;
+    let _ = enabled;
+    Ok(false)
+}
+
+/// 读当前标签对该 URL 的 Cookie 与 User-Agent；结果用事件回传，不阻塞 UI 线程。
+#[tauri::command]
+pub fn browser_download_headers(
+    app: AppHandle,
+    webview: tauri::Webview,
+    tab: String,
+    url: String,
+) -> Result<(), BrowserError> {
+    url_policy::require_main(&webview)?;
+    if !download::handoff_candidate(&url) {
+        return Err(BrowserError::new("invalid_url", "只能把 HTTP 或 HTTPS 直链交给 EasyNet", false));
+    }
+    platform_win::read_download_headers(&app, &tab, &url);
+    Ok(())
+}
+
+/// 在原标签中重新请求一个已知可以直接打开的下载地址。
+#[tauri::command]
+pub fn browser_download_retry(
+    app: AppHandle,
+    webview: tauri::Webview,
+    tab: String,
+    url: String,
+) -> Result<(), BrowserError> {
+    url_policy::require_main(&webview)?;
+    if !download::handoff_candidate(&url) {
+        return Err(BrowserError::new("invalid_url", "只能重试 HTTP 或 HTTPS 下载", false));
+    }
+    let view = view_for(&app, &tab)?;
+    let parsed = url
+        .parse::<tauri::Url>()
+        .map_err(|_| BrowserError::new("invalid_url", "下载地址无效", false))?;
+    view.navigate(parsed)
+        .map_err(|error| BrowserError::internal(format!("重新下载失败：{error}")))
+}
+
+/// user:“EasyNet 开了加速，浏览器立刻用上；关掉就回到系统代理”+(只改之后创建的网页，已打开的要重开)。
+#[tauri::command]
+pub fn browser_network_state(
+    webview: tauri::Webview,
+    mode: String,
+    endpoint: Option<String>,
+) -> Result<bool, BrowserError> {
+    url_policy::require_main(&webview)?;
+    #[cfg(windows)]
+    {
+        return Ok(compositor::set_network_state(&mode, endpoint.as_deref().unwrap_or("")));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (mode, endpoint);
+        Ok(false)
+    }
+}
+
 /// user:“第三方网页无法越权调用 Tauri 命令”+(运行时自检：在浏览器标签里探三个全局并尝试越权调用)。
 #[tauri::command]
 pub fn browser_diagnostics(
@@ -1555,7 +1707,7 @@ impl ActInstruction {
 pub struct ActPayload {
     pub tab: String,
     pub op: String,
-    /// 页面 URL 是否在操作前后变了（导航提示；最终以 `browser_state` 为准）。
+    /// 操作是否改变页面 URL 或打开了新标签。
     pub navigated: bool,
     pub url: String,
     pub scroll: Option<ScrollOffset>,
@@ -1565,6 +1717,19 @@ pub struct ActPayload {
     pub trust: &'static str,
     pub source: &'static str,
     pub fetched_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_tab: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub opened_tabs: Vec<OpenedActTab>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub popup_errors: Vec<BrowserError>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenedActTab {
+    pub tab: String,
+    pub url: String,
+    pub owner: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2070,6 +2235,11 @@ pub async fn browser_act(
         })?;
         verdict?;
     }
+    let mut click_popups = if op == "click" {
+        Some(ClickPopupCapture::begin(&app, &tab)?)
+    } else {
+        None
+    };
     let temp = begin_agent_foreground(&app, &tab)?;
     let result = page_call(&app, &tab, "act", instruction.page_args(), bridge::DEFAULT_TIMEOUT).await;
     if let Some(temp) = temp {
@@ -2104,23 +2274,77 @@ pub async fn browser_act(
             return Err(error);
         }
     };
-    let navigated = raw.get("navigated").and_then(serde_json::Value::as_bool).unwrap_or(false);
-    let url = raw.get("url").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
-    let scroll = raw
-        .get("scroll")
-        .and_then(|value| serde_json::from_value::<ScrollOffset>(value.clone()).ok());
-    Ok(ActPayload {
-        tab: tab.clone(),
+    let mut opened_tabs = Vec::new();
+    let mut popup_errors = Vec::new();
+    if let Some(mut capture) = click_popups.take() {
+        // WebView2 的 NewWindowRequested 可能晚于页面的 WebMessage 回执到达。
+        // 给原生事件一个有上限的窗口，捕获期间界面仍可继续处理消息。
+        let popups = tauri::async_runtime::spawn_blocking(move || {
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            capture.take()
+        })
+        .await
+        .map_err(|error| BrowserError::internal(format!("读取新标签请求失败：{error}")))?;
+        for popup in popups {
+            match open_act_popup(&app, &webview, &tab, &popup.url).await {
+                Ok(opened) => opened_tabs.push(opened),
+                Err(error) => popup_errors.push(error),
+            }
+        }
+    }
+    let owner = current_owner(&tab);
+    Ok(build_act_payload(tab, op, &raw, owner, opened_tabs, popup_errors))
+}
+
+async fn open_act_popup(
+    app: &AppHandle,
+    webview: &tauri::Webview,
+    source: &str,
+    url: &str,
+) -> Result<OpenedActTab, BrowserError> {
+    let target = url_policy::parse_web(url)?;
+    let profile = with_runtime(|rt| Ok(rt.tabs.get(source)?.profile.clone()))?;
+    let opened = open_browser_tab(app, webview, target, Some(source.to_string()), profile).await?;
+    let url = with_runtime(|rt| Ok(rt.tabs.get(&opened.tab)?.url.clone()))?;
+    Ok(OpenedActTab { owner: current_owner(&opened.tab), tab: opened.tab, url })
+}
+
+fn build_act_payload(
+    tab: String,
+    op: &str,
+    raw: &serde_json::Value,
+    owner: String,
+    opened_tabs: Vec<OpenedActTab>,
+    popup_errors: Vec<BrowserError>,
+) -> ActPayload {
+    // user:“这是工具返回值和实际状态不同步”+(优先回报此次点击最终打开的原生标签，保留点击来源以便回看)。
+    let (tab, url, owner, navigated, scroll, source_tab) = if let Some(opened) = opened_tabs.last() {
+        (opened.tab.clone(), opened.url.clone(), opened.owner.clone(), true, None, Some(tab))
+    } else {
+        (
+            tab,
+            raw.get("url").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+            owner,
+            raw.get("navigated").and_then(serde_json::Value::as_bool).unwrap_or(false),
+            raw.get("scroll").and_then(|value| serde_json::from_value(value.clone()).ok()),
+            None,
+        )
+    };
+    ActPayload {
+        tab,
         op: op.to_string(),
         navigated,
         url,
         scroll,
-        owner: current_owner(&tab),
+        owner,
         resnapshot: false,
         trust: "untrusted",
         source: "web",
         fetched_at: now_iso(),
-    })
+        source_tab,
+        opened_tabs,
+        popup_errors,
+    }
 }
 
 /// user:“browser_waitFor 带超时与轮询上限；超时返回可读错误码”+(页面侧是事件驱动，
@@ -2305,6 +2529,63 @@ pub struct TabsPayload {
     pub tabs: Vec<TabEntry>,
 }
 
+#[cfg(test)]
+mod click_popup_tests {
+    use super::*;
+
+    fn popup(tab: &str, url: &str) -> PendingTabPayload {
+        PendingTabPayload {
+            tab: tab.to_string(),
+            url: url.to_string(),
+            opener: Some(tab.to_string()),
+            user_initiated: false,
+        }
+    }
+
+    // user:“这是工具返回值和实际状态不同步”+(同一次点击只收录来源匹配的原生新窗口请求)。
+    #[test]
+    fn click_popup_capture_is_scoped_to_the_opener() {
+        let mut runtime = BrowserRuntime::new();
+        let source = runtime.tabs.open("https://example.com/search".into(), None).unwrap();
+        let other = runtime.tabs.open("https://example.org/".into(), None).unwrap();
+        runtime.click_popups.insert(source.clone(), Vec::new());
+
+        assert!(!runtime.capture_click_popup(&popup(&other, "https://example.org/other")));
+        assert!(runtime.capture_click_popup(&popup(&source, "https://example.com/video")));
+        let captured = runtime.click_popups.remove(&source).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].url, "https://example.com/video");
+        assert!(!runtime.capture_click_popup(&popup(&source, "https://example.com/later")));
+    }
+
+    #[test]
+    fn click_popup_result_points_to_the_opened_tab() {
+        let raw = serde_json::json!({
+            "url": "https://example.com/search",
+            "navigated": false,
+            "scroll": {"x": 0, "y": 20}
+        });
+        let same_tab = build_act_payload("t1".into(), "click", &raw, "agent".into(), vec![], vec![]);
+        let same = serde_json::to_value(same_tab).unwrap();
+        assert_eq!(same["tab"], "t1");
+        assert_eq!(same["url"], "https://example.com/search");
+        assert_eq!(same["navigated"], false);
+        assert_eq!(same["scroll"]["y"].as_f64(), Some(20.0));
+        assert!(same.get("openedTabs").is_none());
+
+        let result = build_act_payload("t1".into(), "click", &raw, "agent".into(), vec![
+            OpenedActTab { tab: "t2".into(), url: "https://example.com/video".into(), owner: "agent".into() },
+        ], vec![]);
+        let opened = serde_json::to_value(result).unwrap();
+        assert_eq!(opened["sourceTab"], "t1");
+        assert_eq!(opened["tab"], "t2");
+        assert_eq!(opened["url"], "https://example.com/video");
+        assert_eq!(opened["navigated"], true);
+        assert_eq!(opened["openedTabs"][0]["tab"], "t2");
+        assert!(opened["scroll"].is_null());
+    }
+}
+
 #[tauri::command]
 pub fn browser_tabs(webview: tauri::Webview) -> Result<TabsPayload, BrowserError> {
     url_policy::require_main(&webview)?;
@@ -2451,6 +2732,8 @@ mod agent_tests {
         ActInstruction {
             op: op.to_string(),
             target: target.map(str::to_string),
+            selector: None,
+            form_value: None,
             text: None,
             clear: None,
             submit: None,

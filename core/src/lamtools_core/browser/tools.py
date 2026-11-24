@@ -33,6 +33,8 @@ BROWSER_TOOL_DESCRIPTION = (
     "在 Sunday 内置浏览器里看网页、点按钮、填表、等结果、截图、做搜索。"
     "固定流程：open 打开站点 → snapshot 拿 refs（可交互元素编号）→ click/type 等基于 ref 操作 "
     "→ waitFor 等结果 → screenshot 确认。"
+    # user:“这是工具返回值和实际状态不同步”+(点击打开新标签时，直接使用结果里返回的目标标签 ID)。
+    "click 打开新标签时，content.tab 是新标签 ID，content.sourceTab 是点击来源。"
     "搜索用 search：给出 query，返回结构化结果（标题/摘要/链接/来源/是否广告），"
     "再用 open_result 打开某条结果、read_page 读正文。"
     "不要用选择器坐标猜：先 snapshot，ref 只对当前快照有效，元素消失会报 stale_ref，重新 snapshot 即可。"
@@ -72,6 +74,8 @@ DEFAULT_TIMEOUTS = {
     "control": 8.0,
 }
 DEFAULT_ACT_TIMEOUT = 20.0
+# user:“这是工具返回值和实际状态不同步”+(给点击后创建原生标签预留时间，与桌面通道的时限一致)。
+CLICK_TIMEOUT = 30.0
 
 BROWSER_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -442,7 +446,7 @@ def handle(call: ToolCall, *, work_root: str | Path = "", approved: bool = False
         payload = browser_agent.call(
             "browser_act",
             {"tab": tab, "instruction": _instruction(args, action, approved=approved)},
-            timeout=DEFAULT_ACT_TIMEOUT,
+            timeout=CLICK_TIMEOUT if action == "click" else DEFAULT_ACT_TIMEOUT,
         )
         return {"action": action, **browser_agent.envelope(payload)}
 

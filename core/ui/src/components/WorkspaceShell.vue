@@ -33,7 +33,7 @@
     <CoreToastHost />
 
     <button
-      v-if="isNarrowViewport && (leftOpen || rightOpen)"
+      v-if="isNarrowViewport && ((leftDrawerAvailable && leftOpen) || rightOpen)"
       class="mobile-drawer-backdrop"
       type="button"
       :aria-label="t('关闭面板')"
@@ -43,7 +43,7 @@
     <!-- Phones have no hover edge: one visible control opens the drawer, and it leaves
          as soon as the drawer is open. -->
     <button
-      v-if="showDrawerToggle && isNarrowViewport && !leftOpen"
+      v-if="showDrawerToggle && isNarrowViewport && leftDrawerAvailable && !leftOpen"
       class="mobile-drawer-toggle"
       type="button"
       data-mobile-drawer-toggle
@@ -121,7 +121,10 @@
     ></div>
 
     <!-- ===== Left Drawer ===== -->
+    <!-- user:“侧栏的职责应可以退役掉了”+(手机端会话列表/项目切换/项目管理/插件/远程都已由
+         L1、环境项目面板和设置承载；这里只给桌面渲染，手机不再生成抽屉 DOM)。 -->
     <LeftSidebarShell
+      v-if="props.platform !== 'mobile'"
       :id="leftDrawerId"
       :open="leftDrawerShown"
       :pinned="leftPinned"
@@ -180,7 +183,7 @@
       aria-orientation="vertical"
       :aria-label="t('拖动调整左侧栏宽度')"
       :aria-valuemin="LEFT_DRAWER_WIDTH_MIN"
-      :aria-valuemax="LEFT_DRAWER_WIDTH_MAX"
+      :aria-valuemax="maxLeftWidth"
       :aria-valuenow="sidebarResizeValue"
       tabindex="0"
       @pointerdown="startSidebarResize"
@@ -519,7 +522,8 @@ const {
   openRightDrawer,
   closeDrawers,
   setSidebarCollapsed,
-  leftWidth,
+  effectiveLeftWidth,
+  maxLeftWidth,
   setLeftWidth,
   resetLeftWidth,
 } = useShellLayout({
@@ -534,6 +538,9 @@ const {
 })
 
 const projectSidebarToggleLabel = computed(() => t(leftDrawerShown.value ? '收起项目侧栏' : '打开项目侧栏'))
+// user:“手机抽屉里的会话侧栏”+(手机不再有会话侧栏：抽屉 DOM、左上角抽屉键、遮罩与左滑手势
+// 一起收口；会话列表由 L1 列表页承载，桌面端保持原样)。
+const leftDrawerAvailable = computed(() => props.platform !== 'mobile')
 
 watch(
   () => props.collapseLeftSidebar,
@@ -581,7 +588,8 @@ const SIDEBAR_RESIZE_BODY_CLASS = 'sidebar-is-resizing'
 const sidebarResizable = computed(
   () => leftOpen.value && leftPinned.value && !props.collapseLeftSidebar && !isNarrowViewport.value,
 )
-const sidebarResizeValue = computed(() => leftWidth.value ?? undefined)
+// user:“找出 3 个及以上优化”+(侧栏拖动与无障碍数值使用当前显示宽度)。
+const sidebarResizeValue = computed(() => effectiveLeftWidth.value ?? undefined)
 
 type SidebarResizeState = { pointerId: number; startX: number; startWidth: number }
 let sidebarResize: SidebarResizeState | null = null
@@ -589,15 +597,13 @@ let sidebarResize: SidebarResizeState | null = null
 function currentSidebarWidth(): number {
   const drawer = shellElement.value?.querySelector<HTMLElement>('.drawer-left')
   // 首帧或测试环境量不到布局时，回落到已保存的宽度，拖动仍从同一个数开始。
-  return Math.round(drawer?.getBoundingClientRect().width || leftWidth.value || 0)
+  return Math.round(drawer?.getBoundingClientRect().width || effectiveLeftWidth.value || 0)
 }
 
 function startSidebarResize(event: PointerEvent): void {
   if (event.button !== 0) return
   const startWidth = currentSidebarWidth()
   if (startWidth <= 0) return
-  // 先把当前宽度定成用户值：拖动途中窗口跨断点换档，不能把宽度拽回去。
-  setLeftWidth(startWidth)
   sidebarResize = { pointerId: event.pointerId, startX: event.clientX, startWidth }
   document.body.classList.add(SIDEBAR_RESIZE_BODY_CLASS)
   window.addEventListener('pointermove', onSidebarResizeMove)
@@ -866,7 +872,7 @@ function onSwipePointerUp(event: PointerEvent): void {
     Math.abs(deltaX) < Math.abs(deltaY) * SWIPE_AXIS_RATIO
   ) return
 
-  if (deltaX > 0) openLeftDrawer()
+  if (deltaX > 0 && leftDrawerAvailable.value) openLeftDrawer()
   if (deltaX < 0 && props.showRightPanel) openRightDrawer()
 }
 

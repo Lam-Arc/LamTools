@@ -16,7 +16,17 @@ import type {
 import { showToast } from '@/composables/useCoreToast.ts'
 import { TransportRpcError } from '@/transport/index.ts'
 import type { CoreSyncChangeNotification, CoreThreadGapNotification } from '@/appServer/client.ts'
-import { CoreRequestAcceptanceUnknownError } from '@/appServer/client.ts'
+import { CoreHistoryEditConflictError, CoreRequestAcceptanceUnknownError } from '@/appServer/client.ts'
+import {
+  PENDING_WRITE_TTL_MS,
+  pendingKey,
+  pendingWritesFor,
+  readWriteReceipt,
+  rememberPendingWrite,
+  settlePendingWrite,
+  writeReceiptResponse,
+  type PendingWriteMethod,
+} from '@/appServer/pendingWrites.ts'
 import { TransportRequestTimeoutError } from '@/transport/index.ts'
 import {
   CoreSessionStateStore,
@@ -64,6 +74,7 @@ export interface CoreAppServerThreadSwitchOptions {
  * must not be queued a second time.
  */
 export interface CoreSteerOutcome {
+  serverOwnsRecovery?: boolean
   applied: boolean
   /** The runtime itself filed the text for the next turn, so it must not be queued twice. */
   queued: boolean
@@ -78,6 +89,15 @@ export interface CoreSteerOutcome {
   reason: string
   /** Human-readable failure text (empty when applied). */
   message: string
+}
+
+function durableGuidanceReceipt(response: Record<string, unknown>): { serverOwnsRecovery?: true } {
+  // user:“全做”+(只有看到持久引导回执时，前端才把恢复职责交给服务端)。
+  const durable = Array.isArray(response.events) && response.events.some(event => (
+    isRecord(event) && event.method === 'turn/steered' && isRecord(event.payload)
+    && typeof event.payload.guidance_id === 'string' && Boolean(event.payload.guidance_id)
+  ))
+  return durable ? { serverOwnsRecovery: true } : {}
 }
 
 export interface CoreAppServerRuntimeState<
@@ -156,6 +176,7 @@ export function createCoreAppServerRuntimeController<
   // only guards the reaction, never the rendered state.
   const gapResyncs = new Set<string>()
   const uncertainResumes = new Map<string, string>()
+  const pendingNotices = new Map<string, string>()
   let threadSwitchQueue: Promise<void> = Promise.resolve()
   let threadSelectionGeneration = 0
 
@@ -241,6 +262,7 @@ export function createCoreAppServerRuntimeController<
     }
 
     const isCurrent = () => threadSelectionGeneration === generation && runtime.client === client
+    void reconcilePendingWrites(client, threadId, isCurrent)
     if (switchOptions.attachInBackground) {
       // Persisted content first (fast, bounded), live attach second (may wait
       // on a non-terminal turn). First paint no longer depends on the resume.
@@ -374,6 +396,8 @@ export function createCoreAppServerRuntimeController<
     await attached.connect({ threadId, lastSeenSeq: lastSeenSeq() })
     if (threadId) {
       const isCurrent = () => runtime.connectionGeneration === generation && runtime.client === attached
+        && runtime.activeThreadId === threadId
+      void reconcilePendingWrites(attached, threadId, isCurrent)
       if (switchOptions.attachInBackground) {
         await loadPersistedThread(attached, threadId, isCurrent)
         startBackgroundAttach(attached, threadId, isCurrent, switchOptions)
@@ -574,10 +598,32 @@ export function createCoreAppServerRuntimeController<
     showToast('notice', '消息较多，会话更新可能延迟。', 8000)
   }
 
+  const seenRollbacks = new Set<string>()
+  function reloadRolledBackThread(event: CoreAppEvent): void {
+    // user:“全做”+(替换消息的事件序号可能回退，收到提交后从服务端重读该会话，切换后不抢回界面)。
+    if (event.thread_id !== runtime.activeThreadId) return
+    const rollbackId = event.method === 'session/rollback' && event.payload?.snapshot_required
+      ? event.event_id
+      : event.method === 'turn/accepted' ? event.payload?.rollback_event_id : undefined
+    if (typeof rollbackId !== 'string' || !rollbackId || seenRollbacks.has(rollbackId)) return
+    if (seenRollbacks.size >= 100) seenRollbacks.delete(seenRollbacks.values().next().value!)
+    seenRollbacks.add(rollbackId)
+    void switchThreadNow(event.thread_id, { attachInBackground: true, lastSeenSeq: 0 }).catch(error => {
+      seenRollbacks.delete(rollbackId)
+      if (runtime.activeThreadId === event.thread_id) runtime.lastError = String(error)
+    })
+  }
+
   function enqueueEvent(event: CoreAppEvent) {
+    reloadRolledBackThread(event)
+    if (['turn/accepted', 'turn/steered', 'queue/itemAccepted'].includes(event.method) && event.client_message_id) {
+      settlePendingWrite(pendingKey(event.thread_id, event.client_message_id))
+    }
     if (event.method === 'turn/started' && event.client_message_id && event.turn_id) {
       const key = JSON.stringify([event.thread_id, event.turn_id])
       if (uncertainResumes.get(key) === event.client_message_id) uncertainResumes.delete(key)
+      // 事件就是业务回执：turn/started 到了，这条写就不用再跨重启提醒。
+      settlePendingWrite(pendingKey(event.thread_id || '', event.client_message_id))
     }
     // `thread/gap` is a control signal from the server's reliable lane, not an
     // event: it must never enter the event queue or the projection, it only
@@ -653,7 +699,7 @@ export function createCoreAppServerRuntimeController<
     }
   }
 
-  function applyResponse(response: Record<string, unknown>) {
+  function applyResponse(response: Record<string, unknown>, applyEvents = true) {
     if (Array.isArray(response.events)) {
       for (const event of response.events) {
         if (isRecord(event) && typeof event.method === 'string') options.onResponseEvent?.(event as unknown as CoreAppEvent)
@@ -666,7 +712,7 @@ export function createCoreAppServerRuntimeController<
     // Local-First switches can ask the server for events only. Apply those
     // events onto the already-hydrated local snapshot without replacing the
     // whole conversation object.
-    if (Array.isArray(response.events) && runtime.state) {
+    if (applyEvents && Array.isArray(response.events) && runtime.state) {
       // The hydrated snapshot is the authority for everything up to its
       // snapshot_seq. A fresh resume pages the conversation down to the newest
       // turns while last_seen_seq 0 re-delivers the journal from the beginning;
@@ -723,17 +769,27 @@ export function createCoreAppServerRuntimeController<
     // A caller may supply it so a send and its queue fallback share one
     // identity: the runtime dedupes both write paths on it.
     const messageId = clientMessageId || crypto.randomUUID()
-    const response = await requestMutation('turn/start', {
-      thread_id: threadId,
-      client_message_id: messageId,
-      input: inputItems,
+    const method = turnOptions.replace_turn_id ? 'turn/replace' : 'turn/start'
+    if (method === 'turn/replace' && !Number.isInteger(turnOptions.expected_revision)) {
+      throw new CoreHistoryEditConflictError()
+    }
+    const response = await requestTrackedMutation(method, {
       work_root: workRoot,
       // The turn/accepted + item/started events already carry everything the
       // UI needs; the response snapshot is a 56MB JSON.parse on huge threads
       // (~1s main-thread stall at send time). Skip it — callers can override.
       include_snapshot: false,
       ...turnOptions,
-    }, threadId, 60_000, true)
+      // user:“全修”+(参数组不能覆盖已固定的会话、正文或回执编号)。
+      thread_id: threadId,
+      client_message_id: messageId,
+      input: inputItems,
+    }, threadId, 60_000, method === 'turn/start')
+    if (method === 'turn/replace' && Array.isArray(response.events)) {
+      for (const event of response.events) {
+        if (isRecord(event)) reloadRolledBackThread(event as unknown as CoreAppEvent)
+      }
+    }
     applyResponse(response)
   }
 
@@ -745,18 +801,20 @@ export function createCoreAppServerRuntimeController<
   ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
-    const response = await requestMutation('queue/create', {
-      thread_id: threadId,
-      // Same identity rule as turn/start: reused by the send's busy fallback so
-      // a repeated queue write dedupes instead of double-adding the message.
-      client_message_id: clientMessageId || crypto.randomUUID(),
-      input: inputItems,
+    const response = await requestTrackedMutation('queue/create', {
+      // user:“及优化速度/逻辑”+(桌面的下一轮消息在当前回合已经结束时主动触发派发)。
+      dispatch_if_idle: true,
       // 事件已携带全部状态变化与修订号；响应里的整包会话快照在大线程上是
       // 纯延迟（48MB 级解析），一律不要。
       include_snapshot: false,
       ...turnOptions,
+      thread_id: threadId,
+      // Keep the identity and contents captured by the submission, including on busy fallback.
+      client_message_id: clientMessageId || crypto.randomUUID(),
+      input: inputItems,
     }, threadId)
-    applyResponse(response)
+    // user:“全做”+(重试回来的旧接收事件只确认身份，禁止覆盖已编辑或删除的队列条目)。
+    applyResponse(response, response.replayed !== true)
   }
 
   async function updateQueueInput(threadId: string, queueItemId: string, text: string) {
@@ -768,6 +826,8 @@ export function createCoreAppServerRuntimeController<
       include_snapshot: false,
     }, threadId)
     applyResponse(response)
+    // user:“及优化速度/逻辑”+(条目在编辑期间已出队时明确反馈，不能当成保存成功)。
+    if (response.applied === false) throw new Error('这条排队消息已发出或被移除，修改未保存')
   }
 
   async function deleteQueueInput(threadId: string, queueItemId: string) {
@@ -794,6 +854,7 @@ export function createCoreAppServerRuntimeController<
     return {
       applied: response.applied === true,
       reason: String(response.reason || ''),
+      ...durableGuidanceReceipt(response),
     }
   }
 
@@ -852,7 +913,7 @@ export function createCoreAppServerRuntimeController<
   ): Promise<CoreSteerOutcome> {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
-    const response = await requestMutation('turn/steer', {
+    const response = await requestTrackedMutation('turn/steer', {
       thread_id: threadId,
       turn_id: turnId,
       // user:“做吧”+(引导发送重试沿用提交身份)。
@@ -865,7 +926,8 @@ export function createCoreAppServerRuntimeController<
     // 后端拒绝时返回的是成功响应 + applied:false + reason，不是错误。调用方据此
     // 决定是否显示"已发送引导"，并把无处可引导的这条落到队列（不丢文本、不报错）。
     if (response.applied === true) {
-      return { applied: true, queued: false, submitted: false, turnId, reason: '', message: '' }
+      return { applied: true, queued: false, submitted: false, turnId, reason: '', message: '',
+        ...durableGuidanceReceipt(response) }
     }
     const reason = String(response.reason || '')
     // user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息，自动开启
@@ -943,7 +1005,7 @@ export function createCoreAppServerRuntimeController<
     // user:“做吧”+(恢复补充输入以提交为单位重试，不能借用另一条补充输入的身份)。
     const clientId = clientMessageId || uncertainResumes.get(key) || crypto.randomUUID()
     try {
-      const response = await requestMutation('turn/resume', {
+      const response = await requestTrackedMutation('turn/resume', {
         thread_id: threadId, turn_id: turnId, include_snapshot: false,
         client_message_id: clientId,
         // user:“跳过等于 done”+(跳过不落用户消息：恢复请求带一个显式标记，后端在
@@ -956,8 +1018,11 @@ export function createCoreAppServerRuntimeController<
       uncertainResumes.delete(key)
       applyResponse(response)
     } catch (error) {
-      if (error instanceof CoreRequestAcceptanceUnknownError) uncertainResumes.set(key, clientId)
-      else uncertainResumes.delete(key)
+      if (error instanceof CoreRequestAcceptanceUnknownError) {
+        uncertainResumes.set(key, clientId)
+      } else {
+        uncertainResumes.delete(key)
+      }
       throw error
     }
   }
@@ -1016,8 +1081,83 @@ export function createCoreAppServerRuntimeController<
           const retryParams = withExpectedRevision(params, sessionSnapshotRevision(runtime.state))
           return await runtime.client!.request(method, retryParams, timeoutMs)
         }
+        if (method === 'turn/replace') throw new CoreHistoryEditConflictError()
       }
       throw error
+    }
+  }
+
+  async function requestTrackedMutation(
+    method: PendingWriteMethod, params: Record<string, unknown>, threadId: string,
+    timeoutMs?: number, retryOnRevisionConflict = false,
+  ): Promise<Record<string, unknown>> {
+    const messageId = String(params.client_message_id)
+    const key = pendingKey(threadId, messageId)
+    if (pendingWritesFor(threadId).some(write => write.key === key)) {
+      // user:“全修”+(手动重试未确认消息时先查原凭据，只有查询成功且尚无回执才按原编号提交)。
+      let response: Record<string, unknown>
+      try {
+        response = await runtime.client!.request('thread/writeReceipts', {
+          thread_id: threadId, client_message_ids: [messageId],
+        }, 5_000)
+        if (!Array.isArray(response.events)) throw new Error('回执查询没有确认结果。')
+      } catch (error) {
+        throw new CoreRequestAcceptanceUnknownError(messageId, error)
+      }
+      const receipt = readWriteReceipt(response, method, threadId, messageId)
+      if (receipt) {
+        settlePendingWrite(key)
+        return writeReceiptResponse(method, receipt)
+      }
+    }
+    const now = Date.now()
+    rememberPendingWrite({ key, threadId, clientMessageId: messageId, method, createdAt: now,
+      expiresAt: now + PENDING_WRITE_TTL_MS })
+    try {
+      const response = await requestMutation(method, params, threadId, timeoutMs, retryOnRevisionConflict)
+      settlePendingWrite(key)
+      return response
+    } catch (error) {
+      if (!(error instanceof CoreRequestAcceptanceUnknownError)) settlePendingWrite(key)
+      throw error
+    }
+  }
+
+  async function reconcilePendingWrites(client: Client, threadId: string, isCurrent: () => boolean): Promise<void> {
+    // user:“全修”+(重连和重启打开会话时，只核对本地留下的请求编号，匹配后清账)。
+    const writes = pendingWritesFor(threadId)
+    let confirmed = 0
+    for (let offset = 0; offset < writes.length && isCurrent(); offset += 100) {
+      const batch = writes.slice(offset, offset + 100)
+      try {
+        const result = await client.request('thread/writeReceipts', {
+          thread_id: threadId, client_message_ids: batch.map(write => write.clientMessageId),
+        }, 5_000)
+        if (!isCurrent()) return
+        for (const write of batch) {
+          const receipt = readWriteReceipt(result, write.method, threadId, write.clientMessageId)
+          if (!receipt) continue
+          settlePendingWrite(write.key)
+          if (receipt.turn_id && write.method === 'turn/resume') {
+            const key = JSON.stringify([threadId, receipt.turn_id])
+            if (uncertainResumes.get(key) === write.clientMessageId) uncertainResumes.delete(key)
+          }
+          options.onResponseEvent?.(receipt)
+          confirmed += 1
+        }
+      } catch {
+        break
+      }
+    }
+    if (!isCurrent() || !writes.length) return
+    const unresolved = pendingWritesFor(threadId)
+    const signature = unresolved.map(write => write.clientMessageId).join(',')
+    if (signature && pendingNotices.get(threadId) !== signature) {
+      pendingNotices.set(threadId, signature)
+      showToast('notice', `这条会话中还有 ${unresolved.length} 条消息暂未确认送达。`)
+    } else if (!signature) {
+      pendingNotices.delete(threadId)
+      if (confirmed) showToast('notice', `已核对 ${confirmed} 条先前提交的消息。`)
     }
   }
 
@@ -2106,7 +2246,9 @@ function withExpectedRevision(
 function isRevisionConflict(error: unknown): boolean {
   if (error instanceof TransportRpcError) {
     if (error.code === 'REVISION_CONFLICT') return true
-    return isRecord(error.data) && error.data.code === 'REVISION_CONFLICT'
+    // IPC hosts may preserve the server message without its structured data.
+    return (isRecord(error.data) && error.data.code === 'REVISION_CONFLICT')
+      || error.message.includes('Revision conflict; refresh the session')
   }
   if (!isRecord(error)) return false
   if (error.code === 'REVISION_CONFLICT') return true

@@ -124,7 +124,11 @@ describe('一档 = 改造前的原样（回归锁）', () => {
   const source = readFileSync(resolve(__dirname, '../src/components/CoreRunModeCapsule.vue'), 'utf8')
 
   it('两格恢复 132px 等宽 + 15px 字号（不再按内容缩到最小）', () => {
-    expect(source).toMatch(/\.core-run-mode__pill \{[^}]*flex: 0 0 132px/)
+    // user:“这里中间没有对齐，改一下”+(两格必须有确定宽度：只写 flex-basis 时，外层容器
+    // 的 max-content 按文字宽算（约 135px），两格向右溢出，整组看着偏右)。
+    expect(source).toMatch(/\.core-run-mode__pill \{[^}]*width: 132px/)
+    expect(source).toMatch(/\.core-run-mode__pill \{[^}]*flex: 0 0 auto/)
+    expect(source).not.toMatch(/\.core-run-mode__pill \{[^}]*flex: 0 0 132px/)
     expect(source).toMatch(/\.core-run-mode__pill \{[^}]*font-size: 15px/)
   })
 
@@ -143,6 +147,7 @@ describe('一档 = 改造前的原样（回归锁）', () => {
   it('二档才允许收缩：每格 4em 起、字号收紧、文字可省略', () => {
     expect(source).toMatch(/\.core-run-mode--compact \.core-run-mode__pill \{[^}]*min-width: 4em/)
     expect(source).toMatch(/\.core-run-mode--compact \.core-run-mode__pill \{[^}]*flex: 1 1 0/)
+    expect(source).toMatch(/\.core-run-mode--compact \.core-run-mode__pill \{[^}]*width: auto/)
     expect(source).toContain('text-overflow: ellipsis')
   })
 

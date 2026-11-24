@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   explainStatus,
+  isAwaitingApproval,
   isUsable,
   MAX_RECONNECT_ATTEMPTS,
   NOTICE_AFTER_MS,
@@ -55,5 +56,13 @@ describe('remote reconnect policy', () => {
     expect(explainStatus({ view: 'connecting' })).toContain('正在连接')
     expect(explainStatus({ view: 'offline' })).toContain('未开启')
     expect(explainStatus(null)).toContain('还没有连接')
+  })
+
+  // user:“电脑显示待确认设备，用户确认配对”+(待确认不是连接失败，界面要说清下一步)。
+  it('recognizes a device that is waiting for the computer to confirm', () => {
+    expect(isAwaitingApproval('这台设备正在等待电脑确认：请在电脑的「设备连接」页点「确认」后再连接')).toBe(true)
+    expect(isAwaitingApproval('[pairing_pending] 这台设备正在等待电脑确认')).toBe(true)
+    expect(isAwaitingApproval('这台设备已被移除授权')).toBe(false)
+    expect(isAwaitingApproval('')).toBe(false)
   })
 })

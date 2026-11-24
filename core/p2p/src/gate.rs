@@ -8,11 +8,13 @@
 //! 判定顺序就是安全边界：撤销记录优先于「已信任」与「首次配对」，否则一台被移除的设备
 //! 只要再扫一次旧码就能回来。
 
-use crate::pair::{self, PairingGrants};
+use crate::pair::{self, PairingGrants, PairingRequest};
 use crate::trust::TrustStore;
 
 /// 设备没有配对过（旧版本里这种情况会被自动信任）。
 pub const CODE_UNPAIRED: &str = "device_unpaired";
+/// 设备已扫码，但电脑还没确认这次配对。
+pub const CODE_PAIRING_PENDING: &str = "pairing_pending";
 /// 设备被用户移除过，且这次没有带上新的配对票。
 pub const CODE_REVOKED: &str = "device_revoked";
 /// 配对票过期。
@@ -29,13 +31,17 @@ pub enum Admission {
     Trusted,
     /// 刚用一张有效的一次性票完成配对。
     Paired,
+    /// 票有效，但还在等电脑上的用户确认；这次连接不授权。
+    Pending { reason: String },
     /// 拒绝。
     Rejected { code: &'static str, reason: String },
 }
 
 impl Admission {
+    /// user:“电脑显示待确认设备，用户确认配对”+(待确认不是已授权：这次连接不能调用
+    /// 任何远程能力)。
     pub fn is_accepted(&self) -> bool {
-        !matches!(self, Self::Rejected { .. })
+        matches!(self, Self::Trusted | Self::Paired)
     }
 }
 
@@ -56,7 +62,7 @@ pub fn admit(
     let revoked = store.is_revoked(peer);
     let trusted = store.is_trusted(peer);
 
-    // 一张送进来的票只有在这一步才会被消费：无论最终放不放行，先看它是否有效。
+    // 一张送进来的票只有在这一步才会被检查：签名、有效期、是不是给这台机器的。
     let presented = pair.map(|text| pair::verify(text, Some(server_id), now));
     let valid_ticket = match &presented {
         Some(Ok(ticket)) => Some(ticket.clone()),
@@ -65,27 +71,31 @@ pub fn admit(
 
     if revoked {
         // user:“撤权后是否允许重新配对：按「必须重新扫码」处理，不允许旧票据复活”+
-        // (被移除的设备想回来，只能让用户重新生成一张新码再扫一次；手上那张旧码不算数)。
-        match valid_ticket {
-            Some(ticket) if grants.consume(&ticket.nonce, ticket.expires_at) => {
-                store.allow(peer);
-                store.trust(peer, peer_name);
-                return Admission::Paired;
-            }
-            Some(_) => {
-                return Admission::Rejected {
-                    code: CODE_PAIRING_USED,
-                    reason: "这张配对二维码已经用过了，请在电脑上重新生成一张".to_owned(),
-                };
-            }
-            None => {
-                return Admission::Rejected {
-                    code: CODE_REVOKED,
-                    reason: "这台设备已被移除授权；要重新连接，请在电脑上重新生成二维码并扫码"
-                        .to_owned(),
-                };
-            }
-        }
+        // (新码也要经过电脑确认；撤销记录直到确认那一刻才清掉)。
+        return match valid_ticket {
+            Some(ticket) => match grants.request(
+                &ticket.nonce,
+                peer,
+                peer_name,
+                ticket.expires_at,
+                now,
+            ) {
+                PairingRequest::Waiting => Admission::Pending {
+                    reason: pending_reason(),
+                },
+                PairingRequest::TicketBusy | PairingRequest::TicketUsed => {
+                    Admission::Rejected {
+                        code: CODE_PAIRING_USED,
+                        reason: used_reason(),
+                    }
+                }
+            },
+            None => Admission::Rejected {
+                code: CODE_REVOKED,
+                reason: "这台设备已被移除授权；要重新连接，请在电脑上重新生成二维码并扫码"
+                    .to_owned(),
+            },
+        };
     }
 
     if trusted {
@@ -93,10 +103,12 @@ pub fn admit(
         if let Some(ticket) = valid_ticket {
             grants.consume(&ticket.nonce, ticket.expires_at);
         }
+        // 已经在名单里：任何过期的待确认申请都不该继续展示。
+        grants.cancel(peer);
         return Admission::Trusted;
     }
 
-    // user:“未知设备不得自动进入可信列表”+(这里是以前的安全缺口：第一次连接就被写进名单)。
+    // user:“陌生设备不能自动获得信任”+(有效票只登记申请，电脑确认前不写可信名单)。
     match presented {
         None => Admission::Rejected {
             code: CODE_UNPAIRED,
@@ -111,23 +123,36 @@ pub fn admit(
             };
             Admission::Rejected { code, reason: text }
         }
-        Some(Ok(ticket)) => {
-            if !grants.consume(&ticket.nonce, ticket.expires_at) {
-                return Admission::Rejected {
-                    code: CODE_PAIRING_USED,
-                    reason: "这张配对二维码已经用过了，请在电脑上重新生成一张".to_owned(),
-                };
-            }
-            store.trust(peer, peer_name);
-            Admission::Paired
-        }
+        Some(Ok(ticket)) => match grants.request(
+            &ticket.nonce,
+            peer,
+            peer_name,
+            ticket.expires_at,
+            now,
+        ) {
+            PairingRequest::Waiting => Admission::Pending {
+                reason: pending_reason(),
+            },
+            PairingRequest::TicketBusy => Admission::Rejected {
+                code: CODE_PAIRING_USED,
+                reason: "这张配对二维码正在给另一台设备申请配对，请重新生成一张".to_owned(),
+            },
+            PairingRequest::TicketUsed => Admission::Rejected {
+                code: CODE_PAIRING_USED,
+                reason: used_reason(),
+            },
+        },
     }
 }
 
-/// 已建立的连接还能不能继续调用 Core。
-///
-/// user:“撤权后 RPC 一律拒绝，返回明确错误码，不静默通过”+(每条远程调用前都问一次，
-/// 而不是只在握手时问；返回的原因直接进 `Frame::Error`，对端看到的是错误码而不是沉默)。
+fn pending_reason() -> String {
+    "这台设备正在等待电脑确认：请在电脑的「设备连接」页点「确认」后再连接".to_owned()
+}
+
+fn used_reason() -> String {
+    "这张配对二维码已经用过了，请在电脑上重新生成一张".to_owned()
+}
+
 pub fn authorize(store: &TrustStore, peer: &str) -> Result<(), (&'static str, String)> {
     if store.is_revoked(peer) {
         return Err((
@@ -210,9 +235,9 @@ mod tests {
         }
     }
 
-    /// user:“扫码即可完成配对，不给普通用户加额外步骤”+(一张有效票就够：放行并写进名单)。
+    /// user:“电脑显示待确认设备，用户确认配对”+(扫码只登记申请；确认后才写名单)。
     #[test]
-    fn a_valid_ticket_pairs_the_device_in_one_step() {
+    fn a_valid_ticket_waits_for_the_computer_to_confirm() {
         let mut s = setup();
         let ticket = s.ticket(1_000);
         let result = admit(
@@ -224,9 +249,38 @@ mod tests {
             Some(&ticket),
             1_010,
         );
-        assert_eq!(result, Admission::Paired);
+        assert!(matches!(result, Admission::Pending { .. }));
+        assert!(!result.is_accepted());
+        assert!(!s.store.is_trusted("phone-1"));
+        assert_eq!(s.grants.pending_devices().len(), 1);
+        let nonce = pair::verify(&ticket, None, 1_010).unwrap().nonce;
+        assert!(!s.grants.is_used(&nonce));
+
+        // 电脑点了「确认」：写可信名单并消费这张票。
+        let pending = s.grants.confirm("phone-1").expect("pending");
+        s.store.trust(&pending.id, &pending.name);
         assert!(s.store.is_trusted("phone-1"));
-        assert!(s.grants.is_used(&pair::verify(&ticket, None, 1_010).unwrap().nonce));
+        assert!(s.grants.is_used(&nonce));
+    }
+
+    /// user:“配对授权不等于授予全部远程控制权限”+(确认之前任何调用都不能通过)。
+    #[test]
+    fn a_pending_device_has_no_rights_until_it_is_confirmed() {
+        let mut s = setup();
+        let ticket = s.ticket(1_000);
+        let _ = admit(
+            &mut s.store,
+            &mut s.grants,
+            &s.server_id,
+            "phone-1",
+            "Phone",
+            Some(&ticket),
+            1_010,
+        );
+        assert!(authorize(&s.store, "phone-1").is_err());
+        let pending = s.grants.confirm("phone-1").expect("pending");
+        s.store.trust(&pending.id, &pending.name);
+        assert!(authorize(&s.store, "phone-1").is_ok());
     }
 
     /// user:“用过即失效”“重复使用要被拒绝”+(同一张票第二台设备拿来用必须失败)。
@@ -234,10 +288,11 @@ mod tests {
     fn the_same_ticket_cannot_pair_a_second_device() {
         let mut s = setup();
         let ticket = s.ticket(1_000);
-        assert_eq!(
+        assert!(matches!(
             admit(&mut s.store, &mut s.grants, &s.server_id, "phone-1", "Phone", Some(&ticket), 1_010),
-            Admission::Paired
-        );
+            Admission::Pending { .. }
+        ));
+        // 第一台还没确认，票还在 pending 里；第二台不能拿同一张码插队。
         let second = admit(
             &mut s.store,
             &mut s.grants,
@@ -327,10 +382,12 @@ mod tests {
     fn a_revoked_device_cannot_come_back_with_an_old_ticket() {
         let mut s = setup();
         let ticket = s.ticket(1_000);
-        assert_eq!(
+        assert!(matches!(
             admit(&mut s.store, &mut s.grants, &s.server_id, "phone-1", "Phone", Some(&ticket), 1_010),
-            Admission::Paired
-        );
+            Admission::Pending { .. }
+        ));
+        let pending = s.grants.confirm("phone-1").expect("pending");
+        s.store.trust(&pending.id, &pending.name);
         s.store.revoke("phone-1");
         let result = admit(
             &mut s.store,
@@ -362,7 +419,10 @@ mod tests {
             Some(&fresh),
             2_010,
         );
-        assert_eq!(result, Admission::Paired);
+        assert!(matches!(result, Admission::Pending { .. }));
+        let pending = s.grants.confirm("phone-1").expect("pending");
+        s.store.allow("phone-1");
+        s.store.trust(&pending.id, &pending.name);
         assert!(s.store.is_trusted("phone-1"));
         assert!(!s.store.is_revoked("phone-1"));
     }

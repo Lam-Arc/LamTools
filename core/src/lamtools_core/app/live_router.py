@@ -1275,7 +1275,7 @@ class CoreLiveConnection:
             if thread_id:
                 self.switch_thread_subscription(thread_id)
         params = request.params
-        if method == "turn.start" and self.browser_origin is not None:
+        if method in {"turn.start", "turn.replace"} and self.browser_origin is not None:
             # A browser page must not self-grant auto-approval: strip any
             # client-declared policy so the server-side runtimeControls
             # settings decide.  Non-browser callers (CLI / local processes)
@@ -1312,9 +1312,11 @@ def _normalize_method(method: str) -> str:
     aliases = {
         "thread/resume": "thread.resume",
         "thread/read": "thread.read",
+        "thread/writeReceipts": "thread.writeReceipts",  # user:“全修”+(断线核对只读，不重放写请求)。
         "thread/history": "thread.history",
         "thread/outline": "thread.outline",
         "turn/start": "turn.start",
+        "turn/replace": "turn.replace",  # user:“全做”+(编辑通过实时接口固定历史回合)。
         "turn/resume": "turn.resume",
         "turn/pause": "turn.pause",
         "turn/paused": "turn.pause",

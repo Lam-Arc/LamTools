@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -1122,22 +1123,35 @@ class CoreCheckpointConversationBackend:
         normalized_turn_id = str(turn_id or "").strip()
         if not normalized_turn_id:
             raise ValueError("turn_id is required")
-        events = await self.event_store.list_thread(db, thread_id=session_id)
-        turn_indexes = [
-            index for index, event in enumerate(events)
-            if str(event.turn_id or "") == normalized_turn_id
-        ]
-        if not turn_indexes:
+        # user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(在库内定位边界，避免读入尾部；后到的旧回合事件不得带进之后的回合)。
+        model = self.event_store.event_model
+        in_session = model.thread_id == session_id
+        in_turn = model.turn_id == normalized_turn_id
+        first, last = (await db.execute(select(func.min(model.seq), func.max(model.seq)).where(in_session, in_turn))).one()
+        if first is None:
             raise LookupError(f"Turn not found: {normalized_turn_id}")
-        boundary = max(turn_indexes) if include_turn else min(turn_indexes) - 1
-        kept_events = events[: boundary + 1] if boundary >= 0 else []
-        boundary_seq = int(kept_events[-1].seq or 0) if kept_events else 0
+        if include_turn:
+            boundary = int(last)
+            if last > first:
+                next_turn = await db.scalar(select(model.seq).where(
+                    in_session, model.seq > first, model.seq < last, model.turn_id != normalized_turn_id,
+                    model.method.in_(("turn/accepted", "turn/started")),
+                ).order_by(model.seq).limit(1))
+                if next_turn is not None:
+                    boundary = int(await db.scalar(select(func.max(model.seq)).where(
+                        in_session, in_turn, model.seq < next_turn,
+                    )) or 0)
+        else:
+            boundary = int(await db.scalar(select(func.max(model.seq)).where(in_session, model.seq < first)) or 0)
+        kept_events = await self.event_store.list_thread(db, thread_id=session_id, through_seq=boundary) if boundary else []
+        boundary_seq = int(kept_events[-1].seq) if kept_events else 0
+        last_event_seq = int(await db.scalar(select(func.max(model.seq)).where(in_session)) or 0) if include_turn else 0
         projection = CoreAppSnapshotProjector().reduce(session_id, kept_events)
         # Event replay reconstructs conversation items, but project ownership
         # and the user-facing title live only in the canonical session header.
         # Carry that header into the bounded projection so a turn-based fork
         # stays in the source project instead of becoming an orphan session.
-        source_snapshot = await self.snapshot_store.load(db, session_id)
+        source_snapshot = await self.snapshot_store.load_metadata(db, session_id)
         source_session = (
             source_snapshot.get("session")
             if isinstance(source_snapshot.get("session"), dict)
@@ -1151,7 +1165,7 @@ class CoreCheckpointConversationBackend:
             session_id=session_id,
             boundary_seq=boundary_seq,
             include_turn=include_turn,
-            last_event_seq=int(events[-1].seq or 0) if events else 0,
+            last_event_seq=last_event_seq,
             turn_id=normalized_turn_id,
         )
         return {
@@ -1244,19 +1258,24 @@ class CoreCheckpointConversationBackend:
                 if cutoff <= 0:
                     history: list[dict[str, Any]] = []
                 else:
-                    rows = list((await db.execute(
-                        select(CoreHistoryEntry).where(
+                    rows = (await db.scalars(
+                        select(CoreHistoryEntry.message_json).where(
                             CoreHistoryEntry.thread_id == session_id,
                             CoreHistoryEntry.seq <= cutoff,
                         ).order_by(CoreHistoryEntry.seq.asc())
-                    )).scalars())
-                    history = [copy.deepcopy(dict(row.message_json or {})) for row in rows]
-                runtime = await db.get(CoreRuntimeSession, session_id)
-                state = (
-                    copy.deepcopy(dict(runtime.runtime_state_json or {}))
-                    if runtime is not None and isinstance(runtime.runtime_state_json, dict)
-                    else {}
-                )
+                    )).all()
+                    history = [dict(row or {}) for row in rows]
+                # user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(摘要只取边界对应状态，没有旧摘要时直接使用保留的原始历史)。
+                if include_turn and boundary_seq == last_event_seq:
+                    runtime = await db.get(CoreRuntimeSession, session_id)
+                    state = dict(runtime.runtime_state_json or {}) if runtime is not None else {}
+                elif boundary_seq > 0:
+                    captured = await self._captured_context(
+                        db, session_id=session_id, boundary_seq=boundary_seq, include_history=False,
+                    )
+                    state = captured[1] if captured is not None else {}
+                else:
+                    state = {}
                 return history, state
         if boundary_seq <= 0:
             # Nothing precedes the removed turn, and "before the first turn"
@@ -1285,16 +1304,18 @@ class CoreCheckpointConversationBackend:
         *,
         session_id: str,
         boundary_seq: int,
+        include_history: bool = True,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
         """The history captured by the checkpoint sitting on ``boundary_seq``."""
-        row = (await db.execute(
-            # user:“修”+(一次读取同一边界的历史和摘要状态，禁止混用当前运行状态)。
-            select(CoreCheckpointV2SessionHistory.history_json, CoreCheckpointV2.runtime_state_json)
-            .join(
-                CoreCheckpointV2,
+        # user:“修”+(一次读取同一边界的历史和摘要状态，禁止混用当前运行状态)。
+        query = select(CoreCheckpointV2.runtime_state_json).join(CoreCheckpoint, CoreCheckpoint.id == CoreCheckpointV2.id)
+        if include_history:
+            query = query.add_columns(CoreCheckpointV2SessionHistory.history_json).join(
+                CoreCheckpointV2SessionHistory,
                 CoreCheckpointV2.id == CoreCheckpointV2SessionHistory.checkpoint_id,
             )
-            .join(CoreCheckpoint, CoreCheckpoint.id == CoreCheckpointV2.id)
+        row = (await db.execute(
+            query
             .where(
                 CoreCheckpoint.session_id == session_id,
                 CoreCheckpoint.status == "ready",
@@ -1304,11 +1325,11 @@ class CoreCheckpointConversationBackend:
             .order_by(CoreCheckpoint.created_at.desc())
             .limit(1)
         )).first()
-        if row is None or not isinstance(row[0], list):
+        if row is None or (include_history and not isinstance(row[1], list)):
             return None
         return (
-            [copy.deepcopy(item) for item in row[0] if isinstance(item, dict)],
-            copy.deepcopy(dict(row[1] or {})),
+            [copy.deepcopy(item) for item in row[1] if isinstance(item, dict)] if include_history else [],
+            copy.deepcopy(dict(row[0] or {})),
         )
 
     async def _replace_context_history(
@@ -1359,7 +1380,7 @@ class CoreCheckpointConversationBackend:
         authoritative snapshot before applying later deltas.
         """
 
-        snapshot = await self.snapshot_store.load(db, session_id)
+        snapshot = await self.snapshot_store.load_metadata(db, session_id)
         resolved_revision = int(target_revision or snapshot.get("revision") or 0)
         payload = {
             "type": "session",
@@ -1563,9 +1584,13 @@ class CoreCheckpointConversationBackend:
             # Write the bounded projection as captured: replayed events alone
             # cannot rebuild the session header, so a rebuild here would drop
             # the session's title and project ownership.
+            # user:“全修”+(历史回退可以降低消息游标，会话版本必须继续递增，旧编辑不能碰巧命中新分支)。
+            row = await db.get(CoreThreadSnapshot, session_id)
+            bounded_state = dict(projection["snapshot_json"])
+            bounded_state["revision"] = max(int(bounded_state.get("revision") or 0), int(getattr(row, "revision", 0) or 0))
             await SqlAlchemyThreadSnapshotStore(
                 CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
-            ).write_full_projection(db, session_id, dict(projection))
+            ).write_full_projection(db, session_id, {**projection, "snapshot_json": bounded_state})
         else:
             kept_events = [
                 event for event in payload["events"]
@@ -1857,6 +1882,11 @@ class CoreCheckpointConversationBackend:
             title=resolved_title,
             fork_title_base=fork_title_base,
         )
+        # user:“全做”+(同一次分叉的重试读原分叉凭据，后续从分叉再分叉时不继承凭据)。
+        metadata = projection["snapshot_json"]["session"]["metadata"]
+        metadata.pop("fork_request", None)
+        if options.get("fork_request"):
+            metadata["fork_request"] = options["fork_request"]
         # Split the forked full projection into item rows + metadata row.
         await SqlAlchemyThreadSnapshotStore(
             CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
@@ -2043,6 +2073,7 @@ def register_checkpoint_operations(
         checkpoint_id = str(request.payload.get("checkpoint_id") or "").strip()
         turn_id = str(request.payload.get("turn_id") or "").strip()
         new_session_id = str(request.payload.get("new_session_id") or "").strip() or None
+        client_request_id = str(request.payload.get("client_request_id") or "").strip()
         title = str(request.payload.get("title") or "").strip()
         if not session_id:
             return _operation_error(request, "session_id is required")
@@ -2054,31 +2085,52 @@ def register_checkpoint_operations(
                     event_store=app_event_store,
                     snapshot_store=thread_snapshot_store,
                 )
-                await turn_backend.require_inactive(session_id)
-                fork_session_id = str(new_session_id or uuid.uuid4().hex).strip()
+                if client_request_id and not new_session_id:
+                    identity = json.dumps([session_id, turn_id, client_request_id], ensure_ascii=False)
+                    new_session_id = uuid.uuid5(uuid.NAMESPACE_URL, f"lamtools:turn-fork:{identity}").hex
+                fork_session_id = new_session_id or uuid.uuid4().hex
                 if not fork_session_id or _root_session_id(fork_session_id) != fork_session_id:
                     return _operation_error(request, "new_session_id must identify a main session")
 
-                async def write_turn_fork(db: Any) -> tuple[ForkConversationResult, int]:
+                async def write_turn_fork(db: Any) -> tuple[dict[str, Any], int]:
+                    if client_request_id:
+                        existing = await db.get(CoreThreadSnapshot, fork_session_id)
+                        if existing is not None:
+                            metadata = ((existing.snapshot_json or {}).get("session") or {}).get("metadata") or {}
+                            receipt = metadata.get("fork_request")
+                            if (
+                                not isinstance(receipt, dict)
+                                or metadata.get("forked_from_session_id") != session_id
+                                or receipt.get("id") != client_request_id
+                                or receipt.get("turn_id") != turn_id
+                            ):
+                                raise ValueError("Fork session already exists")
+                            return {}, int(receipt["event_seq"])
+                    await _require_inactive_session_in_db(db, session_id)
                     payload, boundary_seq = await turn_backend.conversation_payload_through_turn(
                         db,
                         session_id=session_id,
                         turn_id=turn_id,
                     )
+                    fork_options: dict[str, Any] = {"turn_id": turn_id, "mode": "conversation_only"}
+                    if client_request_id:
+                        fork_options["fork_request"] = {
+                            "id": client_request_id, "turn_id": turn_id, "event_seq": boundary_seq,
+                        }
                     forked = await turn_backend.fork(
                         db,
                         source_session_id=session_id,
                         new_session_id=fork_session_id,
                         payload=payload,
                         title=title,
-                        options={"turn_id": turn_id, "mode": "conversation_only"},
+                        options=fork_options,
                     )
-                    return forked, boundary_seq
+                    return forked.session_payload, boundary_seq
 
-                forked, boundary_seq = await coordinator(work_root).write_coordinator.run(write_turn_fork)
+                forked_session, boundary_seq = await coordinator(work_root).write_coordinator.run(write_turn_fork)
                 return OperationResult(name=request.name, payload={
                     "session_id": fork_session_id,
-                    "session": forked.session_payload,
+                    "session": forked_session,
                     "mode": "conversation_only",
                     "turn_id": turn_id,
                     "event_seq": boundary_seq,
@@ -2164,8 +2216,12 @@ def _restore_label(scope: RestoreScope) -> str:
 
 async def _require_inactive_session(session_factory: async_sessionmaker, session_id: str) -> None:
     async with session_factory() as db:
-        runtime = await db.get(CoreRuntimeSession, session_id)
-        projection = await db.get(CoreThreadSnapshot, session_id)
+        await _require_inactive_session_in_db(db, session_id)
+
+
+async def _require_inactive_session_in_db(db: Any, session_id: str) -> None:
+    runtime = await db.get(CoreRuntimeSession, session_id)
+    projection = await db.get(CoreThreadSnapshot, session_id)
     runtime_status = str((runtime.runtime_state_json or {}).get("status") or "") if runtime is not None else ""
     projection_status = str((projection.snapshot_json or {}).get("status") or "") if projection is not None else ""
     if runtime_status in {"running", "waiting"} or projection_status in {"running", "waiting"}:
@@ -2451,21 +2507,23 @@ async def _next_fork_title(
         base = fallback_base.strip() or "新会话"
 
     source_work_root = str(source_metadata.get("work_root") or "")
-    rows = (
-        await db.execute(select(CoreThreadSnapshot.snapshot_json))
-    ).scalars().all()
+    # user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(分叉标题编号只读项目里的标题字段)。
+    header = CoreThreadSnapshot.snapshot_json["session"]
+    title_query = select(header["title"].as_string())
+    if source_work_root:
+        title_query = title_query.where(header["metadata"]["work_root"].as_string() == source_work_root)
+    titles = (await db.scalars(title_query)).all()
     used_numbers: set[int] = set()
-    for raw_state in rows:
-        state = raw_state if isinstance(raw_state, dict) else {}
-        session = state.get("session") if isinstance(state.get("session"), dict) else {}
-        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-        if source_work_root and str(metadata.get("work_root") or "") != source_work_root:
-            continue
-        match = _FORK_TITLE_SUFFIX.fullmatch(str(session.get("title") or "").strip())
+    for title in titles:
+        match = _FORK_TITLE_SUFFIX.fullmatch(str(title or "").strip())
         if match and match.group("base").rstrip() == base:
             used_numbers.add(int(match.group("number")))
     next_number = max(used_numbers, default=0) + 1
     return f"{base}（{next_number}）", base
+
+
+# user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(迁移对话结构的会话 ID 时保留用户正文、工具参数和其他原始内容)。
+_FORK_LITERAL_FIELDS = frozenset({"arguments", "content", "delta", "input", "output", "result", "text", "title", "summary"})
 
 
 def _replace_session_id(value: Any, source_session_id: str, fork_session_id: str) -> Any:
@@ -2474,8 +2532,9 @@ def _replace_session_id(value: Any, source_session_id: str, fork_session_id: str
         # well as in list values (item_order), and leaving keys stale breaks
         # the frontend lookup that joins the two.
         return {
-            _replace_session_id(key, source_session_id, fork_session_id): _replace_session_id(
-                item, source_session_id, fork_session_id
+            _replace_session_id(key, source_session_id, fork_session_id): (
+                copy.deepcopy(item) if key in _FORK_LITERAL_FIELDS
+                else _replace_session_id(item, source_session_id, fork_session_id)
             )
             for key, item in value.items()
         }

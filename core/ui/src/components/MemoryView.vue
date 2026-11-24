@@ -176,7 +176,7 @@
         <template v-else>
         <!-- ── 子文件夹 ── -->
         <!-- user:“确保视觉、功能和交互不退化”+(卡片内菜单的回车只操作菜单，不触发卡片打开)。 -->
-        <div v-if="childFolders.length" class="folder-grid" role="list" data-memory-folders>
+        <div v-if="childFolders.length && !searching" class="folder-grid" role="list" data-memory-folders>
           <article
             v-for="folder in childFolders"
             :key="folder.path"
@@ -198,8 +198,17 @@
           </article>
         </div>
 
+        <!-- user:“去找四个库中用户体验最差的点，处理掉”+(搜索没命中时说“没有匹配”并给一键清除，
+             不再把“没匹配”说成“这片记忆还是空的”；搜索时文件夹让位给文件结果)。 -->
+        <div v-if="searching && !listFiles.length" class="full-area-empty" data-memory-no-results>
+          <span class="full-area-empty-icon" aria-hidden="true"><SearchX :size="18" :stroke-width="1.8" /></span>
+          <h2 class="full-area-empty-title">{{ t("没有匹配的文件") }}</h2>
+          <p class="full-area-empty-hint">{{ t("换个关键词，或清除筛选条件。") }}</p>
+          <button class="library-button" type="button" data-memory-clear-filters @click="clearFilters">{{ t("清除筛选") }}</button>
+        </div>
+
         <!-- ── 空态 ── -->
-        <div v-if="!childFolders.length && !listFiles.length" class="full-area-empty" data-memory-empty>
+        <div v-else-if="!childFolders.length && !listFiles.length" class="full-area-empty" data-memory-empty>
           <span class="full-area-empty-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.8" /></span>
           <h2 class="full-area-empty-title">{{ emptyTitle }}</h2>
           <p class="full-area-empty-hint">{{ emptyHint }}</p>
@@ -320,6 +329,7 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  SearchX,
 } from 'lucide-vue-next'
 import type { CoreDurableRequest } from '@/durable/api.ts'
 import type { CoreProjectClient } from '@/projects/client.ts'
@@ -471,6 +481,9 @@ const listFiles = computed(() => {
       || item.name.toLowerCase().includes(keyword)
       || item.summary.toLowerCase().includes(keyword))
 })
+
+/** 搜索时文件夹让位给文件结果；空态据此区分“没匹配”与“这片记忆是空的”。 */
+const searching = computed(() => Boolean(query.value.trim()))
 
 const folderTrail = computed(() => {
   const parts = openFolder.value ? openFolder.value.split('/') : []
@@ -836,6 +849,11 @@ function folderItem(folder: { name: string; path: string }): MemoryItem {
 
 function goToFolder(dir: string): void {
   openFolder.value = dir
+  query.value = ''
+}
+
+/** 搜索没命中时的出口：清掉关键词，回到这一层的全部条目。 */
+function clearFilters(): void {
   query.value = ''
 }
 

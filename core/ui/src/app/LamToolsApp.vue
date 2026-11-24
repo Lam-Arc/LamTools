@@ -26,6 +26,7 @@
     :compact-chrome="appRuntime.platform !== 'mobile'"
     :require-left-sidebar="Boolean(sidebarNavView)"
     :class="{
+      'workspace-shell--mobile-chat-detail': mobileChatHeaderOpen,
       'workspace-shell--split': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile',
       'workspace-shell--main-replaced': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile' && Boolean(workspace.state.mainTab),
       'workspace-shell--browser-live': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile' && (workspace.tabs.value.some(e => e.tab.kind === 'browser' && Boolean(e.tab.resource)) || workspace.floats.value.some(f => f.tab.kind === 'browser' && Boolean(f.tab.resource))),
@@ -40,9 +41,9 @@
     :show-sidebar-search-action="false"
     :show-sidebar-plugins-action="false"
     :show-sidebar-settings-action="false"
-    :collapse-left-sidebar="Boolean((fullAreaView && !sidebarNavView) || (!fullAreaView && !activePluginMode && splitEnabled && !workspace.state.hidden && workspace.state.layout === 'browser'))"
+    :collapse-left-sidebar="appRuntime.platform === 'mobile' ? true : Boolean((fullAreaView && !sidebarNavView) || (!fullAreaView && !activePluginMode && splitEnabled && !workspace.state.hidden && workspace.state.layout === 'browser'))"
     :hide-main-header="Boolean(sidebarNavView)"
-    :show-drawer-toggle="!fullAreaView && !splitEnabled"
+    :show-drawer-toggle="!fullAreaView && !splitEnabled && appRuntime.platform !== 'mobile'"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
     :right-panel-hold="rightSidebarHold"
@@ -163,21 +164,6 @@
                如果没有用，就把它去掉”+(它发的是一个没人接的事件，是个死按钮；设备切换
                现在在输入框上方的设备菜单里，这里不再留一个没有反应的图标)。 -->
         </div>
-        <CoreProjectCreate
-          v-if="showProjectCreate && !activePluginMode"
-          :loading="projectCreateLoading"
-          :error="projectCreateError"
-          :transport="transport"
-          :local-only="appRuntime.capabilities.localProjects?.value === true"
-          @submit="createProject"
-          @cancel="closeProjectCreate"
-        />
-        <CoreProjectPicker
-          v-if="showProjectPicker && !activePluginMode"
-          :projects="projects"
-          @select="selectRegisteredProject"
-          @cancel="showProjectPicker = false"
-        />
       </div>
     </template>
 
@@ -243,36 +229,22 @@
       </SessionSidebar>
     </template>
 
-    <template v-if="showSidebarFooter" #sidebar-footer>
-      <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。
-          桌面远程连接在竖栏底部，页脚不再渲染。 -->
-      <!-- user:“手机模式下左竖栏的内容放在侧栏的最下方一排，不要文字仅图标”+(这一排
-           就是竖栏本身：模式、资料库、定时任务、插件、设置、远程连接，名称只留在悬停提示
-           与读屏标签里)。 -->
-      <div class="drawer-footer-rail" role="toolbar" :aria-label="t('主导航')">
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-chat :title="t('聊天')" :aria-label="t('聊天')" @click="openFromRail(() => onRailOpen('chat'))">
-          <House :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openFromRail(openArrange)">
-          <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openFromRail(openLibrary)">
-          <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openFromRail(openPlugins)">
-          <Blocks :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-settings :title="t('设置')" :aria-label="t('设置')" @click="openFromRail(openSettings)">
-          <Settings :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-remote :title="t('远程连接')" :aria-label="t('远程连接')" @click="openFromRail(openAccount)">
-          <MonitorSmartphone :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-      </div>
-    </template>
-
     <template #main-header>
+      <!-- user:“顶部栏：左侧返回会话列表，中间会话名称，次级文字显示 Agent / 设备状态，
+           右侧 `···` 更多菜单”+(手机 L2 顶部栏独立成条，消息区在它下面滚动；
+           列表页与整版界面不渲染这一条)。 -->
+      <MobileChatHeader
+        v-if="mobileChatHeaderOpen"
+        :title="activeSessionTitle"
+        :page-title="mobilePageTitle"
+        :tabs-count="mobilePageTabs.length"
+        :project-name="currentProjectGroup?.name"
+        :device-label="mobileDeviceLabel"
+        :device-state="mobileDeviceState"
+        @back="onMobileChatBack"
+        @tabs="mobileTabsOpen = true"
+        @more="openMobileChatMenu"
+      />
       <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。
            设置 / 插件例外：会话栏已经写着页名并列出分区，标题条整条撤掉，内容独占一页
            （整版界面这一层仍然成立，不会被下面的插件头部顶替）。 -->
@@ -340,6 +312,23 @@
       >
         <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
       </button>
+      <!-- user:“项目不应该和环境放在一个选项内”+(环境名单独一行；项目是列表里可折叠的父级，
+           当前项目只做标记；长按项目标题进项目菜单，新建项目在列表底部)。 -->
+      <MobileChatList
+        v-if="mobileChatListOpen"
+        :groups="coreProjectGroups"
+        :active-session-id="sidebarActiveSessionId"
+        :active-project-id="currentProjectGroup?.id"
+        :environment-name="mobileDeviceLabel"
+        :pinned-session-ids="pinnedSessionIds"
+        @open="openMobileSession"
+        @create="createMobileSession"
+        @create-session="createMobileSessionIn"
+        @pick-environment="mobileContextOpen = true"
+        @create-project="openMobileProjectCreate"
+        @session-menu="openMobileSessionMenu"
+        @project-menu="openMobileProjectMenu"
+      />
       <!-- 整版界面：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出。 -->
       <CoreSplitPluginPage v-if="fullAreaView === 'plugin' && mainPluginTab" :tab="mainPluginTab" :visible="true"
         :work-root="currentWorkRoot()" :request-rpc="requestConfigOperation" @open-page="openRelatedPluginPage" @open-file="openMainPluginFile" />
@@ -406,8 +395,10 @@
         <HistoryLoadingIndicator :active="historyLoading" />
         <!-- user:“在胶囊和输入框中间放标志语”“胶囊放在输入框和说明中间”+(空会话从上
              到下：说明语 → 运行模式分段控件 → 输入框；发过第一条消息后整块消失)。 -->
+        <!-- user:“有一个附件之后引导语和标题重叠”+(附件把输入框撑高，引导块没地方站了；
+             一旦有附件就收起引导块，只留输入框，避免压住顶部标题)。 -->
         <div
-          v-if="isEmptySession"
+          v-if="isEmptySession && !pendingAttachments.length"
           class="empty-session-hero"
           data-empty-session-hero
         >
@@ -435,6 +426,7 @@
           :turn-active="activeTurnRunning"
           :turn-status="latestStatus"
           :locked-message-ids="lockedMessageIds"
+          :read-edit-basis="readMessageEditBasis"
           :auto-plot-math="activeAppModeKey === 'study:study'"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
@@ -478,18 +470,17 @@
     <template #modals>
       <!-- user:“手机端内可以将分屏用全屏的方式展示，并在左上角保留返回键”+(同一套分屏，
            手机上整屏铺开，左上角一个返回键把分屏关掉，回到会话)。 -->
-      <div class="split-slot" :class="{ 'split-slot--mobile': appRuntime.platform === 'mobile', 'split-slot--open': splitEnabled }">
-        <button
-          v-if="appRuntime.platform === 'mobile' && splitEnabled"
-          type="button"
-          class="full-area-back split-slot__back"
-          :title="t('关闭分屏')"
-          :aria-label="t('关闭分屏')"
-          data-mobile-split-back
-          @click="closeMobileSplit()"
-        >
-          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+      <!-- user:“模型卡片也要改…同类问题”+(整版界面/设置打开时，手机的分屏槽仍然盖在上面：
+           界面明明有内容，视觉上却是一片空白。整版视图期间把它一起隐掉)。 -->
+      <!-- 手机不再借用分屏槽：它有自己的整页容器（single page = one screen）。 -->
+      <div
+        v-if="appRuntime.platform !== 'mobile'"
+        v-show="!fullAreaView && !activePluginMode"
+        class="split-slot"
+        :class="{ 'split-slot--open': splitEnabled }"
+      >
+        <!-- user:“注意出入口，进来页之后要能切、能返回”+(页面从会话栏下面开始，
+             返回与标签抽屉都在那条栏上；页内不再压一枚浮动返回键抢内容)。 -->
         <!-- user:“同时开启 browser 时无法切到别的页面”+(保持 CoreWorkspace 常驻并用 v-show 控制显隐，避免切回 Browser 时丢失几何尺寸测量而白屏；整版页面时置 visible=false 让原生网页同步让出层级) -->
         <CoreWorkspace v-show="splitEnabled && !fullAreaView && !activePluginMode" :controller="workspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
         <template #default="{ tab, pane, visible }">
@@ -497,7 +488,82 @@
         </template>
         </CoreWorkspace>
       </div>
+      <!-- user:“桌面的分屏标签页对于手机来说，等于换页”+(手机上的页就是整块屏幕：
+           会话栏留着当出口，页内容从上到下铺满；不再借用桌面的分屏几何)。 -->
+      <div
+        v-if="appRuntime.platform === 'mobile' && mobilePageKept"
+        v-show="Boolean(mobilePageTab)"
+        class="mobile-page"
+        data-mobile-page
+      >
+        <!-- user:“桌面的分屏标签页对于手机来说，等于换页”+(网页页自己带一条地址栏，
+             下面那块区域由宿主把原生网页按同一矩形摆上去；桌面那套分屏组件不参与手机)。 -->
+        <div v-if="mobilePageKept.tab.kind === 'browser'" class="mobile-page-web" data-mobile-page-web>
+          <div class="mobile-page-web__bar">
+            <span class="mobile-page-web__url" :class="{ 'is-error': mobilePageError }">{{ mobilePageError || mobilePageKept.tab.resource }}</span>
+            <button
+              type="button"
+              class="mobile-page-web__action"
+              :aria-label="t('刷新')"
+              data-mobile-page-reload
+              @click="reloadMobilePage"
+            >{{ t("刷新") }}</button>
+          </div>
+          <div class="mobile-page-web__surface" data-mobile-page-surface></div>
+        </div>
+        <CoreSplitContent
+          v-else
+          :key="mobilePageKept.tab.id"
+          :tab="mobilePageKept.tab"
+          :pane="mobilePageKept.pane"
+          :visible="Boolean(mobilePageTab)"
+          :controller="workspace"
+          :documents="splitDocuments"
+          :bindings="pageBindings"
+          :work-root="splitWorkRoot"
+          :transport="transport"
+          :messages="messages"
+          :active-session-id="activeSessionId || ''"
+          :member-statuses="sessionActivity.memberStatuses"
+          :member-status-records="sessionActivity.memberStatusRecords"
+          :durable-records="effectiveSubAgentRecords"
+          :member-wait-known="sessionActivity.memberWaitKnown"
+          :running-member-names="sessionActivity.runningMemberNames"
+          :main-running="activeTurnRunning"
+          @dirty="setSplitDirty"
+          @decision-select="handlePendingDecisionSelect"
+          @open-sub-agent="openSubAgentPane"
+        />
+      </div>
+      <!-- user:“桌面的分屏标签页对于手机来说，等于换页”+(抽屉是页面的总入口：切页、回会话、关页都在这里)。 -->
+      <MobileTabsDrawer
+        v-if="appRuntime.platform === 'mobile'"
+        :open="mobileTabsOpen"
+        :active-id="mobilePageId"
+        :session-title="activeSessionTitle"
+        :tabs="mobilePageTabs"
+        @close="mobileTabsOpen = false"
+        @select="openMobilePage"
+        @close-tab="closeMobilePage"
+      />
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
+      <!-- user:“手机抽屉里的会话侧栏”+(手机不再有会话抽屉，但新建/选择项目仍是手机要用的动作：
+           两个弹窗本来就 Teleport 到 body，这里挪到无条件渲染的插槽，两个平台都能弹出)。 -->
+      <CoreProjectCreate
+        v-if="showProjectCreate && !activePluginMode"
+        :loading="projectCreateLoading"
+        :error="projectCreateError"
+        :transport="transport"
+        :local-only="appRuntime.capabilities.localProjects?.value === true"
+        @submit="createProject"
+        @cancel="closeProjectCreate"
+      />
+      <CoreProjectPicker
+        v-if="showProjectPicker && !activePluginMode"
+        :projects="projects"
+        @select="selectRegisteredProject"
+        @cancel="showProjectPicker = false"
+      />
     </template>
 
     <template #runtime-overlay>
@@ -668,6 +734,64 @@
     </template>
   </WorkspaceShell>
 
+  <!-- user:“一级入口收敛为四项，底部常驻”+(手机底部导航：对话 / 工作区 / 任务 / 设置；
+       插件与远程连接收进设置，抽屉页脚不再重复摆一份)。 -->
+  <!-- user:“会话内不需要下面的导航栏”+(列表页保留四项导航；进到会话详情后它整条隐藏，
+       输入栏直接贴到底部，不再为导航留一条空档)。 -->
+  <MobileBottomNav
+    v-if="appRuntime.platform === 'mobile' && !mobileChatHeaderOpen"
+    :active="mobileNavActive"
+    @select="onMobileNavSelect"
+  />
+
+  <!-- user:“点击后打开环境与项目选择面板”+(先环境、再项目；选中项目即切换会话列表)。 -->
+  <!-- user:“项目不应该和环境放在一个选项内”+(这张面板只说运行环境；项目与会话在列表里按项目折叠，
+       新建项目也在列表底部，不再塞进这张面板)。 -->
+  <!-- user:“以及连接的入口在哪里？点击选择环境应该提供入口，这样才够直觉”+
+       (面板里除了当前环境，直接给一条「连接电脑」：扫码或粘贴票据，落到 设置 → 设备连接)。 -->
+  <MobileContextPicker
+    v-if="appRuntime.platform === 'mobile'"
+    :open="mobileContextOpen"
+    :environment-name="mobileDeviceLabel"
+    :remote-connected="mobileDeviceState === 'remote'"
+    @close="mobileContextOpen = false"
+    @connect="openMobileConnect"
+  />
+
+  <!-- user:“顶部 `··· → 会话信息`”+(L3 会话信息页：基础信息、置顶、导出、删除；
+       挂在应用层，切会话或删除后自动关闭)。 -->
+  <MobileSessionSettings
+    v-if="appRuntime.platform === 'mobile'"
+    :open="mobileSessionSettingsOpen"
+    :title="activeSessionTitle"
+    :project-name="currentProjectGroup?.name"
+    :device-label="mobileDeviceLabel"
+    :device-state="mobileDeviceState"
+    :created-at="mobileSessionRecord?.createdAt"
+    :pinned="mobileSessionPinned"
+    @close="mobileSessionSettingsOpen = false"
+    @rename="openMobileRename(activeSessionId || '')"
+    @toggle-pin="toggleMobileSessionPin(activeSessionId || '')"
+    @export="exportMobileActiveSession"
+    @delete="deleteMobileSession(activeSessionId || '')"
+  />
+
+  <!-- user:“长按置顶、重命名、归档、删除等操作”+(重命名复用确认弹窗的输入形态：
+       有输入、忙碌状态，键盘回车即保存)。 -->
+  <CoreConfirmDialog
+    :open="appRuntime.platform === 'mobile' && Boolean(mobileRenameSessionId)"
+    :title="t('重命名会话')"
+    input
+    :input-value="mobileRenameDraft"
+    :input-placeholder="t('会话名称')"
+    :loading="mobileRenameBusy"
+    :confirm-label="t('保存')"
+    data-mobile-session-rename-dialog
+    @update:input-value="mobileRenameDraft = $event"
+    @confirm="submitMobileRename"
+    @cancel="mobileRenameSessionId = null"
+  />
+
   <!-- user:“我不是说这个胶囊放在屏幕的最上方，紧贴屏幕上面吗”+(状态胶囊搬进覆盖层窗口，这里不留副本。) -->
 
   <ContextMenuHost />
@@ -727,6 +851,8 @@ import { t } from '@/i18n/index.ts'
 import { startBrowserAgentBridge } from '@/browser/agentBridge'
 
 import { loadUiLanguage } from '@/i18n/index.ts'
+// user:“网页收不起来”+(收起/关页由宿主按自己的 key 记账执行，界面这里只发命令)。
+import { invoke } from '@tauri-apps/api/core'
 import {
   computed,
   provide,
@@ -742,10 +868,7 @@ import { gsap } from 'gsap'
 import {
   ArrowDown,
   Bot,
-  House,
   ArrowLeft,
-  Blocks,
-  CalendarClock,
   Check,
   ChevronDown,
   ChevronUp,
@@ -753,7 +876,6 @@ import {
   Copy,
   FolderOpen,
   Globe,
-  Library,
   LoaderCircle,
   MonitorPlay,
   MonitorSmartphone,
@@ -769,6 +891,7 @@ import {
 } from 'lucide-vue-next'
 import type {
   CoreAttachment,
+  CoreMessageEditRequest,
   CoreSessionListItem,
   CoreSubAgentDurableRecord,
   CoreSubAgentRun,
@@ -789,11 +912,13 @@ import { createCoreProjectClient } from '@/projects/client.ts'
 import { createCoreProjectWorkspaceActions } from '@/projects/workspace.ts'
 import {
   lockedMessageIdsBeforeCompaction,
+  snapshotRevision,
   selectVisiblePendingDecisions,
   type CoreQueuedInput,
 } from '@/appServer/index.ts'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { NOTICE_AFTER_MS, shouldNotify } from '@/app/remoteReconnect.ts'
+import { isRetryableRpcError } from '@/app/rpcRetry.ts'
 import type { LamToolsRuntime, RuntimeFileSource } from '@/app/runtime.ts'
 import { buildCoreComposerHighlightSegments } from '@/composer/inputItems.ts'
 import { resolveChecklistGroups } from '@/runtime/checklist.ts'
@@ -813,6 +938,9 @@ import {
   showToast,
   type CoreComposerControls,
 } from '@/composables/index.ts'
+// user:“接管时把 Cookie 和 User-Agent 传给 aria2”+(浏览器下载由宿主统一投递给 EasyNet)。
+import { useBrowserDownloadHandoff } from '@/app/useBrowserDownloadHandoff'
+import { browserNetworkState } from '@/split/native'
 
 // user:“合并去重”+(附件托盘已并入输入栏，应用侧只保留待发附件状态)
 import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
@@ -821,6 +949,19 @@ import ChatThread from '@/components/ChatThread.vue'
 import { THEME_STUDIO_STORAGE_KEY } from '@/themeStudio/constants.ts'
 import { applyStoredPublishedTheme } from '@/themeStudio/bootstrap.ts'
 import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
+import MobileBottomNav, { type MobileNavKey } from '@/components/MobileBottomNav.vue'
+import MobileChatList from '@/components/MobileChatList.vue'
+import MobileContextPicker from '@/components/MobileContextPicker.vue'
+import MobileChatHeader from '@/components/MobileChatHeader.vue'
+import MobileTabsDrawer from '@/components/MobileTabsDrawer.vue'
+
+/** user:“桌面的分屏标签页对于手机来说，等于换页”+(抽屉里的一行 = 一页)。 */
+interface MobileTabItem {
+  id: string
+  title: string
+  kind: string
+}
+import MobileSessionSettings from '@/components/MobileSessionSettings.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import { useComputerUseOverlay } from '@/computerUse/useComputerUseOverlay'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
@@ -976,11 +1117,6 @@ const emit = defineEmits<{
 }>()
 
 // user:“点远程连接后看起来没反应”+(手机上的图标排开的是整版界面，打开后先把抽屉收起)。
-function openFromRail(action: () => void): void {
-  action()
-  if (appRuntime.platform === 'mobile') shellRef.value?.closeLeftDrawer?.()
-}
-
 function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
 }
@@ -989,8 +1125,6 @@ const appRuntime = props.runtime
 // user:“类似的时序问题不要再犯，检查”+(语言偏好也只读一次就定终身：通道没就绪那一次
 // 失败，界面语言就再也回不来。重试几次，仍然失败才保持现有的简体中文默认)。
 void withRetry(() => loadUiLanguage(appRuntime.requestRpc), 3).catch(() => undefined)
-// 手机上侧栏底部那一排就是导航本体；桌面有最左竖栏，页脚不渲染。
-const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')
 const commandShellPlatform = (() => {
   if (appRuntime.platform === 'mobile') return 'mobile' as const
   if (appRuntime.platform !== 'desktop') return 'web' as const
@@ -1182,6 +1316,30 @@ type FullAreaViewId = 'library' | 'direct' | 'search' | 'arrange' | 'settings' |
 const fullAreaView = ref<FullAreaViewId | null>(null)
 // user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
 function handleSystemBack(event: Event): void {
+  // L3 会话信息页 / 重命名表单开着：先关它们。
+  if (mobileRenameSessionId.value) {
+    event.preventDefault()
+    mobileRenameSessionId.value = null
+    return
+  }
+  if (mobileSessionSettingsOpen.value) {
+    event.preventDefault()
+    mobileSessionSettingsOpen.value = false
+    return
+  }
+  // 环境/项目面板开着：先关面板。
+  if (mobileContextOpen.value) {
+    event.preventDefault()
+    mobileContextOpen.value = false
+    return
+  }
+  /* user:“返回手势先关闭键盘或临时面板，再返回上一层”+
+     (手机端在会话详情按返回先回到会话列表，不会直接退到后台)。 */
+  if (appRuntime.platform === 'mobile' && mobileChatSurface.value === 'detail' && !fullAreaView.value) {
+    event.preventDefault()
+    mobileChatSurface.value = 'list'
+    return
+  }
   // user:“我希望任何时候不存在卡在某个界面退不出去的情况”+(返回按层退：
   // 分屏 → 整版界面 → 交给宿主退到后台，任何一层都不会把人关住)。
   if (appRuntime.platform === 'mobile' && splitEnabled.value) {
@@ -1246,15 +1404,98 @@ function onPluginPageRequest(event: Event) {
 onMounted(() => window.addEventListener('sunday:open-plugin-page', onPluginPageRequest))
 onBeforeUnmount(() => window.removeEventListener('sunday:open-plugin-page', onPluginPageRequest))
 
+// user:“「我的设备」只放跳转链接到现有设备连接页”+(插件用同一个窗口事件请求整版页面，宿主只接受白名单，避免插件随手切走界面)。
+const OPEN_APP_PAGE_ALLOWED: FullAreaViewId[] = ['account', 'library', 'settings', 'direct', 'arrange', 'search', 'plugins', 'project']
+function onOpenAppPage(event: Event) {
+  const view = (event as CustomEvent<{ view?: string }>).detail?.view
+  if (typeof view === 'string' && (OPEN_APP_PAGE_ALLOWED as string[]).includes(view)) openFullArea(view as FullAreaViewId)
+}
+onMounted(() => window.addEventListener('sunday:open-app-page', onOpenAppPage))
+onBeforeUnmount(() => window.removeEventListener('sunday:open-app-page', onOpenAppPage))
+
+// user:“页面打不开时给一句能照着做的下一步”+(浏览器只发请求，诊断由 EasyNet 做，结论原样回传)。
+async function onEasyNetDiagnoseRequest(event: Event) {
+  const detail = (event as CustomEvent<{ requestId?: string; target?: string }>).detail
+  const requestId = String(detail?.requestId || '')
+  const target = String(detail?.target || '').trim()
+  if (!requestId || !target) return
+  try {
+    const result = (await appRuntime.requestRpc('easynet.diagnose', { target, port: 443, kind: 'basic' })) as
+      | { report?: { conclusion?: { text?: string; suggestion?: string } } }
+      | undefined
+    const conclusion = result?.report?.conclusion || {}
+    window.dispatchEvent(
+      new CustomEvent('sunday:easynet-diagnose-result', {
+        detail: { requestId, ok: true, text: conclusion.text || '', suggestion: conclusion.suggestion || '' },
+      }),
+    )
+  } catch (error) {
+    window.dispatchEvent(
+      new CustomEvent('sunday:easynet-diagnose-result', {
+        detail: { requestId, ok: false, suggestion: messageFromError(error) },
+      }),
+    )
+  }
+}
+onMounted(() => window.addEventListener('sunday:easynet-diagnose-request', onEasyNetDiagnoseRequest))
+onBeforeUnmount(() => window.removeEventListener('sunday:easynet-diagnose-request', onEasyNetDiagnoseRequest))
+
+// user:“完成能打开”+(浏览器下载条里的「打开」交给系统默认程序，路径来自 EasyNet 快照)。
+async function onEasyNetDownloadOpen(event: Event) {
+  const path = String((event as CustomEvent<{ path?: string }>).detail?.path || '').trim()
+  if (!path) return
+  const opened = await openFileWithDefaultApp(transport, path)
+  if (!opened) showToast('error', '打不开这个文件，可能已经被移动或删除')
+}
+onMounted(() => window.addEventListener('sunday:easynet-download-open', onEasyNetDownloadOpen))
+onBeforeUnmount(() => window.removeEventListener('sunday:easynet-download-open', onEasyNetDownloadOpen))
+
+// user:“接管开关默认关闭，只有前端确认 EasyNet 就绪才打开”+(不可用时浏览器完全退回原生下载)。
+const browserDownloadHandoff = useBrowserDownloadHandoff({
+  requestRpc: (method, params) => appRuntime.requestRpc(method, params || {}),
+  toast: (kind, text, duration) => showToast(kind, text, duration),
+})
+function refreshBrowserTakeover() { void browserDownloadHandoff.syncTakeover() }
+
+// user:“EasyNet 开了加速，浏览器立刻用上”+(只把出口告诉浏览器；已打开网页要重开才生效，这件事如实提示)。
+async function pushBrowserNetworkState() {
+  try {
+    const status = (await appRuntime.requestRpc('easynet.status', {})) as
+      | { accelerator?: { running?: boolean; port?: number } }
+      | undefined
+    const accelerator = status?.accelerator
+    const port = Number(accelerator?.port || 0)
+    const running = Boolean(accelerator?.running) && port > 0
+    await browserNetworkState(running ? 'accelerator' : 'system', running ? `127.0.0.1:${port}` : '')
+  } catch {
+    // 插件不可用或没启动时保持系统代理，不猜一个不存在的端口。
+  }
+}
+onMounted(() => { void browserDownloadHandoff.start() })
+onMounted(() => window.addEventListener('sunday:easynet-network-changed', refreshBrowserTakeover))
+onMounted(() => window.addEventListener('sunday:easynet-network-changed', () => { void pushBrowserNetworkState() }))
+onMounted(() => { void pushBrowserNetworkState() })
+onBeforeUnmount(() => browserDownloadHandoff.stop())
+onBeforeUnmount(() => window.removeEventListener('sunday:easynet-network-changed', refreshBrowserTakeover))
+
 // user:“第一次搜索建 agent-browser 分屏，之后 Agent 的标签都进这块”+
 // (Agent 从 Core 开的标签：前端不认识它 → 收养进 agent-browser 屏，并补上原生映射，
 //  后面的矩形同步/点击输入/状态事件才有归属。用户自己开的标签不走这条事件)。
 function onAgentBrowserTab(event: Event): void {
-  const detail = (event as CustomEvent<{ tab?: string; url?: string }>).detail
-  const native = String(detail?.tab ?? '')
+  const detail = (event as CustomEvent<{ tab?: string; url?: string; opener?: string }>).detail
+  if (!detail) return
+  const native = String(detail.tab ?? '')
   if (!native || splitTabForNative(native)) return
-  const adopted = workspace.addAgentBrowserTab(String(detail?.url ?? ''))
-  if (adopted) bindBrowserTab(adopted.id, native)
+  // user:“点 e26 其实**成功开了新标签页**”+(把点击新开的标签放回来源分屏，绑定已创建的原生页)。
+  const opener = detail.opener ? splitTabForNative(detail.opener) : undefined
+  const url = String(detail.url ?? '')
+  const adopted = workspace.addAgentBrowserTab(url, '', opener)
+  if (adopted) {
+    bindBrowserTab(adopted.id, native)
+    // user:“网页搜索时不应该去自动跳到分屏，而是收进标签页抽屉”+(Agent 开的页只进抽屉：
+    // 记成“安静页”，让新增标签的自动换页跳过它，用户的会话继续留在眼前)。
+    mobileQuietTabIds.add(adopted.id)
+  }
 }
 
 onMounted(() => window.addEventListener('sunday:browser-agent-tab', onAgentBrowserTab))
@@ -1347,6 +1588,12 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
 })
 // 整版界面的返回键：定时任务 / 资料库内部先回上一层，其余直接退出整版视图。
 function onFullAreaBack(): void {
+  // user:“插件与远程收进设置”+(从设置里打开插件页，返回还回设置，不把人丢回聊天)。
+  if (showPlugins.value && pluginsBackToSettings.value) {
+    pluginsBackToSettings.value = false
+    openSettings()
+    return
+  }
   if (showArrange.value && arrangeRef.value?.handleBack?.()) return
   if (showLibrary.value && libraryRef.value?.handleBack?.()) return
   closeFullArea()
@@ -2214,7 +2461,369 @@ watch([activeTurnRunning, latestActivityIndicator], syncLatestActivityMotion, { 
 
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
 const showCoreStartPage = computed(() => !activePluginMode.value && !activeSessionId.value)
-const shouldHideComposer = computed(() => Boolean(fullAreaView.value) || showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false) || Boolean(splitEnabled.value && !workspace.state.hidden && workspace.state.mainTab))
+/**
+ * user:“聊天优先：用户首先看到会话”+
+ * (手机端 L1/L2：默认落在会话列表；点开会话进详情，返回键回到列表。
+ *  列表覆盖在主区之上，线程保持挂载——切回来滚动位置与输入草稿都还在)。
+ */
+const mobileChatSurface = ref<'list' | 'detail'>('list')
+/** 环境与项目选择面板（手机）。 */
+const mobileContextOpen = ref(false)
+/** 当前项目的会话组：优先跟着当前会话，其次当前项目，最后第一个项目。 */
+const currentProjectGroup = computed(() => {
+  const groups = sidebarGroups.value
+  const active = activeSessionId.value
+  return groups.find(group => group.sessions.some(session => session.id === active))
+    ?? groups.find(group => group.id === activeProjectId.value)
+    ?? groups[0]
+})
+/** L3 会话信息页（手机）。 */
+const mobileSessionSettingsOpen = ref(false)
+/** 重命名会话：长按菜单与 L3 共用同一个小表单。 */
+const mobileRenameSessionId = ref<string | null>(null)
+const mobileRenameDraft = ref('')
+const mobileRenameBusy = ref(false)
+/** 与桌面会话栏共用同一份置顶存储，两端各写一份就会互相覆盖。 */
+const MOBILE_SESSION_PIN_KEY = 'lamtools-core.sidebar.pinned-projects.sessions'
+const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
+function loadPinnedSessionIds(): string[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const stored = JSON.parse(localStorage.getItem(MOBILE_SESSION_PIN_KEY) || '[]')
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+function persistPinnedSessionIds(): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(MOBILE_SESSION_PIN_KEY, JSON.stringify(pinnedSessionIds.value))
+  } catch {
+    // 存储不可用就只在本次运行里保持置顶，不影响会话数据本身。
+  }
+}
+function toggleMobileSessionPin(sessionId: string): void {
+  if (!sessionId) return
+  pinnedSessionIds.value = pinnedSessionIds.value.includes(sessionId)
+    ? pinnedSessionIds.value.filter((id) => id !== sessionId)
+    : [...pinnedSessionIds.value, sessionId]
+  persistPinnedSessionIds()
+}
+const mobileSessionRecord = computed(() => sessions.value.find((session) => session.id === activeSessionId.value) || null)
+const mobileSessionPinned = computed(() => Boolean(activeSessionId.value && pinnedSessionIds.value.includes(activeSessionId.value)))
+// user:“次级文字显示 Agent / 设备状态”+(本机就是本机；接着电脑时显示“电脑”和真实连接状态)。
+const mobileDeviceLabel = computed(() => {
+  if (!appRuntime.capabilities.remote) return t('本机 Android')
+  return remoteLinkDown.value ? t('电脑离线') : t('电脑 · 已连接')
+})
+const mobileDeviceState = computed<'local' | 'remote' | 'offline'>(() => {
+  if (!appRuntime.capabilities.remote) return 'local'
+  return remoteLinkDown.value ? 'offline' : 'remote'
+})
+/** L2 顶部栏只在会话详情出现；列表与整版界面各自有自己的头部。 */
+const mobileChatHeaderOpen = computed(() => (
+  appRuntime.platform === 'mobile'
+  && mobileChatSurface.value === 'detail'
+  && Boolean(activeSessionId.value)
+  && !fullAreaView.value
+  && !activePluginMode.value
+))
+function backToMobileChatList(): void {
+  mobileSessionSettingsOpen.value = false
+  mobilePageId.value = ''
+  mobileTabsOpen.value = false
+  mobileChatSurface.value = 'list'
+  // 列表页没有任何“页”在场：把原生网页一起收起，避免它压在列表上面。
+  void invoke('browser_hide', {}).catch(() => undefined)
+}
+
+/**
+ * user:“桌面的分屏标签页对于手机来说，等于换页”+
+ * “注意出入口，进来页之后要能切、能返回”+(手机没有并排：当前页面就是唯一在眼前的那一页。
+ * 空串表示会话本身；抽屉负责切页与返回，关页只影响抽屉里的那一项)。
+ */
+const mobilePageId = ref('')
+const mobileTabsOpen = ref(false)
+
+function openMobilePage(id: string): void {
+  mobileTabsOpen.value = false
+  if (!id) {
+    mobilePageId.value = ''
+    return
+  }
+  const entry = workspace.tabs.value.find((item) => item.tab.id === id)
+  if (!entry) return
+  workspace.activate(entry.pane, entry.tab.id)
+  mobilePageId.value = id
+
+}
+
+/** 把手机网页页的矩形（CSS px → 物理像素）交给原生网页；不可见时缩到 1×1 并隐藏。 */
+function syncMobilePageBounds(): void {
+  const kept = mobilePageKept.value
+  if (!kept || kept.tab.kind !== 'browser') return
+  // user:“修”+(旧网页的布局回调即使晚到，也不能把它重新盖到当前页上)。
+  if (mobilePageTab.value?.tab.id !== kept.tab.id) return
+  const surface = document.querySelector('[data-mobile-page-surface]')
+  if (!surface) {
+    void browserNative(kept.tab.id, 'bounds', { x: 0, y: 0, width: 1, height: 1, visible: false }).catch(() => undefined)
+    return
+  }
+  const rect = surface.getBoundingClientRect()
+  const ratio = window.devicePixelRatio || 1
+  void browserNative(kept.tab.id, 'bounds', {
+    physical: true,
+    x: Math.round(rect.x * ratio),
+    y: Math.round(rect.y * ratio),
+    width: Math.max(1, Math.round(rect.width * ratio)),
+    height: Math.max(1, Math.round(rect.height * ratio)),
+    visible: true,
+  }).catch(() => undefined)
+}
+
+/**
+ * user:“进来页之后要能切、能返回”+(页面刚挂上时那一帧还量不到矩形，等它真的进 DOM 再下发布局；
+ * 300ms 再补一次，覆盖抽屉关合与主题动画造成的尺寸抖动)。
+ */
+/** 打开失败时把原因留在地址栏上，而不是让用户对着一块空白。 */
+const mobilePageError = ref('')
+
+async function settleMobilePage(): Promise<void> {
+  const kept = mobilePageKept.value
+  if (!kept || kept.tab.kind !== 'browser') return
+  const isCurrent = () => mobilePageTab.value?.tab.id === kept.tab.id
+  await nextTick()
+  if (!isCurrent()) return
+  // user:“修”+(晚到的网页打开结果不能盖住已经切过去的附件或会话)。
+  if (kept.tab.resource) {
+    try {
+      await browserNative(kept.tab.id, 'create', { url: kept.tab.resource })
+      if (isCurrent()) mobilePageError.value = ''
+    } catch (error) {
+      if (isCurrent()) mobilePageError.value = messageFromError(error)
+    }
+  }
+  if (!isCurrent()) return
+  watchMobilePageSurface()
+  syncMobilePageBounds()
+  window.setTimeout(() => { if (isCurrent()) syncMobilePageBounds() }, 320)
+}
+
+
+let mobilePageObserver: ResizeObserver | null = null
+function watchMobilePageSurface(): void {
+  mobilePageObserver?.disconnect()
+  mobilePageObserver = null
+  if (typeof ResizeObserver === 'undefined') return
+  const surface = document.querySelector('[data-mobile-page-surface]')
+  if (!surface) return
+  mobilePageObserver = new ResizeObserver(() => syncMobilePageBounds())
+  mobilePageObserver.observe(surface)
+}
+
+function reloadMobilePage(): void {
+  const kept = mobilePageKept.value
+  if (!kept || kept.tab.kind !== 'browser') return
+  void browserNative(kept.tab.id, 'reload').catch(() => undefined)
+}
+
+function leaveMobilePage(): void {
+  const kept = mobilePageKept.value
+  mobilePageId.value = ''
+  mobileTabsOpen.value = false
+  // user:“网页收不起来，收起来了仍出现”+(收起必须由宿主按自己的 key 记账执行：
+  // 走前端映射时只要有一处对不上，命令就被吞掉、网页继续浮在会话上。先按 key 收，
+  // 再“全部收起”兜底，任何一张遗留的网页都不会盖住对话)。
+  if (kept && kept.tab.kind === 'browser') {
+    void invoke('browser_hide', { key: kept.tab.id }).catch(() => undefined)
+  }
+  void invoke('browser_hide', {}).catch(() => undefined)
+  mobilePageObserver?.disconnect()
+  mobilePageObserver = null
+}
+
+function closeMobilePage(id: string): void {
+  const entry = workspace.tabs.value.find((item) => item.tab.id === id)
+  if (!entry) return
+  if (entry.tab.kind === 'browser') void invoke('browser_release', { key: entry.tab.id }).catch(() => undefined)
+  const pane = workspace.state.panes[entry.pane]
+  if (pane && pane.tabs.length <= 1) workspace.closePane(entry.pane)
+  else workspace.closeTab(entry.pane, entry.tab)
+  if (mobilePageId.value === id) mobilePageId.value = ''
+}
+
+/** 返回键的落点：先出页、再回列表——两个出口都留在原位，不放一个“关掉一切”的合并动作。 */
+function onMobileChatBack(): void {
+  if (mobilePageId.value) {
+    leaveMobilePage()
+    return
+  }
+  backToMobileChatList()
+}
+
+// 页被关掉（抽屉里点了叉，或宿主回收）时，别把人留在一个已经不存在的页上。
+// 窗口尺寸/方向变了，原生网页要跟着换矩形，否则会停在旧位置盖住内容。
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => { if (mobilePageTab.value) syncMobilePageBounds() })
+}
+// 换会话等于换了上下文：页面属于上一个会话，留着只会让人切到不相干的页。
+watch(activeSessionId, () => {
+  mobilePageId.value = ''
+  mobileTabsOpen.value = false
+})
+
+/** Agent 开的页记在这里，让“新增标签自动换页”跳过它们（见 workspace 建好后的 watcher）。 */
+const mobileQuietTabIds = new Set<string>()
+const mobileChatListOpen = computed(() => (
+  appRuntime.platform === 'mobile'
+  && mobileChatSurface.value === 'list'
+  && !fullAreaView.value
+  && !activePluginMode.value
+))
+const mobileNavActive = computed<MobileNavKey>(() => {
+  if (fullAreaView.value === 'arrange') return 'task'
+  if (fullAreaView.value === 'settings' || fullAreaView.value === 'account' || fullAreaView.value === 'plugins' || activePluginMode.value) return 'settings'
+  if (fullAreaView.value === 'library' || fullAreaView.value === 'search') return 'workspace'
+  return 'chat'
+})
+function openMobileSession(id: string): void {
+  void selectSession(id)
+  mobileChatSurface.value = 'detail'
+}
+async function createMobileSession(): Promise<void> {
+  const group = currentProjectGroup.value
+  if (!group) {
+    // 还没有项目：会话必须挂在项目下，先建项目。
+    openProjectCreate()
+    return
+  }
+  await createMobileSessionIn(group.id)
+}
+// user:“新建会话的键应该在项目旁边吧？”+(顶部那枚 + 建在当前项目；项目标题旁那枚 + 建在
+// 它自己这一组，建完直接进会话，不用先切项目)。
+async function createMobileSessionIn(projectId: string): Promise<void> {
+  const group = coreProjectGroups.value.find(item => item.id === projectId) ?? currentProjectGroup.value
+  if (!group) {
+    openProjectCreate()
+    return
+  }
+  if (activePluginSurface.value?.sidebar?.onNewSession) {
+    handleSidebarNewSession(group.id)
+    mobileChatSurface.value = 'detail'
+    return
+  }
+  // user:“新建会话后直接进入会话”+(建成功才进详情；失败留在列表，错误另有提示)。
+  const before = activeSessionId.value
+  await createProjectSession(group.id)
+  if (activeSessionId.value && activeSessionId.value !== before) mobileChatSurface.value = 'detail'
+}
+// user:“以及连接的入口在哪里？点击选择环境应该提供入口，这样才够直觉”+
+// (「运行环境」面板里的「连接电脑」落到 设置 → 设备连接：扫码/粘贴票据、连接状态、
+//  断线重连都在那一页，不再要求用户自己翻设置)。
+function openMobileConnect(): void {
+  mobileContextOpen.value = false
+  openSettings('account')
+}
+function openMobileProjectCreate(): void {
+  mobileContextOpen.value = false
+  openProjectCreate()
+}
+// user:“每个环境下支持新建和重命名项目、查看项目会话、项目排序与置顶、归档及删除”+
+// (手机没有抽屉：长按项目行把项目管理接在这里，设置页与删除都沿用现有实现)。
+function openMobileProjectMenu(projectId: string, event: Event): void {
+  openContextMenu({
+    event: event as MouseEvent,
+    ariaLabel: t('项目操作'),
+    items: [
+      { label: t('项目设置'), action: () => { mobileContextOpen.value = false; openProjectActions(projectId) } },
+      { label: t('重命名项目'), action: () => { mobileContextOpen.value = false; openProjectRename(projectId) } },
+      { label: t('删除项目'), action: () => { mobileContextOpen.value = false; deleteProject(projectId) } },
+    ],
+  })
+}
+// user:“长按置顶、重命名、归档、删除等操作”+(重命名、置顶、导出、删除；
+// 归档/静音需要后端保存会话状态，先不摆一个点了没反应的入口)。
+function openMobileSessionMenu(sessionId: string, event: Event): void {
+  const pinned = pinnedSessionIds.value.includes(sessionId)
+  openContextMenu({
+    event: event as MouseEvent,
+    ariaLabel: t('会话操作'),
+    items: [
+      { label: t('重命名'), action: () => openMobileRename(sessionId) },
+      { label: pinned ? t('取消置顶') : t('置顶会话'), action: () => toggleMobileSessionPin(sessionId) },
+      { label: t('导出会话（Markdown）'), action: () => { void exportSession(sessionId, 'markdown') } },
+      { label: t('删除会话'), action: () => deleteMobileSession(sessionId) },
+    ],
+  })
+}
+// user:“顶部 `···` 更多菜单”+(会话信息、导出、删除；搜索聊天记录/任务记录/文件与资源要后端聚合，先不摆空按钮)。
+function openMobileChatMenu(event: Event): void {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  // 顶栏按钮触发的菜单贴着按钮展开，不跟着点击坐标跑到屏幕外。
+  const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  const rect = trigger?.getBoundingClientRect()
+  openContextMenu({
+    event: event as MouseEvent,
+    anchor: rect ? { type: 'rect', left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : undefined,
+    ariaLabel: t('会话操作'),
+    items: [
+      { label: t('会话信息'), action: () => { mobileSessionSettingsOpen.value = true } },
+      { label: t('导出会话（Markdown）'), action: () => { void exportSession(sessionId, 'markdown') } },
+      { label: t('删除会话'), action: () => deleteMobileSession(sessionId) },
+    ],
+  })
+}
+function deleteMobileSession(sessionId: string): void {
+  if (!sessionId) return
+  // 删除后回列表：不把用户留在一个已经不存在的会话详情上。
+  if (activeSessionId.value === sessionId) {
+    mobileSessionSettingsOpen.value = false
+    mobileRenameSessionId.value = null
+    mobileChatSurface.value = 'list'
+  }
+  deleteSession(sessionId)
+}
+function exportMobileActiveSession(): void {
+  if (activeSessionId.value) void exportSession(activeSessionId.value, 'markdown')
+}
+function openMobileRename(sessionId: string): void {
+  if (!sessionId) return
+  const session = sessions.value.find((item) => item.id === sessionId)
+  mobileRenameSessionId.value = sessionId
+  mobileRenameDraft.value = session?.title || ''
+}
+async function submitMobileRename(): Promise<void> {
+  const sessionId = mobileRenameSessionId.value
+  const title = mobileRenameDraft.value.trim()
+  if (!sessionId || !title || mobileRenameBusy.value) return
+  mobileRenameBusy.value = true
+  try {
+    await renameSession(sessionId, title)
+    setRuntimeStatus(t('会话已重命名'))
+    mobileRenameSessionId.value = null
+  } catch (error) {
+    composerErrorText.value = messageFromError(error)
+  } finally {
+    mobileRenameBusy.value = false
+  }
+}
+function onMobileNavSelect(key: MobileNavKey): void {
+  mobileContextOpen.value = false
+  mobileSessionSettingsOpen.value = false
+  mobileRenameSessionId.value = null
+  if (key === 'chat') {
+    if (fullAreaView.value) onFullAreaBack()
+    mobileChatSurface.value = 'list'
+    return
+  }
+  // user:“底部四入口常驻”+(已经在目标入口时再点一次不该退出这一页，底栏不是开关)。
+  if (key === 'workspace') { if (fullAreaView.value !== 'library') openLibrary(); return }
+  if (key === 'task') { if (fullAreaView.value !== 'arrange') openArrange(); return }
+  if (fullAreaView.value !== 'settings') openSettings()
+}
+const shouldHideComposer = computed(() => Boolean(fullAreaView.value) || showCoreStartPage.value || mobileChatListOpen.value || readPluginSurface(activePluginSurface.value?.hideComposer, false) || Boolean(splitEnabled.value && !workspace.state.hidden && workspace.state.mainTab) || Boolean(appRuntime.platform === 'mobile' && mobilePageId.value))
 const recentCoreProjects = computed<CoreRecentProject[]>(() => {
   const projectsById = new Map(projects.value.map((project) => [project.id, project]))
   return recentProjectOpenings.value.flatMap((entry): CoreRecentProject[] => {
@@ -2330,12 +2939,13 @@ const composerHoldEnabled = computed(() => composerActionMode.value !== 'send')
  */
 const composerCompact = computed(() => false)
 workbench.setShallowThinking(shallowThinkingEnabled.value)
-workbench.setTurnOptionsProvider(async () => {
+workbench.setTurnOptionsProvider(async (context) => {
   // user:“做吧”+(在等待插件前固定会话参数，切换聊天不能混入另一会话的模型设置)。
   const controls = { ...executionControls.controls() }
   const turnOptions = { ...executionControls.turnOptions() }
   const pluginOptionsPromise = activePluginSurface.value?.turnOptions?.()
-  void persistSessionComposerControls(controls)
+  // user:“全修”+(编辑提交只读发送参数，避免设置写入改变打开编辑时的历史版本)。
+  if (!context?.historicalEdit) void persistSessionComposerControls(controls)
   const pluginOptions = await pluginOptionsPromise || {}
   const {
     permission_preset: _permissionPreset,
@@ -2367,7 +2977,7 @@ workbench.setComposerCallbacks({
   onStatusText: setRuntimeStatus,
   onTurnStarted: refreshSessions,
   onSubmissionAccepted: (submission) => {
-    removeSubmittedAttachments(submission.threadId, submission.attachments)
+    if (submission.ownsDraft) removeSubmittedAttachments(submission.threadId, submission.attachments)
   },
   // user:“做吧”+(重新编辑失败消息时恢复真实附件托盘，而不是只恢复不可见的发送参数)。
   onRestoreAttachments: (items) => {
@@ -2442,6 +3052,55 @@ function setSplitDirty(id: string, value: boolean) { if (value) splitDirtyTabs.v
 // user:“这是什么情况”+(panes 始终包含 main，只应统计除 main 之外的辅助分屏数量；没有辅助分屏、浮层且主区为 Agent 时不启用分屏宽度锁定，让主区自然铺满 100%)
 const splitPaneCount = computed(() => Object.keys(workspace.state.panes).filter(id => id !== 'main').length)
 const splitEnabled = computed(() => splitPaneCount.value > 0 || workspace.floats.value.length > 0 || Boolean(workspace.state.mainTab))
+const mobilePageTabs = computed<MobileTabItem[]>(() => workspace.tabs.value
+  .filter((entry) => entry.tab.kind !== 'agent')
+  .map((entry) => ({
+    id: entry.tab.id,
+    title: String(entry.tab.title || entry.tab.resource || ''),
+    kind: String(entry.tab.kind),
+  })))
+const mobilePageEntry = computed(() => mobilePageTabs.value.find((item) => item.id === mobilePageId.value) || null)
+/** 正在显示的那一页（整条 tab 记录，供整页容器渲染）。 */
+const mobilePageTab = computed(() => workspace.tabs.value.find((entry) => entry.tab.id === mobilePageId.value) || null)
+/**
+ * user:“从会话切到别的页再切回来，网页还在原处，不会白屏”+(页容器用 v-show 而不是 v-if：
+ * 回会话时只把网页隐藏，不销毁原生 webview；否则每次回来都要重新加载，滚动位置也丢)。
+ */
+const mobilePageKept = ref<{ tab: SplitTab; pane: string } | null>(null)
+watch(mobilePageTab, async (entry, previous) => {
+  // user:“修”+(切到附件、会话或另一张网页时，先收起离开的原生网页)。
+  if (previous?.tab.kind === 'browser' && previous.tab.id !== entry?.tab.id) {
+    mobilePageObserver?.disconnect()
+    mobilePageObserver = null
+    await invoke('browser_hide', { key: previous.tab.id }).catch(() => undefined)
+  }
+  if (!entry || mobilePageTab.value?.tab.id !== entry.tab.id) return
+  mobilePageKept.value = { tab: entry.tab, pane: entry.pane }
+  if (entry.tab.kind === 'browser') void settleMobilePage()
+}, { immediate: true })
+const mobilePageTitle = computed(() => mobilePageEntry.value?.title || '')
+watch(mobilePageTabs, (list) => {
+  if (mobilePageId.value && !list.some((item) => item.id === mobilePageId.value)) {
+    mobilePageId.value = ''
+  }
+})
+
+/**
+ * user:“网页搜索时不应该去自动跳到分屏，而是收进标签页抽屉……不影响用户点击部分需要分屏
+ * 打开的附件”+(两条来路分开处理：Agent 自己开的页只进抽屉；用户点附件/链接开出来的页，
+ * 用户本来就等着看它，直接换到那一页)。
+ */
+let knownMobileTabIds = new Set(workspace.tabs.value.map((entry) => entry.tab.id))
+watch(workspace.tabs, (list) => {
+  const fresh = list.filter((entry) => !knownMobileTabIds.has(entry.tab.id))
+  knownMobileTabIds = new Set(list.map((entry) => entry.tab.id))
+  if (!fresh.length) return
+  if (appRuntime.platform !== 'mobile') return
+  const userOpened = fresh.filter((entry) => entry.tab.kind !== 'agent' && !mobileQuietTabIds.has(entry.tab.id))
+  for (const entry of fresh) mobileQuietTabIds.delete(entry.tab.id)
+  if (!userOpened.length) return
+  openMobilePage(userOpened[userOpened.length - 1].tab.id)
+})
 function activateSplitMain(event: Event) { if (event.target instanceof Element && event.target.closest('.workspace-main, .composer-root--floating')) workspace.state.activePane = 'main' }
 const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
 const openSubAgentRun = computed(() => openSubAgentRef.value ? selectCoreSubAgentRun(messages.value, openSubAgentRef.value) : undefined)
@@ -2607,6 +3266,13 @@ watch(activeSessionId, (nextSessionId) => {
 // Messages the backend already replaced with a context summary: their original
 // text is gone, so edit/fork/rollback must not be offered.
 const lockedMessageIds = computed(() => lockedMessageIdsBeforeCompaction(messages.value))
+function readMessageEditBasis() {
+  // user:“全修”+(编辑以正在显示的原会话快照为准，正在切换时不接受待替换请求)。
+  const current = snapshot.value
+  if (current && current.thread_id === activeSessionId.value) {
+    return { threadId: current.thread_id, revision: snapshotRevision(current) }
+  }
+}
 
 provideCorePluginModeContext({
   transport,
@@ -2640,6 +3306,7 @@ provideCorePluginModeContext({
     activeTurnId,
     activeTurnRunning,
     lockedMessageIds,
+    readEditBasis: readMessageEditBasis,
     onDecisionSelect: async (payload) => {
       await approvalController.handleDecision(
         payload as Parameters<typeof approvalController.handleDecision>[0],
@@ -3319,13 +3986,13 @@ function restoreSessionComposer(id: string) {
   void migrateHiddenSessionRunMode(id)
 }
 
-async function refreshAfterRollback() {
-  const sessionId = activeSessionId.value
-  if (!sessionId) return
+// user:“全做”+(回退结束只重选原来仍在查看的会话，不能打断用户后来选中的会话)。
+async function refreshAfterRollback(sessionId: string) {
   await refreshSessions()
-  await selectSession(sessionId)
+  if (activeSessionId.value === sessionId) await selectSession(sessionId)
 }
 
+const forkRequests = new Map<string, { id: string; pending: boolean }>()
 async function handleForkMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
@@ -3336,17 +4003,27 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
     composerErrorText.value = t("任务运行中，请先停止任务再分叉")
     return
   }
+  // user:“全做”+(重复触发合并为一次分叉，重试沿用同一编号)。
+  const key = JSON.stringify([sessionId, payload.turnId])
+  const request = forkRequests.get(key) ?? { id: crypto.randomUUID(), pending: false }
+  if (request.pending) return
+  request.pending = true
+  forkRequests.set(key, request)
   try {
     const result = await requestConfigOperation('session.fork', {
       session_id: sessionId,
       turn_id: payload.turnId,
+      client_request_id: request.id,
     })
     const forkedSessionId = String(result?.session_id || '')
     await refreshSessions()
-    if (forkedSessionId) await selectSession(forkedSessionId)
+    if (forkedSessionId && activeSessionId.value === sessionId) await selectSession(forkedSessionId)
+    forkRequests.delete(key)
     showToast('notice', t("已从此处创建分叉会话；仅复制对话历史，未复制工作区或运行时状态。"))
   } catch (error) {
-    composerErrorText.value = error instanceof Error ? error.message : String(error)
+    if (activeSessionId.value === sessionId) composerErrorText.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    request.pending = false
   }
 }
 
@@ -3371,45 +4048,51 @@ async function rollbackTurn(sessionId: string, turnId: string): Promise<void> {
       session_id: sessionId,
       turn_id: turnId,
     })
-    await refreshAfterRollback()
+    await refreshAfterRollback(sessionId)
     showToast('notice', t("已删除此轮及之后的对话；文件与成果保持不变。"))
   } catch (error) {
-    composerErrorText.value = error instanceof Error ? error.message : String(error)
+    if (activeSessionId.value === sessionId) composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
 }
 
-async function handleEditMessage(payload: { turnId: string; content: string; attachments?: CoreAttachment[] }) {
-  const sessionId = activeSessionId.value
-  if (!sessionId) {
-    composerErrorText.value = t("当前没有可编辑的会话")
-    return
-  }
-  if (rollbackActiveTurn.value) {
-    composerErrorText.value = t("任务运行中，请先停止任务再编辑")
-    return
-  }
-  if (!payload.turnId) {
-    composerErrorText.value = t("这条消息没有可用的回合")
-    return
-  }
+async function handleEditMessage(payload: CoreMessageEditRequest): Promise<void> {
+  let accepted = false
   try {
-    // 就地清空这条用户消息及其之后的对话，再以编辑后的内容重发：不依赖检查点，
-    // 所以第一条消息也能编辑。会话标题不被改写 —— 原标题原样保留；若原标题是
-    // 默认值（缺失/「新会话」/会话 id），重发时走首次消息的正常命名路径重新生成。
-    await requestConfigOperation('session.rollback', {
-      session_id: sessionId,
-      turn_id: payload.turnId,
-    })
-    await refreshAfterRollback()
-    // 携带原消息附件（已在后端上传，直接标记 uploaded 随发送提交，无需重新上传）
-    clearAttachments()
-    for (const attachment of payload.attachments ?? []) {
-      addUploaded({ ...attachment, status: 'uploaded' })
+    const sessionId = activeSessionId.value
+    if (!sessionId) {
+      composerErrorText.value = t("当前没有可编辑的会话")
+      return
     }
-    composerText.value = payload.content
-    await submitComposer()
-  } catch (error) {
-    composerErrorText.value = error instanceof Error ? error.message : String(error)
+    if (rollbackActiveTurn.value) {
+      composerErrorText.value = t("任务运行中，请先停止任务再编辑")
+      return
+    }
+    if (!payload.turnId) {
+      composerErrorText.value = t("这条消息没有可用的回合")
+      return
+    }
+    if (!payload.basis || payload.basis.threadId !== sessionId) {
+      composerErrorText.value = t('会话已切换，请重新操作')
+      return
+    }
+    // user:“全做”+(直接提交原会话、原回合和已上传附件，保留用户另外写的草稿和附件)。
+    if (liveComposerController.submitting.value) {
+      composerErrorText.value = t('已有一条消息正在提交，请稍后再试')
+      return
+    }
+    const result = await liveComposerController.replaceMessage({
+      threadId: sessionId,
+      turnId: payload.turnId,
+      expectedRevision: payload.basis.revision,
+      text: payload.content,
+      attachments: (payload.attachments ?? []).filter(item => !item.id.startsWith('path:')).map(item => ({
+        type: 'attachment', attachment_id: item.id, path: item.path, filename: item.filename,
+        mime_type: item.mime_type, preview_type: item.preview_type, size: item.size,
+      })),
+    })
+    accepted = result?.status === 'started' && result.ok
+  } finally {
+    payload.onSettled?.(accepted)
   }
 }
 
@@ -4248,6 +4931,8 @@ async function mutateConfig(method: string, params: object, successText: string)
 }
 
 async function requestConfigOperation(method: string, params: Record<string, unknown> = {}) {
+  // user:“修”+(安装留足下载和校验时间，断线后由用户重试同一后台任务)。
+  if (method === 'libraryfs.setup') return await appRuntime.requestRpc(method, params, 120_000)
   let lastError: Error | null = null
   const maxRetries = 5
   const baseDelay = 200
@@ -4256,11 +4941,15 @@ async function requestConfigOperation(method: string, params: Record<string, unk
       return await appRuntime.requestRpc(method, params)
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))
+      // user:“虽然消息发出去了，但是显示输入参数保存失败这个报错”+(服务器已经判定
+      // 参数非法时立刻把原话交给界面；以前把它当网络抖动重试六次，用户等三秒多才
+      // 看到一条被放大的错误，还在核心日志里留下六条同样的拒绝记录)。
+      if (!isRetryableRpcError(lastError)) break
       if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, baseDelay * 2 ** attempt))
         continue
       }
-      throw lastError
+      break
     }
   }
   throw lastError ?? new Error(t("Core App Server 连接失败"))
@@ -4622,13 +5311,21 @@ function openArrange(): void {
 
 /** Which plugins section the next open should land on (search hits target one). */
 const pluginsSection = ref<string | undefined>(undefined)
+/** 从设置进入插件页时，返回键的目标是设置本身。 */
+const pluginsBackToSettings = ref(false)
 
 // 项目设置的当前分区：会话栏导航与页面双向同步。
 const projectSettingsSection = ref<string | undefined>(undefined)
 
 function openPlugins(section?: string): void {
+  pluginsBackToSettings.value = false
   pluginsSection.value = section
   openFullArea('plugins')
+}
+// user:“插件与远程收进设置”+(手机设置里的插件分区：进入同一个插件页，返回落在设置)。
+function openPluginsFromSettings(section?: string): void {
+  openPlugins(section)
+  pluginsBackToSettings.value = true
 }
 
 function openPluginsFromSearch(target: { section: 'plugins' | 'skills' | 'hooks'; id?: string }): void {
@@ -4935,7 +5632,7 @@ const pageBindings = useCorePageBindings({
   createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
   deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
   lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups,
-  openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
+  openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openPluginsFromSettings, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
   projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
   refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
   selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,

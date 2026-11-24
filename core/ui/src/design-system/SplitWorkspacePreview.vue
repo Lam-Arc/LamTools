@@ -39,6 +39,12 @@ function previewTabOverflow() {
   previewTabPane.value = target
   for (let index = 1; index <= 20; index++) controller.add('browser', '', `示例网页 ${index}`, target)
 }
+// user:“找出 3 个及以上优化”+(用子代理和编辑器混排演示统一的分屏页眉)。
+const subAgentPreviewReady = ref(false)
+function previewSubAgentTab() {
+  if (subAgentPreviewReady.value) return
+  subAgentPreviewReady.value = Boolean(controller.add('agent', '', '示例子代理', pane))
+}
 const sampleDocuments = new Map<string, SplitDocumentHandle>()
 // user:“交互测试”+(真实编辑器的读写和草稿仅存内存，不接触本机文件或备份)。
 const documents = {
@@ -68,6 +74,7 @@ function setDirty(id: string, value: boolean) { if (value) dirtyTabs.add(id); el
       <template #primary><div class="core-sidebar-mode-spacer" aria-hidden="true" /></template>
       <template #sidebar-body>
         <button type="button" class="btn btn--ghost" :disabled="Boolean(previewTabPane)" @click="previewTabOverflow">预览标签溢出</button>
+        <button type="button" class="btn btn--ghost" :disabled="subAgentPreviewReady || !controller.state.panes[pane]" @click="previewSubAgentTab">预览子代理标签</button>
         <SessionSidebar :project-groups="previewSidebarGroups" />
       </template>
       <template #main-header>

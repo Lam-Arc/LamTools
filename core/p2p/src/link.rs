@@ -173,6 +173,15 @@ fn path_kind(conn: &iroh::endpoint::Connection) -> PathKind {
     classify_path(selected_direct, selected_relay, any_direct, any_relay)
 }
 
+/// 这条连接当前选中路径的往返延迟（毫秒）；还没选中路径时是 0。
+fn path_rtt(conn: &iroh::endpoint::Connection) -> u64 {
+    conn.paths()
+        .iter()
+        .find(|path| path.is_selected())
+        .map(|path| path.rtt().as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// A single frame has to carry a whole Core reply, and a thread snapshot on a long
 /// conversation is tens of megabytes (the UI avoids asking for one, but `thread/resume`
 /// and approval snapshots still can). 16 MB used to turn those into a closed tunnel;
@@ -274,6 +283,11 @@ impl Client {
     ///
     /// `name` is what the peer shows the user; it is not an identity, the key is.
     pub async fn dial(endpoint: &Endpoint, ticket: &str, name: &str) -> Result<Self> {
+        tokio::time::timeout(Duration::from_secs(45), Self::dial_once(endpoint, ticket, name))
+            .await.context("连接对端超时，请检查设备是否在线及中继是否可达")?
+    }
+
+    async fn dial_once(endpoint: &Endpoint, ticket: &str, name: &str) -> Result<Self> {
         // user:“扫码即可完成配对，不给普通用户加额外步骤”+(一张票同时带地址与授权：
         // 扫到的就是它，扫完直接拨号。旧的 sunday1: 票据只说明地址，够已配对设备重连用)。
         let addr: EndpointAddr = crate::ticket::decode_any_ticket(ticket)?;
@@ -477,6 +491,22 @@ impl Client {
     ///
     /// `&self`：界面的项目、模型、会话是并发加载的，它们不该因为对方回答慢就互相排队。
     pub async fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        self.call_with_timeout(method, params, Duration::from_secs(180)).await
+    }
+
+    /// 与 `call` 相同，但这一次等待的上限由调用方决定。
+    ///
+    /// user:“超时不自动等同于发送失败”+(界面给的预算只影响这一次等待；超时后清理掉
+    /// 在途登记，不能让一条迟到的回答永远占着回调表)。
+    pub async fn call_with_timeout(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value> {
+        // user:“p2p 与 relay 的稳定性核查，并按需优化”+(同一时限覆盖排队、写入和等待回复)。
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut lost = self.lost.subscribe();
         // 已经断了就别发：写进一个死连接的帧不会有回答，只会让界面白等三分钟。
         if !self.alive.load(Ordering::SeqCst) {
             // user:“撤权后 RPC 一律拒绝，返回明确错误码”+(先报服务端给的原因)。
@@ -485,27 +515,38 @@ impl Client {
             }
             bail!("和电脑的连接已经断开");
         }
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
-        {
-            let mut send = self.send.lock().await;
-            write_frame(
-                &mut send,
-                &Frame::Call {
-                    id,
-                    method: method.to_owned(),
-                    params,
-                },
-            )
-            .await?;
-        }
+        let (id, rx) = {
+            let mut send = tokio::time::timeout_at(deadline, self.send.lock())
+                .await.context("等待发送空位超时")?;
+            if !self.is_alive() {
+                bail!("和电脑的连接已经断开");
+            }
+            let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+            let (tx, rx) = oneshot::channel();
+            tokio::time::timeout_at(deadline, self.pending.lock())
+                .await.context("等待发送空位超时")?.insert(id, tx);
+            let frame = Frame::Call { id, method: method.to_owned(), params };
+            match tokio::time::timeout_at(deadline, write_frame(&mut send, &frame)).await {
+                Ok(Ok(())) => (id, rx),
+                Ok(Err(error)) => {
+                    self.pending.lock().await.remove(&id);
+                    if error.is::<iroh::endpoint::WriteError>() {
+                        self.close();
+                    }
+                    return Err(error);
+                }
+                Err(_) => {
+                    // 超时可能只写了一部分帧；关闭流，避免后面的请求拼进不完整的帧。
+                    self.close();
+                    self.pending.lock().await.remove(&id);
+                    bail!("向对端发送超时，连接将重新建立");
+                }
+            }
+        };
         // user:“手机端远控电脑连接不稳定，频繁断连”+(断线发生在一轮调用中间时，以前这条
         // 调用要等满 180 秒才报超时，用户只看到卡住；现在连接一断就立刻返回，界面能当场
         // 显示断开并开始重连)。
-        let mut lost = self.lost.subscribe();
         let mut answer = rx;
-        let mut deadline = Box::pin(tokio::time::sleep(Duration::from_secs(180)));
         tokio::select! {
             // user:“撤权后 RPC 一律拒绝，返回明确错误码，不静默通过”+(断链信号和拒绝帧
             // 常常同时到达；先看应答，才不会把「已被移除授权」说成「连接断开了」)。
@@ -523,7 +564,7 @@ impl Client {
                 }
                 bail!("和电脑的连接断开了：正在重连")
             }
-            _ = &mut deadline => {
+            _ = tokio::time::sleep_until(deadline) => {
                 self.pending.lock().await.remove(&id);
                 bail!("等待对端回答超时")
             }
@@ -538,10 +579,15 @@ impl Client {
         path_kind(&self.conn)
     }
 
+    /// 当前选中路径的往返延迟（毫秒）；手机设备页用它显示连接质量。
+    pub fn rtt_ms(&self) -> u64 {
+        path_rtt(&self.conn)
+    }
+
     /// 路径变了就回调一次（客户端侧；与 `ServerLink::watch_path` 对称）。
     pub fn watch_path<F>(&self, on_change: F) -> tokio::task::JoinHandle<()>
     where
-        F: FnMut(PathKind) + Send + 'static,
+        F: FnMut(PathKind, u64) + Send + 'static,
     {
         watch_path_events(self.conn.clone(), on_change)
     }
@@ -613,6 +659,17 @@ impl ServerLink {
         let Some(connecting) = endpoint.accept().await else {
             return Ok(None);
         };
+        Self::handshake(endpoint, connecting, trust, grants, name).await.map(Some)
+    }
+
+    // user:“全修”+(监听端可以接下一台设备，同时让已接到的设备独立完成握手)。
+    pub async fn handshake(
+        endpoint: &Endpoint,
+        connecting: iroh::endpoint::Incoming,
+        trust: Arc<Mutex<TrustStore>>,
+        grants: Arc<Mutex<crate::pair::PairingGrants>>,
+        name: &str,
+    ) -> Result<Self> {
         let conn = connecting.await.context("handshake failed")?;
         let peer = conn.remote_id().to_string();
         let (mut send, mut recv) = conn.accept_bi().await.context("no tunnel stream")?;
@@ -628,6 +685,9 @@ impl ServerLink {
             // 每次握手前按文件时间戳重读一次，文件很小)。
             store.reload_if_stale().ok();
             let mut grants = grants.lock().await;
+            // user:“电脑显示待确认设备，用户确认配对”+(宿主确认/拒绝会改同一个文件；
+            // 握手前按时间戳重读，不能拿启动时那份旧名单一直拒/一直放)。
+            grants.reload_if_stale().ok();
             let now = crate::pair::now();
             let admission = crate::gate::admit(
                 &mut store,
@@ -653,6 +713,7 @@ impl ServerLink {
         let trusted = admission.is_accepted();
         let reason = match &admission {
             crate::gate::Admission::Rejected { reason, .. } => reason.clone(),
+            crate::gate::Admission::Pending { reason } => reason.clone(),
             _ => String::new(),
         };
         write_frame(
@@ -667,7 +728,7 @@ impl ServerLink {
         .await?;
         // user:“撤销设备要真的生效”+(不要在这一帧之后立刻断开：连接一关，对端可能还没读到
         // 这个 Welcome，只能看到「closed by peer」。让这一帧走到、由调用方决定怎么收尾)。
-        Ok(Some(Self {
+        Ok(Self {
             conn,
             send: Arc::new(Mutex::new(send)),
             recv,
@@ -675,12 +736,17 @@ impl ServerLink {
             peer_name,
             trusted,
             trust: Arc::clone(&trust),
-        }))
+        })
     }
 
     /// 这条连接此刻走的是直连还是中继（宿主显示在连接详情里）。
     pub fn path(&self) -> PathKind {
         path_kind(&self.conn)
+    }
+
+    /// 当前选中路径的往返延迟（毫秒）。
+    pub fn rtt_ms(&self) -> u64 {
+        path_rtt(&self.conn)
     }
 
     /// 路径变了就回调一次（直连打洞成功、退回中继、断开）。
@@ -690,7 +756,7 @@ impl ServerLink {
     /// 就没有唤醒)。返回的句柄随连接关闭自然结束，调用方不需要管理。
     pub fn watch_path<F>(&self, on_change: F) -> tokio::task::JoinHandle<()>
     where
-        F: FnMut(PathKind) + Send + 'static,
+        F: FnMut(PathKind, u64) + Send + 'static,
     {
         watch_path_events(self.conn.clone(), on_change)
     }
@@ -742,6 +808,7 @@ impl ServerLink {
         });
 
         let mut inflight: FuturesUnordered<_> = FuturesUnordered::new();
+        let mut pong_pending = false;
         // 诊断：服务端到底有没有收到心跳。
         let mut pings: u64 = 0;
         // 写也走独立任务：一条几十 MB 的回复不该把读循环按在写上。
@@ -750,7 +817,7 @@ impl ServerLink {
         let writer = tokio::spawn(async move {
             while let Some(frame) = outbox_rx.recv().await {
                 let mut send = send_for_writer.lock().await;
-                if write_frame(&mut send, &frame).await.is_err() {
+                if !matches!(tokio::time::timeout(IDLE_TIMEOUT, write_frame(&mut send, &frame)).await, Ok(Ok(()))) {
                     return;
                 }
             }
@@ -758,7 +825,14 @@ impl ServerLink {
 
         let outcome: Result<()> = loop {
             tokio::select! {
-                incoming_frame = tokio::time::timeout(IDLE_TIMEOUT, incoming.recv()) => {
+                _ = outbox.closed() => break Err(anyhow::anyhow!("连接的写入端已关闭")),
+                permit = outbox.reserve(), if pong_pending => {
+                    if let Ok(permit) = permit {
+                        permit.send(Frame::Pong);
+                        pong_pending = false;
+                    }
+                }
+                incoming_frame = tokio::time::timeout(IDLE_TIMEOUT, incoming.recv()), if inflight.len() < MAX_INFLIGHT_REPLIES => {
                     match incoming_frame {
                         // 两分钟一个帧都没有：对端已经不在了，收掉这条连接等它重连。
                         Err(_) => break Err(anyhow::anyhow!("对端长时间没有任何帧（心跳超时）")),
@@ -789,13 +863,10 @@ impl ServerLink {
                                     break Err(anyhow::anyhow!("{code}: {reason}"));
                                 }
                                 let answer = handler(method, params);
-                                inflight.push(async move { (id, answer.await) });
+                                inflight.push(queue_reply(outbox.clone(), id, answer));
                             }
                             Frame::Ping => {
-                                // 队列满说明对端根本没在读：当场收掉，总比在这里等到超时好。
-                                if outbox.try_send(Frame::Pong).is_err() {
-                                    break Err(anyhow::anyhow!("对端来不及接收，先断开让它重连"));
-                                }
+                                pong_pending = true;
                                 pings += 1;
                                 if pings % 6 == 1 {
                                     println!("[sunday-p2p] ping #{pings} received");
@@ -827,17 +898,9 @@ impl ServerLink {
                         break Err(anyhow::anyhow!("{code}: {reason}"));
                     }
                 }
-                Some((id, answer)) = inflight.next(), if !inflight.is_empty() => {
-                    let reply = match answer {
-                        Ok(result) => Frame::Reply { id, result },
-                        Err(error) => Frame::Error {
-                            id,
-                            code: String::new(),
-                            message: error.to_string(),
-                        },
-                    };
-                    if outbox.try_send(reply).is_err() {
-                        break Err(anyhow::anyhow!("对端来不及接收，先断开让它重连"));
+                Some(result) = inflight.next(), if !inflight.is_empty() => {
+                    if result.is_err() {
+                        break Err(anyhow::anyhow!("连接的写入端已关闭"));
                     }
                 }
             }
@@ -853,6 +916,32 @@ impl ServerLink {
     pub fn close(&self) {
         self.conn.close(0u32.into(), b"done");
     }
+}
+
+// user:“全部处理并继续寻找”+(弱网回复排队时等待空位，每个连接只处理有限数量的请求)。
+const MAX_INFLIGHT_REPLIES: usize = 32;
+
+async fn queue_reply(
+    outbox: tokio::sync::mpsc::Sender<Frame>,
+    id: u64,
+    answer: impl std::future::Future<Output = Result<serde_json::Value>>,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Frame>> {
+    let reply = match answer.await {
+        Ok(result) => Frame::Reply { id, result },
+        Err(error) => Frame::Error { id, code: String::new(), message: error.to_string() },
+    };
+    outbox.send(reply).await
+}
+
+#[tokio::test]
+async fn remote_reliability_full_reply_queue_delivers_without_disconnecting() {
+    let (outbox, mut replies) = tokio::sync::mpsc::channel(1);
+    outbox.send(Frame::Pong).await.unwrap();
+    let mut reply = std::pin::pin!(queue_reply(outbox, 7, async { Ok(serde_json::Value::Null) }));
+    assert!(futures_util::poll!(&mut reply).is_pending());
+    assert!(matches!(replies.recv().await, Some(Frame::Pong)));
+    reply.await.unwrap();
+    assert!(matches!(replies.recv().await, Some(Frame::Reply { id: 7, .. })));
 }
 
 /// Writes one event frame through a shared write half.
@@ -875,18 +964,18 @@ pub async fn write_event(
 /// 订阅一条连接的路径事件流：先报一次当前状态，之后只在真的变了才回调。
 fn watch_path_events<F>(conn: iroh::endpoint::Connection, mut on_change: F) -> tokio::task::JoinHandle<()>
 where
-    F: FnMut(PathKind) + Send + 'static,
+    F: FnMut(PathKind, u64) + Send + 'static,
 {
     tokio::spawn(async move {
         use futures_util::StreamExt as _;
         let mut events = conn.path_events();
         let mut last = path_kind(&conn);
-        on_change(last);
+        on_change(last, path_rtt(&conn));
         while events.next().await.is_some() {
             let current = path_kind(&conn);
             if current != last {
                 last = current;
-                on_change(current);
+                on_change(current, path_rtt(&conn));
             }
         }
     })
@@ -906,6 +995,92 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // user:“p2p 与 relay 的稳定性核查，并按需优化”+(旧票的中继不可用且地址失效时，验证发现和直连，以及发送排队超时)。
+    #[tokio::test]
+    async fn relay_stability_stale_ticket_recovers_over_direct_and_queue_timeout_keeps_link() -> Result<()> {
+        use iroh::address_lookup::memory::MemoryLookup;
+        use iroh::endpoint::presets;
+        use std::net::{Ipv4Addr, TcpListener};
+        let unused = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let relay: iroh::RelayUrl = format!("http://{}", unused.local_addr()?).parse()?;
+        let lookup = MemoryLookup::new();
+        let build = || {
+            Endpoint::builder(presets::Minimal)
+                .relay_mode(iroh::RelayMode::custom([relay.clone()]))
+                .clear_ip_transports()
+                .bind_addr((Ipv4Addr::LOCALHOST, 0))
+        };
+        let (server, caller) = tokio::time::timeout(Duration::from_secs(10), async {
+            Ok::<_, anyhow::Error>((
+                build()?.alpns(vec![crate::ALPN.to_vec()]).bind().await?,
+                build()?.address_lookup(lookup.clone()).bind().await?,
+            ))
+        }).await??;
+        let mut trust = TrustStore::default();
+        trust.trust(&caller.id().to_string(), "test caller");
+        let active = EndpointAddr::new(server.id()).with_ip_addr(server.bound_sockets()[0]);
+        let stale = EndpointAddr::new(server.id()).with_relay_url(relay)
+            .with_ip_addr((Ipv4Addr::LOCALHOST, unused.local_addr()?.port()).into());
+        lookup.add_endpoint_info(active);
+        let server_task = tokio::spawn(async move {
+            let link = ServerLink::accept(&server, Arc::new(Mutex::new(trust)),
+                Arc::new(Mutex::new(crate::pair::PairingGrants::default())), "test server").await?
+                .context("listener closed")?;
+            link.serve(|_, params| async move { Ok(params) }).await
+        });
+        let client = Client::dial(&caller, &crate::ticket::encode_ticket(&stale)?, "caller").await?;
+        let held = client.send.lock().await;
+        let timeout = Duration::from_millis(30);
+        let blocked = tokio::time::timeout(Duration::from_secs(2),
+            client.call_with_timeout("echo", serde_json::Value::Null, timeout)).await?;
+        assert!(blocked.unwrap_err().to_string().contains("等待发送空位超时"));
+        drop(held);
+        assert_eq!(client.call_with_timeout("echo", serde_json::json!({"ok":true}),
+            Duration::from_secs(2)).await?, serde_json::json!({"ok":true}));
+        assert_eq!(client.path(), PathKind::Direct);
+        client.close();
+        tokio::time::timeout(Duration::from_secs(5), server_task).await???;
+        Ok(())
+    }
+
+    // user:“p2p 与 relay 的稳定性核查，并按需优化”+(真实公共中继专项，强制禁用直连来确认收发与重连)。
+    #[tokio::test]
+    #[ignore = "requires access to the public Iroh relays"]
+    async fn relay_stability_public_relay_echo_survives_reconnect() -> Result<()> {
+        use iroh::endpoint::presets;
+        tokio::time::timeout(Duration::from_secs(50), async {
+            let server = Endpoint::builder(presets::N0)
+                .clear_ip_transports()
+                .alpns(vec![crate::ALPN.to_vec()])
+                .bind().await?;
+            let caller = Endpoint::builder(presets::N0).clear_ip_transports().bind().await?;
+            tokio::time::timeout(Duration::from_secs(15), server.online()).await?;
+            tokio::time::timeout(Duration::from_secs(15), caller.online()).await?;
+            let ticket = crate::ticket::encode_ticket(&server.addr())?;
+            let mut trust = TrustStore::default();
+            trust.trust(&caller.id().to_string(), "test caller");
+            let trust = Arc::new(Mutex::new(trust));
+            let grants = Arc::new(Mutex::new(crate::pair::PairingGrants::default()));
+            let task = tokio::spawn(async move {
+                for _ in 0..2 {
+                    let link = ServerLink::accept(&server, trust.clone(), grants.clone(), "test server")
+                        .await?.context("relay listener closed")?;
+                    link.serve(|_, params| async move { Ok(params) }).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+            for attempt in 1..=2 {
+                let client = Client::dial(&caller, &ticket, "caller").await?;
+                assert_eq!(client.path(), PathKind::Relay);
+                let payload = serde_json::json!({"attempt":attempt, "data":"relay check"});
+                assert_eq!(client.call_with_timeout("echo", payload.clone(), Duration::from_secs(5)).await?, payload);
+                client.close();
+            }
+            task.await??;
+            Ok(())
+        }).await?
+    }
 
     /// user:“真实路径显示：区分直连/中继”+(当前选中的那条说了算：正在用中继时，
     /// 旁边挂着一条还没承载数据的直连路径不等于「现在是直连」)。

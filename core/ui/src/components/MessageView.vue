@@ -30,6 +30,7 @@
               ref="editInputRef"
               v-model="editDraft"
               class="user-edit-input"
+              :readonly="editSubmitting"
               :min-rows="2"
               :max-rows="6"
               :aria-label="t('编辑消息')"
@@ -42,12 +43,14 @@
                 type="button"
                 class="user-edit-button user-edit-button--primary"
                 data-user-edit-confirm
+                :disabled="editSubmitting"
                 @click="confirmEditMessage(msg)"
               >{{ t("发送") }}</button>
               <button
                 type="button"
                 class="user-edit-button"
                 data-user-edit-cancel
+                :disabled="editSubmitting"
                 @click="cancelEditMessage"
               >{{ t("取消") }}</button>
             </div>
@@ -1071,7 +1074,7 @@ import { inferredKind } from '@/artifacts/model'
 
 import { t, uiLanguage } from '@/i18n/index.ts'
 
-import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '@/types.ts'
+import type { CoreAttachment, CoreMessage, CoreMessageEditBasis, CoreMessageEditRequest, MessagePart, ToolArtifact } from '@/types.ts'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, type DirectiveBinding } from 'vue'
 import { gsap } from 'gsap'
@@ -1248,6 +1251,7 @@ const props = withDefaults(
     turnStatus?: string
     /** 位于最后一次上下文压缩之前、因而不再提供编辑/分叉/回退的消息 id。 */
     lockedMessageIds?: Set<string>
+    readEditBasis?: () => CoreMessageEditBasis | undefined
     /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
         注意不能做成 directive：本组件多根（div + Teleport），运行时 directive 不生效。 */
     motionEnter?: boolean
@@ -1283,7 +1287,7 @@ const emit = defineEmits<{
   'decision-select': [payload: { partId: string; option: DecisionOption; response: string }]
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
-  'edit-message': [payload: EditMessagePayload]
+  'edit-message': [payload: CoreMessageEditRequest]
   /** 打开右侧子代理分屏：只带身份，由壳体从当前消息投影里解析出运行。 */
   'open-sub-agent': [ref: CoreSubAgentRef]
   'question-submit': [payload: { partId: string; groupId: string; text: string; answers: Record<string, string> }]
@@ -1485,13 +1489,6 @@ function artifactsEnter(el: Element, done: () => void): void {
 interface AssistantActionPayload {
   turnId: string
   content: string
-}
-
-interface EditMessagePayload {
-  turnId: string
-  content: string
-  /** 原消息附件（已上传，随编辑重新发送，无需重新上传） */
-  attachments?: CoreAttachment[]
 }
 
 const decisionGuideDrafts = ref<Record<string, string>>({})
@@ -2594,6 +2591,7 @@ function answerContent(msg: CoreMessage): string {
 
 const editingMessageId = ref('')
 const editDraft = ref('')
+const editSubmitting = ref(false)
 const editInputRef = ref<{ focus: () => void } | null>(null)
 
 // ── User bubble auto-fold ──
@@ -2658,7 +2656,10 @@ function userActionPayload(msg: CoreMessage): AssistantActionPayload {
   return { turnId: userTurnId(msg), content: String(msg.content || '') }
 }
 
+// user:“全修”+(点击编辑时记住版本，点击发送时沿用它)。
+let editBasis: CoreMessageEditBasis | undefined
 function startEditMessage(msg: CoreMessage) {
+  editBasis = props.readEditBasis?.()
   editDraft.value = String(msg.content || '')
   editingMessageId.value = msg.id
   // 打开编辑即落好光标，不必再点一次输入框
@@ -2666,21 +2667,31 @@ function startEditMessage(msg: CoreMessage) {
 }
 
 function cancelEditMessage() {
+  if (editSubmitting.value) return
+  editBasis = undefined
   editingMessageId.value = ''
   editDraft.value = ''
 }
 
 function confirmEditMessage(msg: CoreMessage) {
   const content = editDraft.value.trim()
-  if (!content) return
+  if (!content || editSubmitting.value) return
+  // user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(真实会话等待回执，失败或冲突时原稿仍在编辑器里)。
+  const awaitReceipt = Boolean(props.readEditBasis)
+  editSubmitting.value = awaitReceipt
   emit('edit-message', {
     turnId: userTurnId(msg),
     content,
+    ...(editBasis ? { basis: editBasis } : {}),
+    ...(awaitReceipt ? { onSettled: (accepted: boolean) => {
+      editSubmitting.value = false
+      if (accepted) cancelEditMessage()
+    } } : {}),
     attachments: attachmentParts(msg)
       .map(part => attachmentFromPart(part))
       .filter((attachment): attachment is CoreAttachment => attachment !== null),
   })
-  cancelEditMessage()
+  if (!awaitReceipt) cancelEditMessage()
 }
 
 // ── Assistant reply hover actions ──

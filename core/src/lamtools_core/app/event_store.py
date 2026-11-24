@@ -265,9 +265,10 @@ class SqlAlchemyAppEventStore:
         *,
         thread_id: str,
         limit: int | None = None,
+        through_seq: int | None = None,
     ) -> list[AppEventEnvelope]:
         rust_db = self._can_use_rust(db)
-        if rust_db is not None:
+        if rust_db is not None and through_seq is None:
             rows = await rust_db.call(
                 "events_list_thread",
                 {"thread_id": thread_id, "limit": int(limit) if limit is not None else None},
@@ -278,6 +279,9 @@ class SqlAlchemyAppEventStore:
             .where(self.event_model.thread_id == thread_id)
             .order_by(self.event_model.seq.asc())
         )
+        # user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(只解码所选历史边界内的事件)。
+        if through_seq is not None:
+            query = query.where(self.event_model.seq <= through_seq)
         if limit is not None:
             query = query.limit(limit)
         result = await db.execute(query)

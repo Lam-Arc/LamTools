@@ -70,6 +70,11 @@ mod imp {
     }
 
 
+    /// 非 Windows 没有 WebView2 的 Cookie 管理器：回传空请求头，让调用方按「没有登录态」处理。
+    pub fn read_download_headers(app: &tauri::AppHandle, tab: &str, url: &str) {
+        super::super::emit_download_headers(app, tab, url, super::super::DownloadHeaders::default());
+    }
+
     // user:“唯一通道是 WebMessage”+(非 Windows 没有 WebView2，桥接不上就如实报错，不假装成功)。
     pub fn attach_bridge(_app: &tauri::AppHandle, _tab: &str, _view: &tauri::Webview) -> Result<(), BrowserError> {
         Err(BrowserError::unsupported("页面桥目前只支持 Windows（WebView2）"))
@@ -763,6 +768,93 @@ mod imp {
     // -----------------------------------------------------------------------
     // 站数据清理（Cookie + 缓存，不用 CDP）
     // -----------------------------------------------------------------------
+
+    /// user:“接管时把 Cookie 和 User-Agent 传给 aria2”+(只读当前 URL 的 Cookie；结果走事件回传，
+    /// 命令本身不阻塞 UI 线程，也不把 Cookie 写进任何日志)。
+    pub fn read_download_headers(app: &tauri::AppHandle, tab: &str, url: &str) {
+        let Ok(view) = super::super::view_for(app, tab) else {
+            super::super::emit_download_headers(app, tab, url, super::super::DownloadHeaders::default());
+            return;
+        };
+        let done_app = app.clone();
+        let done_tab = tab.to_string();
+        let done_url = url.to_string();
+        let uri = url.to_string();
+        let posted = view.with_webview(move |platform| {
+            let finish = |cookie: String, user_agent: String| {
+                super::super::emit_download_headers(
+                    &done_app,
+                    &done_tab,
+                    &done_url,
+                    super::super::DownloadHeaders { cookie, user_agent },
+                );
+            };
+            let Ok(core) = core_of(&platform) else {
+                finish(String::new(), String::new());
+                return;
+            };
+            let user_agent = read_agent(&core);
+            let manager = unsafe { core.cast::<ICoreWebView2_2>() }
+                .and_then(|extended| unsafe { extended.CookieManager() });
+            let Ok(manager) = manager else {
+                finish(String::new(), user_agent);
+                return;
+            };
+            let handler_app = done_app.clone();
+            let handler_tab = done_tab.clone();
+            let handler_url = done_url.clone();
+            let handler_agent = user_agent.clone();
+            let handler = GetCookiesCompletedHandler::create(Box::new(move |result, list| {
+                let mut cookie = String::new();
+                if result.is_ok() {
+                    if let Some(list) = list.as_ref() {
+                        let mut count = 0u32;
+                        // SAFETY: 只读列表长度，索引来自同一次读取。
+                        if unsafe { list.Count(&mut count) }.is_ok() {
+                            for index in 0..count {
+                                let Ok(item) = (unsafe { list.GetValueAtIndex(index) }) else { continue };
+                                let name = read_uri(|slot| unsafe { item.Name(slot) }).unwrap_or_default();
+                                let value = read_uri(|slot| unsafe { item.Value(slot) }).unwrap_or_default();
+                                if name.is_empty() {
+                                    continue;
+                                }
+                                if !cookie.is_empty() {
+                                    cookie.push_str("; ");
+                                }
+                                cookie.push_str(&name);
+                                cookie.push('=');
+                                cookie.push_str(&value);
+                            }
+                        }
+                    }
+                }
+                super::super::emit_download_headers(
+                    &handler_app,
+                    &handler_tab,
+                    &handler_url,
+                    super::super::DownloadHeaders { cookie, user_agent: handler_agent.clone() },
+                );
+                Ok(())
+            }));
+            // SAFETY: GetCookies 复制 uri 文本，handler 由 WebView2 持有到回调触发。
+            if unsafe { manager.GetCookies(&HSTRING::from(uri.as_str()), &handler) }.is_err() {
+                finish(String::new(), user_agent);
+            }
+        });
+        if posted.is_err() {
+            super::super::emit_download_headers(app, tab, url, super::super::DownloadHeaders::default());
+        }
+    }
+
+    fn read_agent(core: &ICoreWebView2) -> String {
+        let Ok(settings) = (unsafe { core.Settings() }) else {
+            return String::new();
+        };
+        match unsafe { settings.cast::<ICoreWebView2Settings2>() } {
+            Ok(extended) => read_uri(|slot| unsafe { extended.UserAgent(slot) }).unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    }
 
     fn clear_cookies(app: &tauri::AppHandle, tab: &str, core: &ICoreWebView2, host: String) {
         // SAFETY: 只取当前 webview 的 cookie 管理器，不保存裸指针。

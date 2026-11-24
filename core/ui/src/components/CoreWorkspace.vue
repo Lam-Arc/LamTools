@@ -310,6 +310,7 @@ function emitShellStyle() {
       '--split-primary-y': '0px',
       '--split-primary-width': `${fullWidth}px`,
       '--split-primary-height': `${fullHeight}px`,
+      '--split-primary-bottom': '0px',
       '--split-primary-visible': fullWidth ? 'visible' : 'hidden',
       '--ws2-yield-left': '0px',
       '--ws2-yield-right': '0px',
@@ -328,6 +329,8 @@ function emitShellStyle() {
     '--split-primary-y': `${rect.y}px`,
     '--split-primary-width': `${rect.width}px`,
     '--split-primary-height': `${rect.height}px`,
+    // user:“分屏布局下，消息流尾部区域会低于输入框上沿，导致尾部消息被遮挡”+(上下分屏时输入框也停在主区下沿)。
+    '--split-primary-bottom': `${Math.max(0, controller.bounds.value.height - rect.y - rect.height)}px`,
     '--split-primary-visible': rect.width ? 'visible' : 'hidden',
     '--ws2-yield-left': `${yieldInsets.left}px`,
     '--ws2-yield-right': `${yieldInsets.right}px`,

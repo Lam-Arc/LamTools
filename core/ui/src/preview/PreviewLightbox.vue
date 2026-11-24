@@ -109,6 +109,8 @@
             :annotating="annotating"
             :load-original="loadOriginalImage"
             :load-bytes="loadPreviewBytes"
+            :image-source="blobSource"
+            :media-source="blobSource"
             loading-label="正在载入预览…"
             @update:annotating="annotating = $event"
             @annotations-change="annotationCount = $event"
@@ -252,6 +254,53 @@ let hintTimer: ReturnType<typeof setTimeout> | undefined
 let generation = 0
 let unregisterHost: (() => void) | null = null
 
+// user:“图片解码失败，原文件可能格式不受支持或内容已损坏”+(根因是安卓外壳没有 /api 代理：
+// 图片/视频的 <img>/<video> 直接请求相对地址，拿到的是网页本身。这里用 IPC 读原始字节，
+// 换成 blob 地址交给查看器；桌面拿到的是完整 http 地址，保持原样)。
+const blobSource = ref('')
+let blobKey = ''
+/**
+ * 已创建的 blob 地址集合：这一轮预览里不撤销任何一个。
+ * 撤销旧地址会和查看器的加载抢时序（<img> 会直接报 Failed to fetch），
+ * 体积又只有几百 KB，统一在灯箱卸载时释放即可。
+ */
+const blobUrls = new Set<string>()
+watch([resolved, target, resolving], async ([doc, current, loading], _, onCleanup) => {
+  if (loading || !doc || doc.mode !== 'native' || !doc.url.startsWith('/api/')
+    || current?.kind !== 'file' || !current.path) {
+    blobSource.value = ''
+    blobKey = ''
+    return
+  }
+  const isMedia = doc.mime.startsWith('image/') || doc.mime.startsWith('audio/') || doc.mime.startsWith('video/')
+  if (!isMedia) {
+    blobSource.value = ''
+    blobKey = ''
+    return
+  }
+  const readPath = previewReadPath(current.path, current.workRoot)
+  const key = `${readPath}|${doc.mime}`
+  if (blobKey === key && blobSource.value) return
+  blobSource.value = ''
+  blobKey = ''
+  // user:“全部审查，提交，发布”+(旧文件晚到的读取结果不能覆盖已切换的预览)。
+  let currentRead = true
+  onCleanup(() => { currentRead = false })
+  try {
+    const bytes = await resolveTransport.value.read(readPath)
+    if (!currentRead || resolved.value !== doc || target.value !== current) return
+    const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer
+      : bytes.slice().buffer
+    const next = URL.createObjectURL(new Blob([buffer as ArrayBuffer], { type: doc.mime }))
+    blobUrls.add(next)
+    blobSource.value = next
+    blobKey = key
+  } catch {
+    // 读不到就退回原地址，让查看器按它自己的方式报错。
+  }
+})
+
 const kindLabel = computed(() => {
   const doc = resolved.value
   if (!doc) return ''
@@ -362,6 +411,13 @@ function flash(message: string): void {
 
 function requestClose(): void {
   closePreviewLightbox()
+}
+
+// user:“系统返回直接退出应用，人被困在预览里”+(灯箱是最上面一层，返回先关它)。
+function onSystemBack(event: Event): void {
+  if (!open.value) return
+  event.preventDefault()
+  requestClose()
 }
 
 function onAfterLeave(): void {
@@ -503,10 +559,14 @@ watch(target, () => {
 onMounted(() => {
   unregisterHost = registerPreviewLightboxHost()
   window.addEventListener('keydown', onWindowKeydown)
+  window.addEventListener('sunday:back', onSystemBack)
 })
 onBeforeUnmount(() => {
   generation += 1
+  for (const url of blobUrls) URL.revokeObjectURL(url)
+  blobUrls.clear()
   window.removeEventListener('keydown', onWindowKeydown)
+  window.removeEventListener('sunday:back', onSystemBack)
   if (hintTimer) clearTimeout(hintTimer)
   unregisterHost?.()
   unregisterHost = null
@@ -701,5 +761,23 @@ onBeforeUnmount(() => {
   top: 48px;
   right: 16px;
   z-index: 2;
+}
+/* user:“灯箱的动作条把关闭键挤出屏幕”+(窄屏让头部横向滚动，关闭键粘在右缘：
+   动作再多也能关掉预览，不再依赖系统返回)。 */
+@media (max-width: 640px) {
+  .preview-lightbox__header {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .preview-lightbox__header::-webkit-scrollbar { display: none; }
+
+  .preview-lightbox__close {
+    position: sticky;
+    right: 0;
+    background: var(--theme-main-background);
+    box-shadow: -10px 0 12px color-mix(in srgb, var(--theme-main-background) 90%, transparent);
+  }
 }
 </style>

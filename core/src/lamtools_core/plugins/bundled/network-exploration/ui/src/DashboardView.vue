@@ -1,7 +1,7 @@
 <script setup>
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“加速页里头不用分什么线路加速…选线路的事儿，去代理里面”+(加速页只做本机加速；订阅和线路全部留在代理页)。
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import {
   Power,
   ArrowUpRight,
@@ -14,14 +14,9 @@ import SpeedChart from "./SpeedChart.vue";
 import { dateLabel } from "./session.mjs";
 const props = defineProps({ session: Object });
 const emit = defineEmits(["navigate", "diagnostic"]);
-const target = ref("github.com");
 const active = computed(() => Boolean(props.session.accelerated));
 async function oneClick() {
   await props.session.toggleAcceleration();
-}
-async function checkSite() {
-  const result = await props.session.diagnose(target.value);
-  if (result?.report) emit("diagnostic", result.report);
 }
 </script>
 <template>
@@ -102,31 +97,16 @@ async function checkSite() {
         <div class="nx-panel-heading">
           <h2><Link :size="17" />检查网站访问</h2>
         </div>
-        <form class="nx-inline-form" @submit.prevent="checkSite">
-          <input
-            v-model="target"
-            class="nx-input"
-            aria-label="要检查的网站"
-            placeholder="输入网址，例如 github.com"
-            required
-          /><button
+        <p class="nx-help">
+          网站能不能打开，去「诊断」里一次看完：地址解析、连接、响应和代理。
+        </p>
+        <div class="nx-actions">
+          <button
             class="btn nx-button btn--secondary"
-            :disabled="Boolean(session.busy)"
+            data-open-diagnose
+            @click="emit('navigate', 'diagnose')"
           >
-            <Activity :size="15" />{{
-              session.busy === "diagnose" ? "检查中…" : "检查一下"
-            }}
-          </button>
-        </form>
-        <div class="nx-site-shortcuts">
-          <span>常用网站</span
-          ><button
-            v-for="site in ['github.com', 'huggingface.co', 'google.com']"
-            :key="site"
-            class="btn nx-button btn--quiet"
-            @click="target = site"
-          >
-            {{ site }}
+            <Activity :size="15" />打开诊断
           </button>
         </div>
       </section>

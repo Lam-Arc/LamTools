@@ -9,10 +9,10 @@ function n(e) {
 var r = {}, i = [], a = () => {}, o = () => !1, s = (e) => e.charCodeAt(0) === 111 && e.charCodeAt(1) === 110 && (e.charCodeAt(2) > 122 || e.charCodeAt(2) < 97), c = (e) => e.startsWith("onUpdate:"), l = Object.assign, u = (e, t) => {
 	let n = e.indexOf(t);
 	n > -1 && e.splice(n, 1);
-}, d = Object.prototype.hasOwnProperty, f = (e, t) => d.call(e, t), p = Array.isArray, m = (e) => C(e) === "[object Map]", h = (e) => C(e) === "[object Set]", g = (e) => C(e) === "[object Date]", _ = (e) => typeof e == "function", v = (e) => typeof e == "string", y = (e) => typeof e == "symbol", b = (e) => typeof e == "object" && !!e, x = (e) => (b(e) || _(e)) && _(e.then) && _(e.catch), S = Object.prototype.toString, C = (e) => S.call(e), w = (e) => C(e).slice(8, -1), ee = (e) => C(e) === "[object Object]", te = (e) => v(e) && e !== "NaN" && e[0] !== "-" && "" + parseInt(e, 10) === e, T = /* @__PURE__ */ n(",key,ref,ref_for,ref_key,onVnodeBeforeMount,onVnodeMounted,onVnodeBeforeUpdate,onVnodeUpdated,onVnodeBeforeUnmount,onVnodeUnmounted"), ne = (e) => {
+}, d = Object.prototype.hasOwnProperty, f = (e, t) => d.call(e, t), p = Array.isArray, m = (e) => C(e) === "[object Map]", h = (e) => C(e) === "[object Set]", g = (e) => C(e) === "[object Date]", _ = (e) => typeof e == "function", v = (e) => typeof e == "string", y = (e) => typeof e == "symbol", b = (e) => typeof e == "object" && !!e, x = (e) => (b(e) || _(e)) && _(e.then) && _(e.catch), S = Object.prototype.toString, C = (e) => S.call(e), w = (e) => C(e).slice(8, -1), ee = (e) => C(e) === "[object Object]", te = (e) => v(e) && e !== "NaN" && e[0] !== "-" && "" + parseInt(e, 10) === e, ne = /* @__PURE__ */ n(",key,ref,ref_for,ref_key,onVnodeBeforeMount,onVnodeMounted,onVnodeBeforeUpdate,onVnodeUpdated,onVnodeBeforeUnmount,onVnodeUnmounted"), T = (e) => {
 	let t = /* @__PURE__ */ Object.create(null);
 	return ((n) => t[n] || (t[n] = e(n)));
-}, re = /-\w/g, E = ne((e) => e.replace(re, (e) => e.slice(1).toUpperCase())), ie = /\B([A-Z])/g, ae = ne((e) => e.replace(ie, "-$1").toLowerCase()), oe = ne((e) => e.charAt(0).toUpperCase() + e.slice(1)), se = ne((e) => e ? `on${oe(e)}` : ""), D = (e, t) => !Object.is(e, t), ce = (e, ...t) => {
+}, re = /-\w/g, E = T((e) => e.replace(re, (e) => e.slice(1).toUpperCase())), ie = /\B([A-Z])/g, ae = T((e) => e.replace(ie, "-$1").toLowerCase()), oe = T((e) => e.charAt(0).toUpperCase() + e.slice(1)), se = T((e) => e ? `on${oe(e)}` : ""), D = (e, t) => !Object.is(e, t), ce = (e, ...t) => {
 	for (let n = 0; n < e.length; n++) e[n](...t);
 }, le = (e, t, n, r = !1) => {
 	Object.defineProperty(e, t, {
@@ -27,69 +27,69 @@ var r = {}, i = [], a = () => {}, o = () => !1, s = (e) => e.charCodeAt(0) === 1
 }, de = (e) => {
 	let t = v(e) ? Number(e) : NaN;
 	return isNaN(t) ? e : t;
-}, fe, pe = () => fe ||= typeof globalThis < "u" ? globalThis : typeof self < "u" ? self : typeof window < "u" ? window : typeof global < "u" ? global : {};
-function me(e) {
+}, O, fe = () => O ||= typeof globalThis < "u" ? globalThis : typeof self < "u" ? self : typeof window < "u" ? window : typeof global < "u" ? global : {};
+function pe(e) {
 	if (p(e)) {
 		let t = {};
 		for (let n = 0; n < e.length; n++) {
-			let r = e[n], i = v(r) ? ve(r) : me(r);
+			let r = e[n], i = v(r) ? _e(r) : pe(r);
 			if (i) for (let e in i) t[e] = i[e];
 		}
 		return t;
 	} else if (v(e) || b(e)) return e;
 }
-var he = /;(?![^(]*\))/g, ge = /:([^]+)/, _e = /\/\*[^]*?\*\//g;
-function ve(e) {
+var me = /;(?![^(]*\))/g, he = /:([^]+)/, ge = /\/\*[^]*?\*\//g;
+function _e(e) {
 	let t = {};
-	return e.replace(_e, "").split(he).forEach((e) => {
+	return e.replace(ge, "").split(me).forEach((e) => {
 		if (e) {
-			let n = e.split(ge);
+			let n = e.split(he);
 			n.length > 1 && (t[n[0].trim()] = n[1].trim());
 		}
 	}), t;
 }
-function O(e) {
+function k(e) {
 	let t = "";
 	if (v(e)) t = e;
 	else if (p(e)) for (let n = 0; n < e.length; n++) {
-		let r = O(e[n]);
+		let r = k(e[n]);
 		r && (t += r + " ");
 	}
 	else if (b(e)) for (let n in e) e[n] && (t += n + " ");
 	return t.trim();
 }
-var ye = "itemscope,allowfullscreen,formnovalidate,ismap,nomodule,novalidate,readonly", be = /* @__PURE__ */ n(ye);
-ye + "";
-function xe(e) {
+var ve = "itemscope,allowfullscreen,formnovalidate,ismap,nomodule,novalidate,readonly", ye = /* @__PURE__ */ n(ve);
+ve + "";
+function be(e) {
 	return !!e || e === "";
 }
-function Se(e, t) {
+function xe(e, t) {
 	if (e.length !== t.length) return !1;
 	let n = !0;
-	for (let r = 0; n && r < e.length; r++) n = Ce(e[r], t[r]);
+	for (let r = 0; n && r < e.length; r++) n = Se(e[r], t[r]);
 	return n;
 }
-function Ce(e, t) {
+function Se(e, t) {
 	if (e === t) return !0;
 	let n = g(e), r = g(t);
 	if (n || r) return n && r ? e.getTime() === t.getTime() : !1;
 	if (n = y(e), r = y(t), n || r) return e === t;
-	if (n = p(e), r = p(t), n || r) return n && r ? Se(e, t) : !1;
+	if (n = p(e), r = p(t), n || r) return n && r ? xe(e, t) : !1;
 	if (n = b(e), r = b(t), n || r) {
 		if (!n || !r || Object.keys(e).length !== Object.keys(t).length) return !1;
 		for (let n in e) {
 			let r = e.hasOwnProperty(n), i = t.hasOwnProperty(n);
-			if (r && !i || !r && i || !Ce(e[n], t[n])) return !1;
+			if (r && !i || !r && i || !Se(e[n], t[n])) return !1;
 		}
 	}
 	return String(e) === String(t);
 }
-function we(e, t) {
-	return e.findIndex((e) => Ce(e, t));
+function Ce(e, t) {
+	return e.findIndex((e) => Se(e, t));
 }
-var Te = (e) => !!(e && e.__v_isRef === !0), k = (e) => v(e) ? e : e == null ? "" : p(e) || b(e) && (e.toString === S || !_(e.toString)) ? Te(e) ? k(e.value) : JSON.stringify(e, Ee, 2) : String(e), Ee = (e, t) => Te(t) ? Ee(e, t.value) : m(t) ? { [`Map(${t.size})`]: [...t.entries()].reduce((e, [t, n], r) => (e[De(t, r) + " =>"] = n, e), {}) } : h(t) ? { [`Set(${t.size})`]: [...t.values()].map((e) => De(e)) } : y(t) ? De(t) : b(t) && !p(t) && !ee(t) ? String(t) : t, De = (e, t = "") => y(e) ? `Symbol(${e.description ?? t})` : e, A, Oe = class {
+var we = (e) => !!(e && e.__v_isRef === !0), A = (e) => v(e) ? e : e == null ? "" : p(e) || b(e) && (e.toString === S || !_(e.toString)) ? we(e) ? A(e.value) : JSON.stringify(e, Te, 2) : String(e), Te = (e, t) => we(t) ? Te(e, t.value) : m(t) ? { [`Map(${t.size})`]: [...t.entries()].reduce((e, [t, n], r) => (e[Ee(t, r) + " =>"] = n, e), {}) } : h(t) ? { [`Set(${t.size})`]: [...t.values()].map((e) => Ee(e)) } : y(t) ? Ee(t) : b(t) && !p(t) && !ee(t) ? String(t) : t, Ee = (e, t = "") => y(e) ? `Symbol(${e.description ?? t})` : e, j, De = class {
 	constructor(e = !1) {
-		this.detached = e, this._active = !0, this._on = 0, this.effects = [], this.cleanups = [], this._isPaused = !1, this._warnOnRun = !0, this.__v_skip = !0, !e && A && (A.active ? (this.parent = A, this.index = (A.scopes ||= []).push(this) - 1) : (this._active = !1, this._warnOnRun = !1));
+		this.detached = e, this._active = !0, this._on = 0, this.effects = [], this.cleanups = [], this._isPaused = !1, this._warnOnRun = !0, this.__v_skip = !0, !e && j && (j.active ? (this.parent = j, this.index = (j.scopes ||= []).push(this) - 1) : (this._active = !1, this._warnOnRun = !1));
 	}
 	get active() {
 		return this._active;
@@ -112,22 +112,22 @@ var Te = (e) => !!(e && e.__v_isRef === !0), k = (e) => v(e) ? e : e == null ? "
 	}
 	run(e) {
 		if (this._active) {
-			let t = A;
+			let t = j;
 			try {
-				return A = this, e();
+				return j = this, e();
 			} finally {
-				A = t;
+				j = t;
 			}
 		}
 	}
 	on() {
-		++this._on === 1 && (this.prevScope = A, A = this);
+		++this._on === 1 && (this.prevScope = j, j = this);
 	}
 	off() {
 		if (this._on > 0 && --this._on === 0) {
-			if (A === this) A = this.prevScope;
+			if (j === this) j = this.prevScope;
 			else {
-				let e = A;
+				let e = j;
 				for (; e;) {
 					if (e.prevScope === this) {
 						e.prevScope = this.prevScope;
@@ -157,72 +157,72 @@ var Te = (e) => !!(e && e.__v_isRef === !0), k = (e) => v(e) ? e : e == null ? "
 		}
 	}
 };
-function ke() {
-	return A;
+function Oe() {
+	return j;
 }
-var j, Ae = /* @__PURE__ */ new WeakSet(), je = class {
+var M, ke = /* @__PURE__ */ new WeakSet(), Ae = class {
 	constructor(e) {
-		this.fn = e, this.deps = void 0, this.depsTail = void 0, this.flags = 5, this.next = void 0, this.cleanup = void 0, this.scheduler = void 0, A && (A.active ? A.effects.push(this) : this.flags &= -2);
+		this.fn = e, this.deps = void 0, this.depsTail = void 0, this.flags = 5, this.next = void 0, this.cleanup = void 0, this.scheduler = void 0, j && (j.active ? j.effects.push(this) : this.flags &= -2);
 	}
 	pause() {
 		this.flags |= 64;
 	}
 	resume() {
-		this.flags & 64 && (this.flags &= -65, Ae.has(this) && (Ae.delete(this), this.trigger()));
+		this.flags & 64 && (this.flags &= -65, ke.has(this) && (ke.delete(this), this.trigger()));
 	}
 	notify() {
-		this.flags & 2 && !(this.flags & 32) || this.flags & 8 || Fe(this);
+		this.flags & 2 && !(this.flags & 32) || this.flags & 8 || Pe(this);
 	}
 	run() {
 		if (!(this.flags & 1)) return this.fn();
-		this.flags |= 2, Je(this), Re(this);
-		let e = j, t = We;
-		j = this, We = !0;
+		this.flags |= 2, qe(this), Le(this);
+		let e = M, t = Ue;
+		M = this, Ue = !0;
 		try {
 			return this.fn();
 		} finally {
-			ze(this), j = e, We = t, this.flags &= -3;
+			Re(this), M = e, Ue = t, this.flags &= -3;
 		}
 	}
 	stop() {
 		if (this.flags & 1) {
-			for (let e = this.deps; e; e = e.nextDep) He(e);
-			this.deps = this.depsTail = void 0, Je(this), this.onStop && this.onStop(), this.flags &= -2;
+			for (let e = this.deps; e; e = e.nextDep) Ve(e);
+			this.deps = this.depsTail = void 0, qe(this), this.onStop && this.onStop(), this.flags &= -2;
 		}
 	}
 	trigger() {
-		this.flags & 64 ? Ae.add(this) : this.scheduler ? this.scheduler() : this.runIfDirty();
+		this.flags & 64 ? ke.add(this) : this.scheduler ? this.scheduler() : this.runIfDirty();
 	}
 	runIfDirty() {
-		Be(this) && this.run();
+		ze(this) && this.run();
 	}
 	get dirty() {
-		return Be(this);
+		return ze(this);
 	}
-}, Me = 0, Ne, Pe;
-function Fe(e, t = !1) {
+}, je = 0, Me, Ne;
+function Pe(e, t = !1) {
 	if (e.flags |= 8, t) {
-		e.next = Pe, Pe = e;
+		e.next = Ne, Ne = e;
 		return;
 	}
-	e.next = Ne, Ne = e;
+	e.next = Me, Me = e;
+}
+function Fe() {
+	je++;
 }
 function Ie() {
-	Me++;
-}
-function Le() {
-	if (--Me > 0) return;
-	if (Pe) {
-		let e = Pe;
-		for (Pe = void 0; e;) {
+	if (--je > 0) return;
+	if (Ne) {
+		let e = Ne;
+		for (Ne = void 0; e;) {
 			let t = e.next;
 			e.next = void 0, e.flags &= -9, e = t;
 		}
 	}
 	let e;
-	for (; Ne;) {
-		let t = Ne;
-		for (Ne = void 0; t;) {
+	for (; Me;) {
+		let t = Me;
+		for (Me = void 0; t;) {
 			let n = t.next;
 			if (t.next = void 0, t.flags &= -9, t.flags & 1) try {
 				t.trigger();
@@ -234,294 +234,294 @@ function Le() {
 	}
 	if (e) throw e;
 }
-function Re(e) {
+function Le(e) {
 	for (let t = e.deps; t; t = t.nextDep) t.version = -1, t.prevActiveLink = t.dep.activeLink, t.dep.activeLink = t;
 }
-function ze(e) {
+function Re(e) {
 	let t, n = e.depsTail, r = n;
 	for (; r;) {
 		let e = r.prevDep;
-		r.version === -1 ? (r === n && (n = e), He(r), Ue(r)) : t = r, r.dep.activeLink = r.prevActiveLink, r.prevActiveLink = void 0, r = e;
+		r.version === -1 ? (r === n && (n = e), Ve(r), He(r)) : t = r, r.dep.activeLink = r.prevActiveLink, r.prevActiveLink = void 0, r = e;
 	}
 	e.deps = t, e.depsTail = n;
 }
-function Be(e) {
-	for (let t = e.deps; t; t = t.nextDep) if (t.dep.version !== t.version || t.dep.computed && (Ve(t.dep.computed) || t.dep.version !== t.version)) return !0;
+function ze(e) {
+	for (let t = e.deps; t; t = t.nextDep) if (t.dep.version !== t.version || t.dep.computed && (Be(t.dep.computed) || t.dep.version !== t.version)) return !0;
 	return !!e._dirty;
 }
-function Ve(e) {
-	if (e.flags & 4 && !(e.flags & 16) || (e.flags &= -17, e.globalVersion === Ye) || (e.globalVersion = Ye, !e.isSSR && e.flags & 128 && (!e.deps && !e._dirty || !Be(e)))) return;
+function Be(e) {
+	if (e.flags & 4 && !(e.flags & 16) || (e.flags &= -17, e.globalVersion === Je) || (e.globalVersion = Je, !e.isSSR && e.flags & 128 && (!e.deps && !e._dirty || !ze(e)))) return;
 	e.flags |= 2;
-	let t = e.dep, n = j, r = We;
-	j = e, We = !0;
+	let t = e.dep, n = M, r = Ue;
+	M = e, Ue = !0;
 	try {
-		Re(e);
+		Le(e);
 		let n = e.fn(e._value);
 		(t.version === 0 || D(n, e._value)) && (e.flags |= 128, e._value = n, t.version++);
 	} catch (e) {
 		throw t.version++, e;
 	} finally {
-		j = n, We = r, ze(e), e.flags &= -3;
+		M = n, Ue = r, Re(e), e.flags &= -3;
 	}
 }
-function He(e, t = !1) {
+function Ve(e, t = !1) {
 	let { dep: n, prevSub: r, nextSub: i } = e;
 	if (r && (r.nextSub = i, e.prevSub = void 0), i && (i.prevSub = r, e.nextSub = void 0), n.subs === e && (n.subs = r, !r && n.computed)) {
 		n.computed.flags &= -5;
-		for (let e = n.computed.deps; e; e = e.nextDep) He(e, !0);
+		for (let e = n.computed.deps; e; e = e.nextDep) Ve(e, !0);
 	}
 	!t && !--n.sc && n.map && n.map.delete(n.key);
 }
-function Ue(e) {
+function He(e) {
 	let { prevDep: t, nextDep: n } = e;
 	t && (t.nextDep = n, e.prevDep = void 0), n && (n.prevDep = t, e.nextDep = void 0);
 }
-var We = !0, Ge = [];
+var Ue = !0, We = [];
+function Ge() {
+	We.push(Ue), Ue = !1;
+}
 function Ke() {
-	Ge.push(We), We = !1;
+	let e = We.pop();
+	Ue = e === void 0 ? !0 : e;
 }
-function qe() {
-	let e = Ge.pop();
-	We = e === void 0 ? !0 : e;
-}
-function Je(e) {
+function qe(e) {
 	let { cleanup: t } = e;
 	if (e.cleanup = void 0, t) {
-		let e = j;
-		j = void 0;
+		let e = M;
+		M = void 0;
 		try {
 			t();
 		} finally {
-			j = e;
+			M = e;
 		}
 	}
 }
-var Ye = 0, Xe = class {
+var Je = 0, Ye = class {
 	constructor(e, t) {
 		this.sub = e, this.dep = t, this.version = t.version, this.nextDep = this.prevDep = this.nextSub = this.prevSub = this.prevActiveLink = void 0;
 	}
-}, Ze = class {
+}, Xe = class {
 	constructor(e) {
 		this.computed = e, this.version = 0, this.activeLink = void 0, this.subs = void 0, this.map = void 0, this.key = void 0, this.sc = 0, this.__v_skip = !0;
 	}
 	track(e) {
-		if (!j || !We || j === this.computed) return;
+		if (!M || !Ue || M === this.computed) return;
 		let t = this.activeLink;
-		if (t === void 0 || t.sub !== j) t = this.activeLink = new Xe(j, this), j.deps ? (t.prevDep = j.depsTail, j.depsTail.nextDep = t, j.depsTail = t) : j.deps = j.depsTail = t, Qe(t);
+		if (t === void 0 || t.sub !== M) t = this.activeLink = new Ye(M, this), M.deps ? (t.prevDep = M.depsTail, M.depsTail.nextDep = t, M.depsTail = t) : M.deps = M.depsTail = t, Ze(t);
 		else if (t.version === -1 && (t.version = this.version, t.nextDep)) {
 			let e = t.nextDep;
-			e.prevDep = t.prevDep, t.prevDep && (t.prevDep.nextDep = e), t.prevDep = j.depsTail, t.nextDep = void 0, j.depsTail.nextDep = t, j.depsTail = t, j.deps === t && (j.deps = e);
+			e.prevDep = t.prevDep, t.prevDep && (t.prevDep.nextDep = e), t.prevDep = M.depsTail, t.nextDep = void 0, M.depsTail.nextDep = t, M.depsTail = t, M.deps === t && (M.deps = e);
 		}
 		return t;
 	}
 	trigger(e) {
-		this.version++, Ye++, this.notify(e);
+		this.version++, Je++, this.notify(e);
 	}
 	notify(e) {
-		Ie();
+		Fe();
 		try {
 			for (let e = this.subs; e; e = e.prevSub) e.sub.notify() && e.sub.dep.notify();
 		} finally {
-			Le();
+			Ie();
 		}
 	}
 };
-function Qe(e) {
+function Ze(e) {
 	if (e.dep.sc++, e.sub.flags & 4) {
 		let t = e.dep.computed;
 		if (t && !e.dep.subs) {
 			t.flags |= 20;
-			for (let e = t.deps; e; e = e.nextDep) Qe(e);
+			for (let e = t.deps; e; e = e.nextDep) Ze(e);
 		}
 		let n = e.dep.subs;
 		n !== e && (e.prevSub = n, n && (n.nextSub = e)), e.dep.subs = e;
 	}
 }
-var $e = /* @__PURE__ */ new WeakMap(), et = /* @__PURE__ */ Symbol(""), tt = /* @__PURE__ */ Symbol(""), nt = /* @__PURE__ */ Symbol("");
-function M(e, t, n) {
-	if (We && j) {
-		let t = $e.get(e);
-		t || $e.set(e, t = /* @__PURE__ */ new Map());
+var Qe = /* @__PURE__ */ new WeakMap(), $e = /* @__PURE__ */ Symbol(""), et = /* @__PURE__ */ Symbol(""), tt = /* @__PURE__ */ Symbol("");
+function N(e, t, n) {
+	if (Ue && M) {
+		let t = Qe.get(e);
+		t || Qe.set(e, t = /* @__PURE__ */ new Map());
 		let r = t.get(n);
-		r || (t.set(n, r = new Ze()), r.map = t, r.key = n), r.track();
+		r || (t.set(n, r = new Xe()), r.map = t, r.key = n), r.track();
 	}
 }
-function rt(e, t, n, r, i, a) {
-	let o = $e.get(e);
+function nt(e, t, n, r, i, a) {
+	let o = Qe.get(e);
 	if (!o) {
-		Ye++;
+		Je++;
 		return;
 	}
 	let s = (e) => {
 		e && e.trigger();
 	};
-	if (Ie(), t === "clear") o.forEach(s);
+	if (Fe(), t === "clear") o.forEach(s);
 	else {
 		let i = p(e), a = i && te(n);
 		if (i && n === "length") {
 			let e = Number(r);
 			o.forEach((t, n) => {
-				(n === "length" || n === nt || !y(n) && n >= e) && s(t);
+				(n === "length" || n === tt || !y(n) && n >= e) && s(t);
 			});
-		} else switch ((n !== void 0 || o.has(void 0)) && s(o.get(n)), a && s(o.get(nt)), t) {
+		} else switch ((n !== void 0 || o.has(void 0)) && s(o.get(n)), a && s(o.get(tt)), t) {
 			case "add":
-				i ? a && s(o.get("length")) : (s(o.get(et)), m(e) && s(o.get(tt)));
+				i ? a && s(o.get("length")) : (s(o.get($e)), m(e) && s(o.get(et)));
 				break;
 			case "delete":
-				i || (s(o.get(et)), m(e) && s(o.get(tt)));
+				i || (s(o.get($e)), m(e) && s(o.get(et)));
 				break;
 			case "set":
-				m(e) && s(o.get(et));
+				m(e) && s(o.get($e));
 				break;
 		}
 	}
-	Le();
+	Ie();
+}
+function rt(e) {
+	let t = /* @__PURE__ */ P(e);
+	return t === e ? t : (N(t, "iterate", tt), /* @__PURE__ */ Ht(e) ? t : t.map(Gt));
 }
 function it(e) {
-	let t = /* @__PURE__ */ N(e);
-	return t === e ? t : (M(t, "iterate", nt), /* @__PURE__ */ Ut(e) ? t : t.map(Kt));
+	return N(e = /* @__PURE__ */ P(e), "iterate", tt), e;
 }
-function at(e) {
-	return M(e = /* @__PURE__ */ N(e), "iterate", nt), e;
+function at(e, t) {
+	return /* @__PURE__ */ Vt(e) ? Kt(/* @__PURE__ */ Bt(e) ? Gt(t) : t) : Gt(t);
 }
-function ot(e, t) {
-	return /* @__PURE__ */ Ht(e) ? qt(/* @__PURE__ */ Vt(e) ? Kt(t) : t) : Kt(t);
-}
-var st = {
+var ot = {
 	__proto__: null,
 	[Symbol.iterator]() {
-		return ct(this, Symbol.iterator, (e) => ot(this, e));
+		return st(this, Symbol.iterator, (e) => at(this, e));
 	},
 	concat(...e) {
-		return it(this).concat(...e.map((e) => p(e) ? it(e) : e));
+		return rt(this).concat(...e.map((e) => p(e) ? rt(e) : e));
 	},
 	entries() {
-		return ct(this, "entries", (e) => (e[1] = ot(this, e[1]), e));
+		return st(this, "entries", (e) => (e[1] = at(this, e[1]), e));
 	},
 	every(e, t) {
-		return ut(this, "every", e, t, void 0, arguments);
+		return lt(this, "every", e, t, void 0, arguments);
 	},
 	filter(e, t) {
-		return ut(this, "filter", e, t, (e) => e.map((e) => ot(this, e)), arguments);
+		return lt(this, "filter", e, t, (e) => e.map((e) => at(this, e)), arguments);
 	},
 	find(e, t) {
-		return ut(this, "find", e, t, (e) => ot(this, e), arguments);
+		return lt(this, "find", e, t, (e) => at(this, e), arguments);
 	},
 	findIndex(e, t) {
-		return ut(this, "findIndex", e, t, void 0, arguments);
+		return lt(this, "findIndex", e, t, void 0, arguments);
 	},
 	findLast(e, t) {
-		return ut(this, "findLast", e, t, (e) => ot(this, e), arguments);
+		return lt(this, "findLast", e, t, (e) => at(this, e), arguments);
 	},
 	findLastIndex(e, t) {
-		return ut(this, "findLastIndex", e, t, void 0, arguments);
+		return lt(this, "findLastIndex", e, t, void 0, arguments);
 	},
 	forEach(e, t) {
-		return ut(this, "forEach", e, t, void 0, arguments);
+		return lt(this, "forEach", e, t, void 0, arguments);
 	},
 	includes(...e) {
-		return ft(this, "includes", e);
+		return dt(this, "includes", e);
 	},
 	indexOf(...e) {
-		return ft(this, "indexOf", e);
+		return dt(this, "indexOf", e);
 	},
 	join(e) {
-		return it(this).join(e);
+		return rt(this).join(e);
 	},
 	lastIndexOf(...e) {
-		return ft(this, "lastIndexOf", e);
+		return dt(this, "lastIndexOf", e);
 	},
 	map(e, t) {
-		return ut(this, "map", e, t, void 0, arguments);
+		return lt(this, "map", e, t, void 0, arguments);
 	},
 	pop() {
-		return pt(this, "pop");
+		return ft(this, "pop");
 	},
 	push(...e) {
-		return pt(this, "push", e);
+		return ft(this, "push", e);
 	},
 	reduce(e, ...t) {
-		return dt(this, "reduce", e, t);
+		return ut(this, "reduce", e, t);
 	},
 	reduceRight(e, ...t) {
-		return dt(this, "reduceRight", e, t);
+		return ut(this, "reduceRight", e, t);
 	},
 	shift() {
-		return pt(this, "shift");
+		return ft(this, "shift");
 	},
 	some(e, t) {
-		return ut(this, "some", e, t, void 0, arguments);
+		return lt(this, "some", e, t, void 0, arguments);
 	},
 	splice(...e) {
-		return pt(this, "splice", e);
+		return ft(this, "splice", e);
 	},
 	toReversed() {
-		return it(this).toReversed();
+		return rt(this).toReversed();
 	},
 	toSorted(e) {
-		return it(this).toSorted(e);
+		return rt(this).toSorted(e);
 	},
 	toSpliced(...e) {
-		return it(this).toSpliced(...e);
+		return rt(this).toSpliced(...e);
 	},
 	unshift(...e) {
-		return pt(this, "unshift", e);
+		return ft(this, "unshift", e);
 	},
 	values() {
-		return ct(this, "values", (e) => ot(this, e));
+		return st(this, "values", (e) => at(this, e));
 	}
 };
-function ct(e, t, n) {
-	let r = at(e), i = r[t]();
-	return r !== e && !/* @__PURE__ */ Ut(e) && (i._next = i.next, i.next = () => {
+function st(e, t, n) {
+	let r = it(e), i = r[t]();
+	return r !== e && !/* @__PURE__ */ Ht(e) && (i._next = i.next, i.next = () => {
 		let e = i._next();
 		return e.done || (e.value = n(e.value)), e;
 	}), i;
 }
-var lt = Array.prototype;
-function ut(e, t, n, r, i, a) {
-	let o = at(e), s = o !== e && !/* @__PURE__ */ Ut(e), c = o[t];
-	if (c !== lt[t]) {
+var ct = Array.prototype;
+function lt(e, t, n, r, i, a) {
+	let o = it(e), s = o !== e && !/* @__PURE__ */ Ht(e), c = o[t];
+	if (c !== ct[t]) {
 		let t = c.apply(e, a);
-		return s ? Kt(t) : t;
+		return s ? Gt(t) : t;
 	}
 	let l = n;
 	o !== e && (s ? l = function(t, r) {
-		return n.call(this, ot(e, t), r, e);
+		return n.call(this, at(e, t), r, e);
 	} : n.length > 2 && (l = function(t, r) {
 		return n.call(this, t, r, e);
 	}));
 	let u = c.call(o, l, r);
 	return s && i ? i(u) : u;
 }
-function dt(e, t, n, r) {
-	let i = at(e), a = i !== e && !/* @__PURE__ */ Ut(e), o = n, s = !1;
+function ut(e, t, n, r) {
+	let i = it(e), a = i !== e && !/* @__PURE__ */ Ht(e), o = n, s = !1;
 	i !== e && (a ? (s = r.length === 0, o = function(t, r, i) {
-		return s && (s = !1, t = ot(e, t)), n.call(this, t, ot(e, r), i, e);
+		return s && (s = !1, t = at(e, t)), n.call(this, t, at(e, r), i, e);
 	}) : n.length > 3 && (o = function(t, r, i) {
 		return n.call(this, t, r, i, e);
 	}));
 	let c = i[t](o, ...r);
-	return s ? ot(e, c) : c;
+	return s ? at(e, c) : c;
 }
-function ft(e, t, n) {
-	let r = /* @__PURE__ */ N(e);
-	M(r, "iterate", nt);
+function dt(e, t, n) {
+	let r = /* @__PURE__ */ P(e);
+	N(r, "iterate", tt);
 	let i = r[t](...n);
-	return (i === -1 || i === !1) && /* @__PURE__ */ Wt(n[0]) ? (n[0] = /* @__PURE__ */ N(n[0]), r[t](...n)) : i;
+	return (i === -1 || i === !1) && /* @__PURE__ */ Ut(n[0]) ? (n[0] = /* @__PURE__ */ P(n[0]), r[t](...n)) : i;
 }
-function pt(e, t, n = []) {
-	Ke(), Ie();
-	let r = (/* @__PURE__ */ N(e))[t].apply(e, n);
-	return Le(), qe(), r;
+function ft(e, t, n = []) {
+	Ge(), Fe();
+	let r = (/* @__PURE__ */ P(e))[t].apply(e, n);
+	return Ie(), Ke(), r;
 }
-var mt = /* @__PURE__ */ n("__proto__,__v_isRef,__isVue"), ht = new Set(/* @__PURE__ */ Object.getOwnPropertyNames(Symbol).filter((e) => e !== "arguments" && e !== "caller").map((e) => Symbol[e]).filter(y));
-function gt(e) {
+var pt = /* @__PURE__ */ n("__proto__,__v_isRef,__isVue"), mt = new Set(/* @__PURE__ */ Object.getOwnPropertyNames(Symbol).filter((e) => e !== "arguments" && e !== "caller").map((e) => Symbol[e]).filter(y));
+function ht(e) {
 	y(e) || (e = String(e));
-	let t = /* @__PURE__ */ N(this);
-	return M(t, "has", e), t.hasOwnProperty(e);
+	let t = /* @__PURE__ */ P(this);
+	return N(t, "has", e), t.hasOwnProperty(e);
 }
-var _t = class {
+var gt = class {
 	constructor(e = !1, t = !1) {
 		this._isReadonly = e, this._isShallow = t;
 	}
@@ -531,46 +531,46 @@ var _t = class {
 		if (t === "__v_isReactive") return !r;
 		if (t === "__v_isReadonly") return r;
 		if (t === "__v_isShallow") return i;
-		if (t === "__v_raw") return n === (r ? i ? Ft : Pt : i ? Nt : Mt).get(e) || Object.getPrototypeOf(e) === Object.getPrototypeOf(n) ? e : void 0;
+		if (t === "__v_raw") return n === (r ? i ? Pt : Nt : i ? Mt : jt).get(e) || Object.getPrototypeOf(e) === Object.getPrototypeOf(n) ? e : void 0;
 		let a = p(e);
 		if (!r) {
 			let e;
-			if (a && (e = st[t])) return e;
-			if (t === "hasOwnProperty") return gt;
+			if (a && (e = ot[t])) return e;
+			if (t === "hasOwnProperty") return ht;
 		}
-		let o = Reflect.get(e, t, /* @__PURE__ */ P(e) ? e : n);
-		if ((y(t) ? ht.has(t) : mt(t)) || (r || M(e, "get", t), i)) return o;
-		if (/* @__PURE__ */ P(o)) {
+		let o = Reflect.get(e, t, /* @__PURE__ */ F(e) ? e : n);
+		if ((y(t) ? mt.has(t) : pt(t)) || (r || N(e, "get", t), i)) return o;
+		if (/* @__PURE__ */ F(o)) {
 			let e = a && te(t) ? o : o.value;
-			return r && b(e) ? /* @__PURE__ */ zt(e) : e;
+			return r && b(e) ? /* @__PURE__ */ Rt(e) : e;
 		}
-		return b(o) ? r ? /* @__PURE__ */ zt(o) : /* @__PURE__ */ Lt(o) : o;
+		return b(o) ? r ? /* @__PURE__ */ Rt(o) : /* @__PURE__ */ It(o) : o;
 	}
-}, vt = class extends _t {
+}, _t = class extends gt {
 	constructor(e = !1) {
 		super(!1, e);
 	}
 	set(e, t, n, r) {
 		let i = e[t], a = p(e) && te(t);
 		if (!this._isShallow) {
-			let e = /* @__PURE__ */ Ht(i);
-			if (!/* @__PURE__ */ Ut(n) && !/* @__PURE__ */ Ht(n) && (i = /* @__PURE__ */ N(i), n = /* @__PURE__ */ N(n)), !a && /* @__PURE__ */ P(i) && !/* @__PURE__ */ P(n)) return e || (i.value = n), !0;
+			let e = /* @__PURE__ */ Vt(i);
+			if (!/* @__PURE__ */ Ht(n) && !/* @__PURE__ */ Vt(n) && (i = /* @__PURE__ */ P(i), n = /* @__PURE__ */ P(n)), !a && /* @__PURE__ */ F(i) && !/* @__PURE__ */ F(n)) return e || (i.value = n), !0;
 		}
-		let o = a ? Number(t) < e.length : f(e, t), s = Reflect.set(e, t, n, /* @__PURE__ */ P(e) ? e : r);
-		return e === /* @__PURE__ */ N(r) && (o ? D(n, i) && rt(e, "set", t, n, i) : rt(e, "add", t, n)), s;
+		let o = a ? Number(t) < e.length : f(e, t), s = Reflect.set(e, t, n, /* @__PURE__ */ F(e) ? e : r);
+		return e === /* @__PURE__ */ P(r) && (o ? D(n, i) && nt(e, "set", t, n, i) : nt(e, "add", t, n)), s;
 	}
 	deleteProperty(e, t) {
 		let n = f(e, t), r = e[t], i = Reflect.deleteProperty(e, t);
-		return i && n && rt(e, "delete", t, void 0, r), i;
+		return i && n && nt(e, "delete", t, void 0, r), i;
 	}
 	has(e, t) {
 		let n = Reflect.has(e, t);
-		return (!y(t) || !ht.has(t)) && M(e, "has", t), n;
+		return (!y(t) || !mt.has(t)) && N(e, "has", t), n;
 	}
 	ownKeys(e) {
-		return M(e, "iterate", p(e) ? "length" : et), Reflect.ownKeys(e);
+		return N(e, "iterate", p(e) ? "length" : $e), Reflect.ownKeys(e);
 	}
-}, yt = class extends _t {
+}, vt = class extends gt {
 	constructor(e = !1) {
 		super(!0, e);
 	}
@@ -580,11 +580,11 @@ var _t = class {
 	deleteProperty(e, t) {
 		return !0;
 	}
-}, bt = /* @__PURE__ */ new vt(), xt = /* @__PURE__ */ new yt(), St = /* @__PURE__ */ new vt(!0), Ct = (e) => e, wt = (e) => Reflect.getPrototypeOf(e);
-function Tt(e, t, n) {
+}, yt = /* @__PURE__ */ new _t(), bt = /* @__PURE__ */ new vt(), xt = /* @__PURE__ */ new _t(!0), St = (e) => e, Ct = (e) => Reflect.getPrototypeOf(e);
+function wt(e, t, n) {
 	return function(...r) {
-		let i = this.__v_raw, a = /* @__PURE__ */ N(i), o = m(a), s = e === "entries" || e === Symbol.iterator && o, c = e === "keys" && o, u = i[e](...r), d = n ? Ct : t ? qt : Kt;
-		return !t && M(a, "iterate", c ? tt : et), l(Object.create(u), { next() {
+		let i = this.__v_raw, a = /* @__PURE__ */ P(i), o = m(a), s = e === "entries" || e === Symbol.iterator && o, c = e === "keys" && o, u = i[e](...r), d = n ? St : t ? Kt : Gt;
+		return !t && N(a, "iterate", c ? et : $e), l(Object.create(u), { next() {
 			let { value: e, done: t } = u.next();
 			return t ? {
 				value: e,
@@ -596,60 +596,60 @@ function Tt(e, t, n) {
 		} });
 	};
 }
-function Et(e) {
+function Tt(e) {
 	return function(...t) {
 		return e === "delete" ? !1 : e === "clear" ? void 0 : this;
 	};
 }
-function Dt(e, t) {
+function Et(e, t) {
 	let n = {
 		get(n) {
-			let r = this.__v_raw, i = /* @__PURE__ */ N(r), a = /* @__PURE__ */ N(n);
-			e || (D(n, a) && M(i, "get", n), M(i, "get", a));
-			let { has: o } = wt(i), s = t ? Ct : e ? qt : Kt;
+			let r = this.__v_raw, i = /* @__PURE__ */ P(r), a = /* @__PURE__ */ P(n);
+			e || (D(n, a) && N(i, "get", n), N(i, "get", a));
+			let { has: o } = Ct(i), s = t ? St : e ? Kt : Gt;
 			if (o.call(i, n)) return s(r.get(n));
 			if (o.call(i, a)) return s(r.get(a));
 			r !== i && r.get(n);
 		},
 		get size() {
 			let t = this.__v_raw;
-			return !e && M(/* @__PURE__ */ N(t), "iterate", et), t.size;
+			return !e && N(/* @__PURE__ */ P(t), "iterate", $e), t.size;
 		},
 		has(t) {
-			let n = this.__v_raw, r = /* @__PURE__ */ N(n), i = /* @__PURE__ */ N(t);
-			return e || (D(t, i) && M(r, "has", t), M(r, "has", i)), t === i ? n.has(t) : n.has(t) || n.has(i);
+			let n = this.__v_raw, r = /* @__PURE__ */ P(n), i = /* @__PURE__ */ P(t);
+			return e || (D(t, i) && N(r, "has", t), N(r, "has", i)), t === i ? n.has(t) : n.has(t) || n.has(i);
 		},
 		forEach(n, r) {
-			let i = this, a = i.__v_raw, o = /* @__PURE__ */ N(a), s = t ? Ct : e ? qt : Kt;
-			return !e && M(o, "iterate", et), a.forEach((e, t) => n.call(r, s(e), s(t), i));
+			let i = this, a = i.__v_raw, o = /* @__PURE__ */ P(a), s = t ? St : e ? Kt : Gt;
+			return !e && N(o, "iterate", $e), a.forEach((e, t) => n.call(r, s(e), s(t), i));
 		}
 	};
 	return l(n, e ? {
-		add: Et("add"),
-		set: Et("set"),
-		delete: Et("delete"),
-		clear: Et("clear")
+		add: Tt("add"),
+		set: Tt("set"),
+		delete: Tt("delete"),
+		clear: Tt("clear")
 	} : {
 		add(e) {
-			let n = /* @__PURE__ */ N(this), r = wt(n), i = /* @__PURE__ */ N(e), a = !t && !/* @__PURE__ */ Ut(e) && !/* @__PURE__ */ Ht(e) ? i : e;
-			return r.has.call(n, a) || D(e, a) && r.has.call(n, e) || D(i, a) && r.has.call(n, i) || (n.add(a), rt(n, "add", a, a)), this;
+			let n = /* @__PURE__ */ P(this), r = Ct(n), i = /* @__PURE__ */ P(e), a = !t && !/* @__PURE__ */ Ht(e) && !/* @__PURE__ */ Vt(e) ? i : e;
+			return r.has.call(n, a) || D(e, a) && r.has.call(n, e) || D(i, a) && r.has.call(n, i) || (n.add(a), nt(n, "add", a, a)), this;
 		},
 		set(e, n) {
-			!t && !/* @__PURE__ */ Ut(n) && !/* @__PURE__ */ Ht(n) && (n = /* @__PURE__ */ N(n));
-			let r = /* @__PURE__ */ N(this), { has: i, get: a } = wt(r), o = i.call(r, e);
-			o ||= (e = /* @__PURE__ */ N(e), i.call(r, e));
+			!t && !/* @__PURE__ */ Ht(n) && !/* @__PURE__ */ Vt(n) && (n = /* @__PURE__ */ P(n));
+			let r = /* @__PURE__ */ P(this), { has: i, get: a } = Ct(r), o = i.call(r, e);
+			o ||= (e = /* @__PURE__ */ P(e), i.call(r, e));
 			let s = a.call(r, e);
-			return r.set(e, n), o ? D(n, s) && rt(r, "set", e, n, s) : rt(r, "add", e, n), this;
+			return r.set(e, n), o ? D(n, s) && nt(r, "set", e, n, s) : nt(r, "add", e, n), this;
 		},
 		delete(e) {
-			let t = /* @__PURE__ */ N(this), { has: n, get: r } = wt(t), i = n.call(t, e);
-			i ||= (e = /* @__PURE__ */ N(e), n.call(t, e));
+			let t = /* @__PURE__ */ P(this), { has: n, get: r } = Ct(t), i = n.call(t, e);
+			i ||= (e = /* @__PURE__ */ P(e), n.call(t, e));
 			let a = r ? r.call(t, e) : void 0, o = t.delete(e);
-			return i && rt(t, "delete", e, void 0, a), o;
+			return i && nt(t, "delete", e, void 0, a), o;
 		},
 		clear() {
-			let e = /* @__PURE__ */ N(this), t = e.size !== 0, n = e.clear();
-			return t && rt(e, "clear", void 0, void 0, void 0), n;
+			let e = /* @__PURE__ */ P(this), t = e.size !== 0, n = e.clear();
+			return t && nt(e, "clear", void 0, void 0, void 0), n;
 		}
 	}), [
 		"keys",
@@ -657,15 +657,15 @@ function Dt(e, t) {
 		"entries",
 		Symbol.iterator
 	].forEach((r) => {
-		n[r] = Tt(r, e, t);
+		n[r] = wt(r, e, t);
 	}), n;
 }
-function Ot(e, t) {
-	let n = Dt(e, t);
+function Dt(e, t) {
+	let n = Et(e, t);
 	return (t, r, i) => r === "__v_isReactive" ? !e : r === "__v_isReadonly" ? e : r === "__v_raw" ? t : Reflect.get(f(n, r) && r in t ? n : t, r, i);
 }
-var kt = { get: /* @__PURE__ */ Ot(!1, !1) }, At = { get: /* @__PURE__ */ Ot(!1, !0) }, jt = { get: /* @__PURE__ */ Ot(!0, !1) }, Mt = /* @__PURE__ */ new WeakMap(), Nt = /* @__PURE__ */ new WeakMap(), Pt = /* @__PURE__ */ new WeakMap(), Ft = /* @__PURE__ */ new WeakMap();
-function It(e) {
+var Ot = { get: /* @__PURE__ */ Dt(!1, !1) }, kt = { get: /* @__PURE__ */ Dt(!1, !0) }, At = { get: /* @__PURE__ */ Dt(!0, !1) }, jt = /* @__PURE__ */ new WeakMap(), Mt = /* @__PURE__ */ new WeakMap(), Nt = /* @__PURE__ */ new WeakMap(), Pt = /* @__PURE__ */ new WeakMap();
+function Ft(e) {
 	switch (e) {
 		case "Object":
 		case "Array": return 1;
@@ -677,95 +677,95 @@ function It(e) {
 	}
 }
 // @__NO_SIDE_EFFECTS__
+function It(e) {
+	return /* @__PURE__ */ Vt(e) ? e : zt(e, !1, yt, Ot, jt);
+}
+// @__NO_SIDE_EFFECTS__
 function Lt(e) {
-	return /* @__PURE__ */ Ht(e) ? e : Bt(e, !1, bt, kt, Mt);
+	return zt(e, !1, xt, kt, Mt);
 }
 // @__NO_SIDE_EFFECTS__
 function Rt(e) {
-	return Bt(e, !1, St, At, Nt);
+	return zt(e, !0, bt, At, Nt);
 }
-// @__NO_SIDE_EFFECTS__
-function zt(e) {
-	return Bt(e, !0, xt, jt, Pt);
-}
-function Bt(e, t, n, r, i) {
+function zt(e, t, n, r, i) {
 	if (!b(e) || e.__v_raw && !(t && e.__v_isReactive) || e.__v_skip || !Object.isExtensible(e)) return e;
 	let a = i.get(e);
 	if (a) return a;
-	let o = It(w(e));
+	let o = Ft(w(e));
 	if (o === 0) return e;
 	let s = new Proxy(e, o === 2 ? r : n);
 	return i.set(e, s), s;
 }
 // @__NO_SIDE_EFFECTS__
-function Vt(e) {
-	return /* @__PURE__ */ Ht(e) ? /* @__PURE__ */ Vt(e.__v_raw) : !!(e && e.__v_isReactive);
+function Bt(e) {
+	return /* @__PURE__ */ Vt(e) ? /* @__PURE__ */ Bt(e.__v_raw) : !!(e && e.__v_isReactive);
 }
 // @__NO_SIDE_EFFECTS__
-function Ht(e) {
+function Vt(e) {
 	return !!(e && e.__v_isReadonly);
 }
 // @__NO_SIDE_EFFECTS__
-function Ut(e) {
+function Ht(e) {
 	return !!(e && e.__v_isShallow);
 }
 // @__NO_SIDE_EFFECTS__
-function Wt(e) {
+function Ut(e) {
 	return e ? !!e.__v_raw : !1;
 }
 // @__NO_SIDE_EFFECTS__
-function N(e) {
+function P(e) {
 	let t = e && e.__v_raw;
-	return t ? /* @__PURE__ */ N(t) : e;
+	return t ? /* @__PURE__ */ P(t) : e;
 }
-function Gt(e) {
+function Wt(e) {
 	return !f(e, "__v_skip") && Object.isExtensible(e) && le(e, "__v_skip", !0), e;
 }
-var Kt = (e) => b(e) ? /* @__PURE__ */ Lt(e) : e, qt = (e) => b(e) ? /* @__PURE__ */ zt(e) : e;
+var Gt = (e) => b(e) ? /* @__PURE__ */ It(e) : e, Kt = (e) => b(e) ? /* @__PURE__ */ Rt(e) : e;
 // @__NO_SIDE_EFFECTS__
-function P(e) {
+function F(e) {
 	return e ? e.__v_isRef === !0 : !1;
 }
 // @__NO_SIDE_EFFECTS__
-function F(e) {
-	return Yt(e, !1);
+function I(e) {
+	return Jt(e, !1);
 }
 // @__NO_SIDE_EFFECTS__
-function Jt(e) {
-	return Yt(e, !0);
+function qt(e) {
+	return Jt(e, !0);
 }
-function Yt(e, t) {
-	return /* @__PURE__ */ P(e) ? e : new Xt(e, t);
+function Jt(e, t) {
+	return /* @__PURE__ */ F(e) ? e : new Yt(e, t);
 }
-var Xt = class {
+var Yt = class {
 	constructor(e, t) {
-		this.dep = new Ze(), this.__v_isRef = !0, this.__v_isShallow = !1, this._rawValue = t ? e : /* @__PURE__ */ N(e), this._value = t ? e : Kt(e), this.__v_isShallow = t;
+		this.dep = new Xe(), this.__v_isRef = !0, this.__v_isShallow = !1, this._rawValue = t ? e : /* @__PURE__ */ P(e), this._value = t ? e : Gt(e), this.__v_isShallow = t;
 	}
 	get value() {
 		return this.dep.track(), this._value;
 	}
 	set value(e) {
-		let t = this._rawValue, n = this.__v_isShallow || /* @__PURE__ */ Ut(e) || /* @__PURE__ */ Ht(e);
-		e = n ? e : /* @__PURE__ */ N(e), D(e, t) && (this._rawValue = e, this._value = n ? e : Kt(e), this.dep.trigger());
+		let t = this._rawValue, n = this.__v_isShallow || /* @__PURE__ */ Ht(e) || /* @__PURE__ */ Vt(e);
+		e = n ? e : /* @__PURE__ */ P(e), D(e, t) && (this._rawValue = e, this._value = n ? e : Gt(e), this.dep.trigger());
 	}
 };
-function I(e) {
-	return /* @__PURE__ */ P(e) ? e.value : e;
+function L(e) {
+	return /* @__PURE__ */ F(e) ? e.value : e;
 }
-var Zt = {
-	get: (e, t, n) => t === "__v_raw" ? e : I(Reflect.get(e, t, n)),
+var Xt = {
+	get: (e, t, n) => t === "__v_raw" ? e : L(Reflect.get(e, t, n)),
 	set: (e, t, n, r) => {
 		let i = e[t];
-		return /* @__PURE__ */ P(i) && !/* @__PURE__ */ P(n) ? (i.value = n, !0) : Reflect.set(e, t, n, r);
+		return /* @__PURE__ */ F(i) && !/* @__PURE__ */ F(n) ? (i.value = n, !0) : Reflect.set(e, t, n, r);
 	}
 };
-function Qt(e) {
-	return /* @__PURE__ */ Vt(e) ? e : new Proxy(e, Zt);
+function Zt(e) {
+	return /* @__PURE__ */ Bt(e) ? e : new Proxy(e, Xt);
 }
-var $t = class {
+var Qt = class {
 	constructor(e) {
 		this.__v_isRef = !0, this._value = void 0;
-		let t = this.dep = new Ze(), { get: n, set: r } = e(t.track.bind(t), t.trigger.bind(t));
+		let t = this.dep = new Xe(), { get: n, set: r } = e(t.track.bind(t), t.trigger.bind(t));
 		this._get = n, this._set = r;
 	}
 	get value() {
@@ -775,63 +775,63 @@ var $t = class {
 		this._set(e);
 	}
 };
-function en(e) {
-	return new $t(e);
+function $t(e) {
+	return new Qt(e);
 }
-var tn = class {
+var en = class {
 	constructor(e, t, n) {
-		this.fn = e, this.setter = t, this._value = void 0, this.dep = new Ze(this), this.__v_isRef = !0, this.deps = void 0, this.depsTail = void 0, this.flags = 16, this.globalVersion = Ye - 1, this.next = void 0, this.effect = this, this.__v_isReadonly = !t, this.isSSR = n;
+		this.fn = e, this.setter = t, this._value = void 0, this.dep = new Xe(this), this.__v_isRef = !0, this.deps = void 0, this.depsTail = void 0, this.flags = 16, this.globalVersion = Je - 1, this.next = void 0, this.effect = this, this.__v_isReadonly = !t, this.isSSR = n;
 	}
 	notify() {
-		if (this.flags |= 16, !(this.flags & 8) && j !== this) return Fe(this, !0), !0;
+		if (this.flags |= 16, !(this.flags & 8) && M !== this) return Pe(this, !0), !0;
 	}
 	get value() {
 		let e = this.dep.track();
-		return Ve(this), e && (e.version = this.dep.version), this._value;
+		return Be(this), e && (e.version = this.dep.version), this._value;
 	}
 	set value(e) {
 		this.setter && this.setter(e);
 	}
 };
 // @__NO_SIDE_EFFECTS__
-function nn(e, t, n = !1) {
+function tn(e, t, n = !1) {
 	let r, i;
-	return _(e) ? r = e : (r = e.get, i = e.set), new tn(r, i, n);
+	return _(e) ? r = e : (r = e.get, i = e.set), new en(r, i, n);
 }
-var rn = {}, an = /* @__PURE__ */ new WeakMap(), on = void 0;
-function sn(e, t = !1, n = on) {
+var nn = {}, rn = /* @__PURE__ */ new WeakMap(), an = void 0;
+function on(e, t = !1, n = an) {
 	if (n) {
-		let t = an.get(n);
-		t || an.set(n, t = []), t.push(e);
+		let t = rn.get(n);
+		t || rn.set(n, t = []), t.push(e);
 	}
 }
-function cn(e, t, n = r) {
-	let { immediate: i, deep: o, once: s, scheduler: c, augmentJob: l, call: d } = n, f = (e) => o ? e : /* @__PURE__ */ Ut(e) || o === !1 || o === 0 ? ln(e, 1) : ln(e), m, h, g, v, y = !1, b = !1;
-	if (/* @__PURE__ */ P(e) ? (h = () => e.value, y = /* @__PURE__ */ Ut(e)) : /* @__PURE__ */ Vt(e) ? (h = () => f(e), y = !0) : p(e) ? (b = !0, y = e.some((e) => /* @__PURE__ */ Vt(e) || /* @__PURE__ */ Ut(e)), h = () => e.map((e) => {
-		if (/* @__PURE__ */ P(e)) return e.value;
-		if (/* @__PURE__ */ Vt(e)) return f(e);
+function sn(e, t, n = r) {
+	let { immediate: i, deep: o, once: s, scheduler: c, augmentJob: l, call: d } = n, f = (e) => o ? e : /* @__PURE__ */ Ht(e) || o === !1 || o === 0 ? cn(e, 1) : cn(e), m, h, g, v, y = !1, b = !1;
+	if (/* @__PURE__ */ F(e) ? (h = () => e.value, y = /* @__PURE__ */ Ht(e)) : /* @__PURE__ */ Bt(e) ? (h = () => f(e), y = !0) : p(e) ? (b = !0, y = e.some((e) => /* @__PURE__ */ Bt(e) || /* @__PURE__ */ Ht(e)), h = () => e.map((e) => {
+		if (/* @__PURE__ */ F(e)) return e.value;
+		if (/* @__PURE__ */ Bt(e)) return f(e);
 		if (_(e)) return d ? d(e, 2) : e();
 	})) : h = _(e) ? t ? d ? () => d(e, 2) : e : () => {
 		if (g) {
-			Ke();
+			Ge();
 			try {
 				g();
 			} finally {
-				qe();
+				Ke();
 			}
 		}
-		let t = on;
-		on = m;
+		let t = an;
+		an = m;
 		try {
 			return d ? d(e, 3, [v]) : e(v);
 		} finally {
-			on = t;
+			an = t;
 		}
 	} : a, t && o) {
 		let e = h, t = o === !0 ? Infinity : o;
-		h = () => ln(e(), t);
+		h = () => cn(e(), t);
 	}
-	let x = ke(), S = () => {
+	let x = Oe(), S = () => {
 		m.stop(), x && x.active && u(x.effects, m);
 	};
 	if (s && t) {
@@ -841,71 +841,71 @@ function cn(e, t, n = r) {
 			return S(), n;
 		};
 	}
-	let C = b ? Array(e.length).fill(rn) : rn, w = (e) => {
+	let C = b ? Array(e.length).fill(nn) : nn, w = (e) => {
 		if (!(!(m.flags & 1) || !m.dirty && !e)) if (t) {
 			let n = m.run();
 			if (e || o || y || (b ? n.some((e, t) => D(e, C[t])) : D(n, C))) {
 				g && g();
-				let e = on;
-				on = m;
+				let e = an;
+				an = m;
 				try {
 					let e = [
 						n,
-						C === rn ? void 0 : b && C[0] === rn ? [] : C,
+						C === nn ? void 0 : b && C[0] === nn ? [] : C,
 						v
 					];
 					C = n, d ? d(t, 3, e) : t(...e);
 				} finally {
-					on = e;
+					an = e;
 				}
 			}
 		} else m.run();
 	};
-	return l && l(w), m = new je(h), m.scheduler = c ? () => c(w, !1) : w, v = (e) => sn(e, !1, m), g = m.onStop = () => {
-		let e = an.get(m);
+	return l && l(w), m = new Ae(h), m.scheduler = c ? () => c(w, !1) : w, v = (e) => on(e, !1, m), g = m.onStop = () => {
+		let e = rn.get(m);
 		if (e) {
 			if (d) d(e, 4);
 			else for (let t of e) t();
-			an.delete(m);
+			rn.delete(m);
 		}
 	}, t ? i ? w(!0) : C = m.run() : c ? c(w.bind(null, !0), !0) : m.run(), S.pause = m.pause.bind(m), S.resume = m.resume.bind(m), S.stop = S, S;
 }
-function ln(e, t = Infinity, n) {
+function cn(e, t = Infinity, n) {
 	if (t <= 0 || !b(e) || e.__v_skip || (n ||= /* @__PURE__ */ new Map(), (n.get(e) || 0) >= t)) return e;
-	if (n.set(e, t), t--, /* @__PURE__ */ P(e)) ln(e.value, t, n);
-	else if (p(e)) for (let r = 0; r < e.length; r++) ln(e[r], t, n);
+	if (n.set(e, t), t--, /* @__PURE__ */ F(e)) cn(e.value, t, n);
+	else if (p(e)) for (let r = 0; r < e.length; r++) cn(e[r], t, n);
 	else if (h(e) || m(e)) e.forEach((e) => {
-		ln(e, t, n);
+		cn(e, t, n);
 	});
 	else if (ee(e)) {
-		for (let r in e) ln(e[r], t, n);
-		for (let r of Object.getOwnPropertySymbols(e)) Object.prototype.propertyIsEnumerable.call(e, r) && ln(e[r], t, n);
+		for (let r in e) cn(e[r], t, n);
+		for (let r of Object.getOwnPropertySymbols(e)) Object.prototype.propertyIsEnumerable.call(e, r) && cn(e[r], t, n);
 	}
 	return e;
 }
 //#endregion
 //#region node_modules/@vue/runtime-core/dist/runtime-core.esm-bundler.js
-function un(e, t, n, r) {
+function ln(e, t, n, r) {
 	try {
 		return r ? e(...r) : e();
 	} catch (e) {
-		fn(e, t, n);
+		dn(e, t, n);
 	}
 }
-function dn(e, t, n, r) {
+function un(e, t, n, r) {
 	if (_(e)) {
-		let i = un(e, t, n, r);
+		let i = ln(e, t, n, r);
 		return i && x(i) && i.catch((e) => {
-			fn(e, t, n);
+			dn(e, t, n);
 		}), i;
 	}
 	if (p(e)) {
 		let i = [];
-		for (let a = 0; a < e.length; a++) i.push(dn(e[a], t, n, r));
+		for (let a = 0; a < e.length; a++) i.push(un(e[a], t, n, r));
 		return i;
 	}
 }
-function fn(e, t, n, i = !0) {
+function dn(e, t, n, i = !0) {
 	let a = t ? t.vnode : null, { errorHandler: o, throwUnhandledErrorInProduction: s } = t && t.appContext.config || r;
 	if (t) {
 		let r = t.parent, i = t.proxy, a = `https://vuejs.org/error-reference/#runtime-${n}`;
@@ -917,37 +917,37 @@ function fn(e, t, n, i = !0) {
 			r = r.parent;
 		}
 		if (o) {
-			Ke(), un(o, null, 10, [
+			Ge(), ln(o, null, 10, [
 				e,
 				i,
 				a
-			]), qe();
+			]), Ke();
 			return;
 		}
 	}
-	pn(e, n, a, i, s);
+	fn(e, n, a, i, s);
 }
-function pn(e, t, n, r = !0, i = !1) {
+function fn(e, t, n, r = !0, i = !1) {
 	if (i) throw e;
 	console.error(e);
 }
-var L = [], mn = -1, hn = [], gn = null, _n = 0, vn = /* @__PURE__ */ Promise.resolve(), yn = null;
+var pn = [], mn = -1, hn = [], gn = null, _n = 0, vn = /* @__PURE__ */ Promise.resolve(), yn = null;
 function bn(e) {
 	let t = yn || vn;
 	return e ? t.then(this ? e.bind(this) : e) : t;
 }
 function xn(e) {
-	let t = mn + 1, n = L.length;
+	let t = mn + 1, n = pn.length;
 	for (; t < n;) {
-		let r = t + n >>> 1, i = L[r], a = Dn(i);
+		let r = t + n >>> 1, i = pn[r], a = Dn(i);
 		a < e || a === e && i.flags & 2 ? t = r + 1 : n = r;
 	}
 	return t;
 }
 function Sn(e) {
 	if (!(e.flags & 1)) {
-		let t = Dn(e), n = L[L.length - 1];
-		!n || !(e.flags & 2) && t >= Dn(n) ? L.push(e) : L.splice(xn(t), 0, e), e.flags |= 1, Cn();
+		let t = Dn(e), n = pn[pn.length - 1];
+		!n || !(e.flags & 2) && t >= Dn(n) ? pn.push(e) : pn.splice(xn(t), 0, e), e.flags |= 1, Cn();
 	}
 }
 function Cn() {
@@ -957,11 +957,11 @@ function wn(e) {
 	p(e) ? hn.push(...e) : gn && e.id === -1 ? gn.splice(_n + 1, 0, e) : e.flags & 1 || (hn.push(e), e.flags |= 1), Cn();
 }
 function Tn(e, t, n = mn + 1) {
-	for (; n < L.length; n++) {
-		let t = L[n];
+	for (; n < pn.length; n++) {
+		let t = pn[n];
 		if (t && t.flags & 2) {
 			if (e && t.id !== e.uid) continue;
-			L.splice(n, 1), n--, t.flags & 4 && (t.flags &= -2), t(), t.flags & 4 || (t.flags &= -2);
+			pn.splice(n, 1), n--, t.flags & 4 && (t.flags &= -2), t(), t.flags & 4 || (t.flags &= -2);
 		}
 	}
 }
@@ -982,16 +982,16 @@ function En(e) {
 var Dn = (e) => e.id == null ? e.flags & 2 ? -1 : Infinity : e.id;
 function On(e) {
 	try {
-		for (mn = 0; mn < L.length; mn++) {
-			let e = L[mn];
-			e && !(e.flags & 8) && (e.flags & 4 && (e.flags &= -2), un(e, e.i, e.i ? 15 : 14), e.flags & 4 || (e.flags &= -2));
+		for (mn = 0; mn < pn.length; mn++) {
+			let e = pn[mn];
+			e && !(e.flags & 8) && (e.flags & 4 && (e.flags &= -2), ln(e, e.i, e.i ? 15 : 14), e.flags & 4 || (e.flags &= -2));
 		}
 	} finally {
-		for (; mn < L.length; mn++) {
-			let e = L[mn];
+		for (; mn < pn.length; mn++) {
+			let e = pn[mn];
 			e && (e.flags &= -2);
 		}
-		mn = -1, L.length = 0, En(e), yn = null, (L.length || hn.length) && On(e);
+		mn = -1, pn.length = 0, En(e), yn = null, (pn.length || hn.length) && On(e);
 	}
 }
 var R = null, kn = null;
@@ -1021,7 +1021,7 @@ function z(e, t) {
 		a && (_(a) && (a = {
 			mounted: a,
 			updated: a
-		}), a.deep && ln(o), i.push({
+		}), a.deep && cn(o), i.push({
 			dir: a,
 			instance: n,
 			value: o,
@@ -1038,12 +1038,12 @@ function Mn(e, t, n, r) {
 		let s = i[o];
 		a && (s.oldValue = a[o].value);
 		let c = s.dir[r];
-		c && (Ke(), dn(c, n, 8, [
+		c && (Ge(), un(c, n, 8, [
 			e.el,
 			s,
 			e,
 			t
-		]), qe());
+		]), Ke());
 	}
 }
 function Nn(e, t) {
@@ -1079,7 +1079,7 @@ function zn(e, t, n = r) {
 		}
 	}
 	let p = X;
-	u.call = (e, t, n) => dn(e, p, t, n);
+	u.call = (e, t, n) => un(e, p, t, n);
 	let m = !1;
 	s === "post" ? u.scheduler = (e) => {
 		Zi(e, p && p.suspense);
@@ -1088,7 +1088,7 @@ function zn(e, t, n = r) {
 	}), u.augmentJob = (e) => {
 		t && (e.flags |= 4), m && (e.flags |= 2, p && (e.id = p.uid, e.i = p));
 	};
-	let h = cn(e, t, u);
+	let h = sn(e, t, u);
 	return za && (f ? f.push(h) : d && h()), h;
 }
 function Bn(e, t, n) {
@@ -1241,7 +1241,7 @@ var ar = [Function, Array], or = {
 		return () => {
 			let i = t.default && gr(t.default(), !0), a = i && i.length ? lr(i) : n.subTree ? Y() : void 0;
 			if (!a) return;
-			let o = /* @__PURE__ */ N(e), { mode: s } = o;
+			let o = /* @__PURE__ */ P(e), { mode: s } = o;
 			if (r.isLeaving) return pr(a);
 			let c = mr(a);
 			if (!c) return pr(a);
@@ -1283,7 +1283,7 @@ function dr(e, t) {
 }
 function fr(e, t, n, r, i) {
 	let { appear: a, mode: o, persisted: s = !1, onBeforeEnter: c, onEnter: l, onAfterEnter: u, onEnterCancelled: d, onBeforeLeave: f, onLeave: m, onAfterLeave: h, onLeaveCancelled: g, onBeforeAppear: _, onAppear: v, onAfterAppear: y, onAppearCancelled: b } = t, x = String(e.key), S = dr(n, e), C = (e, t) => {
-		e && dn(e, r, 9, t);
+		e && un(e, r, 9, t);
 	}, w = (e, t) => {
 		let n = t[1];
 		C(e, t), p(e) ? e.every((e) => e.length <= 1) && n() : e.length <= 1 && n();
@@ -1381,17 +1381,17 @@ function Sr(e, t, n, i, a = !1) {
 		i.shapeFlag & 512 && i.type.__asyncResolved && i.component.subTree.component && Sr(e, t, n, i.component.subTree);
 		return;
 	}
-	let s = i.shapeFlag & 4 ? Ja(i.component) : i.el, c = a ? null : s, { i: l, r: d } = e, m = t && t.r, h = l.refs === r ? l.refs = {} : l.refs, g = l.setupState, y = /* @__PURE__ */ N(g), b = g === r ? o : (e) => br(h, e) ? !1 : f(y, e), x = (e, t) => !(t && br(h, t));
+	let s = i.shapeFlag & 4 ? Ja(i.component) : i.el, c = a ? null : s, { i: l, r: d } = e, m = t && t.r, h = l.refs === r ? l.refs = {} : l.refs, g = l.setupState, y = /* @__PURE__ */ P(g), b = g === r ? o : (e) => br(h, e) ? !1 : f(y, e), x = (e, t) => !(t && br(h, t));
 	if (m != null && m !== d) {
 		if (Cr(t), v(m)) h[m] = null, b(m) && (g[m] = null);
-		else if (/* @__PURE__ */ P(m)) {
+		else if (/* @__PURE__ */ F(m)) {
 			let e = t;
 			x(m, e.k) && (m.value = null), e.k && (h[e.k] = null);
 		}
 	}
-	if (_(d)) un(d, l, 12, [c, h]);
+	if (_(d)) ln(d, l, 12, [c, h]);
 	else {
-		let t = v(d), r = /* @__PURE__ */ P(d);
+		let t = v(d), r = /* @__PURE__ */ F(d);
 		if (t || r) {
 			let i = () => {
 				if (e.f) {
@@ -1418,7 +1418,7 @@ function Cr(e) {
 	let t = xr.get(e);
 	t && (t.flags |= 8, xr.delete(e));
 }
-pe().requestIdleCallback, pe().cancelIdleCallback;
+fe().requestIdleCallback, fe().cancelIdleCallback;
 var wr = (e) => !!e.type.__asyncLoader, Tr = (e) => e.type.__isKeepAlive;
 function Er(e, t) {
 	Or(e, "a", t);
@@ -1449,9 +1449,9 @@ function kr(e, t, n, r) {
 function Ar(e, t, n = X, r = !1) {
 	if (n) {
 		let i = n[e] || (n[e] = []), a = t.__weh ||= (...r) => {
-			Ke();
-			let i = Ia(n), a = dn(t, n, e, r);
-			return i(), qe(), a;
+			Ge();
+			let i = Ia(n), a = un(t, n, e, r);
+			return i(), Ke(), a;
 		};
 		return r ? i.unshift(a) : i.push(a), a;
 	}
@@ -1484,9 +1484,9 @@ function Kr(e, t) {
 function B(e, t, n, r) {
 	let i, a = n && n[r], o = p(e);
 	if (o || v(e)) {
-		let n = o && /* @__PURE__ */ Vt(e), r = !1, s = !1;
-		n && (r = !/* @__PURE__ */ Ut(e), s = /* @__PURE__ */ Ht(e), e = at(e)), i = Array(e.length);
-		for (let n = 0, o = e.length; n < o; n++) i[n] = t(r ? s ? qt(Kt(e[n])) : Kt(e[n]) : e[n], n, void 0, a && a[n]);
+		let n = o && /* @__PURE__ */ Bt(e), r = !1, s = !1;
+		n && (r = !/* @__PURE__ */ Ht(e), s = /* @__PURE__ */ Vt(e), e = it(e)), i = Array(e.length);
+		for (let n = 0, o = e.length; n < o; n++) i[n] = t(r ? s ? Kt(Gt(e[n])) : Gt(e[n]) : e[n], n, void 0, a && a[n]);
 	} else if (typeof e == "number") {
 		i = Array(e);
 		for (let n = 0; n < e; n++) i[n] = t(n + 1, n, void 0, a && a[n]);
@@ -1552,7 +1552,7 @@ var Yr = (e) => e ? Ra(e) ? Ja(e) : Yr(e.parent) : null, Xr = /* @__PURE__ */ l(
 			else ti && (s[t] = 0);
 		}
 		let u = Xr[t], d, p;
-		if (u) return t === "$attrs" && M(e.attrs, "get", ""), u(e);
+		if (u) return t === "$attrs" && N(e.attrs, "get", ""), u(e);
 		if ((d = c.__cssModules) && (d = d[t])) return d;
 		if (n !== r && f(n, t)) return s[t] = 4, n[t];
 		if (p = l.config.globalProperties, f(p, t)) return p[t];
@@ -1579,14 +1579,14 @@ var ti = !0;
 function ni(e) {
 	let t = oi(e), n = e.proxy, r = e.ctx;
 	ti = !1, t.beforeCreate && ii(t.beforeCreate, e, "bc");
-	let { data: i, computed: o, methods: s, watch: c, provide: l, inject: u, created: d, beforeMount: f, mounted: m, beforeUpdate: h, updated: g, activated: v, deactivated: y, beforeDestroy: x, beforeUnmount: S, destroyed: C, unmounted: w, render: ee, renderTracked: te, renderTriggered: T, errorCaptured: ne, serverPrefetch: re, expose: E, inheritAttrs: ie, components: ae, directives: oe, filters: se } = t;
+	let { data: i, computed: o, methods: s, watch: c, provide: l, inject: u, created: d, beforeMount: f, mounted: m, beforeUpdate: h, updated: g, activated: v, deactivated: y, beforeDestroy: x, beforeUnmount: S, destroyed: C, unmounted: w, render: ee, renderTracked: te, renderTriggered: ne, errorCaptured: T, serverPrefetch: re, expose: E, inheritAttrs: ie, components: ae, directives: oe, filters: se } = t;
 	if (u && ri(u, r, null), s) for (let e in s) {
 		let t = s[e];
 		_(t) && (r[e] = t.bind(n));
 	}
 	if (i) {
 		let t = i.call(n, n);
-		b(t) && (e.data = /* @__PURE__ */ Lt(t));
+		b(t) && (e.data = /* @__PURE__ */ It(t));
 	}
 	if (ti = !0, o) for (let e in o) {
 		let t = o[e], i = Z({
@@ -1611,7 +1611,7 @@ function ni(e) {
 	function D(e, t) {
 		p(t) ? t.forEach((t) => e(t.bind(n))) : t && e(t.bind(n));
 	}
-	if (D(Mr, f), D(Nr, m), D(Pr, h), D(Fr, g), D(Er, v), D(Dr, y), D(Vr, ne), D(Br, te), D(zr, T), D(Ir, S), D(Lr, w), D(Rr, re), p(E)) if (E.length) {
+	if (D(Mr, f), D(Nr, m), D(Pr, h), D(Fr, g), D(Er, v), D(Dr, y), D(Vr, T), D(Br, te), D(zr, ne), D(Ir, S), D(Lr, w), D(Rr, re), p(E)) if (E.length) {
 		let t = e.exposed ||= {};
 		E.forEach((e) => {
 			Object.defineProperty(t, e, {
@@ -1627,7 +1627,7 @@ function ri(e, t, n = a) {
 	p(e) && (e = di(e));
 	for (let n in e) {
 		let r = e[n], i;
-		i = b(r) ? "default" in r ? Pn(r.from || n, r.default, !0) : Pn(r.from || n) : Pn(r), /* @__PURE__ */ P(i) ? Object.defineProperty(t, n, {
+		i = b(r) ? "default" in r ? Pn(r.from || n, r.default, !0) : Pn(r.from || n) : Pn(r), /* @__PURE__ */ F(i) ? Object.defineProperty(t, n, {
 			enumerable: !0,
 			configurable: !0,
 			get: () => i.value,
@@ -1636,7 +1636,7 @@ function ri(e, t, n = a) {
 	}
 }
 function ii(e, t, n) {
-	dn(p(e) ? e.map((e) => e.bind(t.proxy)) : e.bind(t.proxy), t, n);
+	un(p(e) ? e.map((e) => e.bind(t.proxy)) : e.bind(t.proxy), t, n);
 }
 function ai(e, t, n, r) {
 	let i = r.includes(".") ? Vn(n, r) : () => n[r];
@@ -1780,7 +1780,7 @@ function vi(e, t) {
 				o.push(e);
 			},
 			unmount() {
-				s && (dn(o, c._instance, 16), e(null, c._container), delete c._container.__vue_app__);
+				s && (un(o, c._instance, 16), e(null, c._container), delete c._container.__vue_app__);
 			},
 			provide(e, t) {
 				return i.provides[e] = t, c;
@@ -1800,7 +1800,7 @@ function vi(e, t) {
 }
 var yi = null;
 function bi(e, t, n = r) {
-	let i = Na(), a = E(t), o = ae(t), s = xi(e, a), c = en((s, c) => {
+	let i = Na(), a = E(t), o = ae(t), s = xi(e, a), c = $t((s, c) => {
 		let l, u = r, d;
 		return Ln(() => {
 			let t = e[a];
@@ -1833,12 +1833,12 @@ function Si(e, t, ...n) {
 	let i = e.vnode.props || r, a = n, o = t.startsWith("update:"), s = o && xi(i, t.slice(7));
 	s && (s.trim && (a = n.map((e) => v(e) ? e.trim() : e)), s.number && (a = n.map(ue)));
 	let c, l = i[c = se(t)] || i[c = se(E(t))];
-	!l && o && (l = i[c = se(ae(t))]), l && dn(l, e, 6, a);
+	!l && o && (l = i[c = se(ae(t))]), l && un(l, e, 6, a);
 	let u = i[c + "Once"];
 	if (u) {
 		if (!e.emitted) e.emitted = {};
 		else if (e.emitted[c]) return;
-		e.emitted[c] = !0, dn(u, e, 6, a);
+		e.emitted[c] = !0, un(u, e, 6, a);
 	}
 }
 var Ci = /* @__PURE__ */ new WeakMap();
@@ -1873,7 +1873,7 @@ function Ei(e) {
 			}) : e(f, null)), y = t.props ? s : Di(s);
 		}
 	} catch (t) {
-		fa.length = 0, fn(t, e, 1), v = q(H);
+		fa.length = 0, dn(t, e, 1), v = q(H);
 	}
 	let b = v;
 	if (y && g !== !1) {
@@ -1918,7 +1918,7 @@ function Ai(e, t, n) {
 }
 function ji(e, t, n) {
 	let r = e[n], i = t[n];
-	return n === "style" && b(r) && b(i) ? !Ce(r, i) : r !== i;
+	return n === "style" && b(r) && b(i) ? !Se(r, i) : r !== i;
 }
 function Mi({ vnode: e, parent: t, suspense: n }, r) {
 	for (; t;) {
@@ -1933,10 +1933,10 @@ function Ii(e, t, n, r = !1) {
 	let i = {}, a = Pi();
 	e.propsDefaults = /* @__PURE__ */ Object.create(null), Ri(e, t, i, a);
 	for (let t in e.propsOptions[0]) t in i || (i[t] = void 0);
-	n ? e.props = r ? i : /* @__PURE__ */ Rt(i) : e.type.props ? e.props = i : e.props = a, e.attrs = a;
+	n ? e.props = r ? i : /* @__PURE__ */ Lt(i) : e.type.props ? e.props = i : e.props = a, e.attrs = a;
 }
 function Li(e, t, n, r) {
-	let { props: i, attrs: a, vnode: { patchFlag: o } } = e, s = /* @__PURE__ */ N(i), [c] = e.propsOptions, l = !1;
+	let { props: i, attrs: a, vnode: { patchFlag: o } } = e, s = /* @__PURE__ */ P(i), [c] = e.propsOptions, l = !1;
 	if ((r || o > 0) && !(o & 16)) {
 		if (o & 8) {
 			let n = e.vnode.dynamicProps;
@@ -1958,17 +1958,17 @@ function Li(e, t, n, r) {
 		for (let a in s) (!t || !f(t, a) && ((r = ae(a)) === a || !f(t, r))) && (c ? n && (n[a] !== void 0 || n[r] !== void 0) && (i[a] = zi(c, s, a, void 0, e, !0)) : delete i[a]);
 		if (a !== s) for (let e in a) (!t || !f(t, e)) && (delete a[e], l = !0);
 	}
-	l && rt(e.attrs, "set", "");
+	l && nt(e.attrs, "set", "");
 }
 function Ri(e, t, n, i) {
 	let [a, o] = e.propsOptions, s = !1, c;
 	if (t) for (let r in t) {
-		if (T(r)) continue;
+		if (ne(r)) continue;
 		let l = t[r], u;
 		a && f(a, u = E(r)) ? !o || !o.includes(u) ? n[u] = l : (c ||= {})[u] = l : Ti(e.emitsOptions, r) || (!(r in i) || l !== i[r]) && (i[r] = l, s = !0);
 	}
 	if (o) {
-		let t = /* @__PURE__ */ N(n), i = c || r;
+		let t = /* @__PURE__ */ P(n), i = c || r;
 		for (let r = 0; r < o.length; r++) {
 			let s = o[r];
 			n[s] = zi(a, t, s, i[s], e, !f(i, s));
@@ -2033,7 +2033,7 @@ function Vi(e, t, n = !1) {
 	return b(e) && a.set(e, m), m;
 }
 function Hi(e) {
-	return e[0] !== "$" && !T(e);
+	return e[0] !== "$" && !ne(e);
 }
 var Ui = (e) => e === "_" || e === "_ctx" || e === "$stable", Wi = (e) => p(e) ? e.map(Ta) : [Ta(e)], Gi = (e, t, n) => {
 	if (t._n) return t;
@@ -2073,11 +2073,11 @@ function Qi(e) {
 	return $i(e);
 }
 function $i(e, t) {
-	let n = pe();
+	let n = fe();
 	n.__VUE__ = !0;
 	let { insert: o, remove: s, patchProp: c, createElement: l, createText: u, createComment: d, setText: f, setElementText: p, parentNode: m, nextSibling: h, setScopeId: g = a, insertStaticContent: _ } = e, v = (e, t, n, r = null, i = null, a = null, o = void 0, s = null, c = !!t.dynamicChildren) => {
 		if (e === t) return;
-		e && !ya(e, t) && (r = be(e), ge(e, i, a, !0), e = null), t.patchFlag === -2 && (c = !1, t.dynamicChildren = null);
+		e && !ya(e, t) && (r = ye(e), he(e, i, a, !0), e = null), t.patchFlag === -2 && (c = !1, t.dynamicChildren = null);
 		let { type: l, ref: u, shapeFlag: d } = t;
 		switch (l) {
 			case ua:
@@ -2092,7 +2092,7 @@ function $i(e, t) {
 			case V:
 				ae(e, t, n, r, i, a, o, s, c);
 				break;
-			default: d & 1 ? w(e, t, n, r, i, a, o, s, c) : d & 6 ? oe(e, t, n, r, i, a, o, s, c) : (d & 64 || d & 128) && l.process(e, t, n, r, i, a, o, s, c, Ce);
+			default: d & 1 ? w(e, t, n, r, i, a, o, s, c) : d & 6 ? oe(e, t, n, r, i, a, o, s, c) : (d & 64 || d & 128) && l.process(e, t, n, r, i, a, o, s, c, Se);
 		}
 		u != null && i ? Sr(u, e && e.ref, a, t || e, !t) : u == null && e && e.ref != null && Sr(e.ref, null, a, e, !0);
 	}, y = (e, t, n, r) => {
@@ -2125,8 +2125,8 @@ function $i(e, t) {
 		}
 	}, ee = (e, t, n, r, i, a, s, u) => {
 		let d, f, { props: m, shapeFlag: h, transition: g, dirs: _ } = e;
-		if (d = e.el = l(e.type, a, m && m.is, m), h & 8 ? p(d, e.children) : h & 16 && ne(e.children, d, null, r, i, ea(e, a), s, u), _ && Mn(e, null, r, "created"), te(d, e, e.scopeId, s, r), m) {
-			for (let e in m) e !== "value" && !T(e) && c(d, e, null, m[e], a, r);
+		if (d = e.el = l(e.type, a, m && m.is, m), h & 8 ? p(d, e.children) : h & 16 && T(e.children, d, null, r, i, ea(e, a), s, u), _ && Mn(e, null, r, "created"), te(d, e, e.scopeId, s, r), m) {
+			for (let e in m) e !== "value" && !ne(e) && c(d, e, null, m[e], a, r);
 			"value" in m && c(d, "value", null, m.value, a), (f = m.onVnodeBeforeMount) && ka(f, r, e);
 		}
 		_ && Mn(e, null, r, "beforeMount");
@@ -2145,7 +2145,7 @@ function $i(e, t) {
 				te(e, t, t.scopeId, t.slotScopeIds, i.parent);
 			}
 		}
-	}, ne = (e, t, n, r, i, a, o, s, c = 0) => {
+	}, T = (e, t, n, r, i, a, o, s, c = 0) => {
 		for (let l = c; l < e.length; l++) v(null, e[l] = s ? Ea(e[l]) : Ta(e[l]), t, n, r, i, a, o, s);
 	}, re = (e, t, n, i, a, o, s) => {
 		let l = t.el = e.el, { patchFlag: u, dynamicChildren: d, dirs: f } = t;
@@ -2172,9 +2172,9 @@ function $i(e, t) {
 		}
 	}, ie = (e, t, n, i, a) => {
 		if (t !== n) {
-			if (t !== r) for (let r in t) !T(r) && !(r in n) && c(e, r, t[r], null, a, i);
+			if (t !== r) for (let r in t) !ne(r) && !(r in n) && c(e, r, t[r], null, a, i);
 			for (let r in n) {
-				if (T(r)) continue;
+				if (ne(r)) continue;
 				let o = n[r], s = t[r];
 				o !== s && r !== "value" && c(e, r, s, o, a, i);
 			}
@@ -2182,12 +2182,12 @@ function $i(e, t) {
 		}
 	}, ae = (e, t, n, r, i, a, s, c, l) => {
 		let d = t.el = e ? e.el : u(""), f = t.anchor = e ? e.anchor : u(""), { patchFlag: p, dynamicChildren: m, slotScopeIds: h } = t;
-		h && (c = c ? c.concat(h) : h), e == null ? (o(d, n, r), o(f, n, r), ne(t.children || [], n, f, i, a, s, c, l)) : p > 0 && p & 64 && m && e.dynamicChildren && e.dynamicChildren.length === m.length ? (E(e.dynamicChildren, m, n, i, a, s, c), (t.key != null || i && t === i.subTree) && ra(e, t, !0)) : de(e, t, n, f, i, a, s, c, l);
+		h && (c = c ? c.concat(h) : h), e == null ? (o(d, n, r), o(f, n, r), T(t.children || [], n, f, i, a, s, c, l)) : p > 0 && p & 64 && m && e.dynamicChildren && e.dynamicChildren.length === m.length ? (E(e.dynamicChildren, m, n, i, a, s, c), (t.key != null || i && t === i.subTree) && ra(e, t, !0)) : de(e, t, n, f, i, a, s, c, l);
 	}, oe = (e, t, n, r, i, a, o, s, c) => {
 		t.slotScopeIds = s, e == null ? t.shapeFlag & 512 ? i.ctx.activate(t, n, r, o, c) : se(t, n, r, i, a, o, c) : D(e, t, c);
 	}, se = (e, t, n, r, i, a, o) => {
 		let s = e.component = Ma(e, r, i);
-		if (Tr(e) && (s.ctx.renderer = Ce), Ba(s, !1, o), s.asyncDep) {
+		if (Tr(e) && (s.ctx.renderer = Se), Ba(s, !1, o), s.asyncDep) {
 			if (i && i.registerDep(s, le, o), !e.el) {
 				let r = s.subTree = q(H);
 				b(null, r, t, n), e.placeholder = r.el;
@@ -2218,12 +2218,12 @@ function $i(e, t) {
 				let u = t, d;
 				ta(e, !1), t ? (t.el = c.el, ue(e, t, o)) : t = c, n && ce(n), (d = t.props && t.props.onVnodeBeforeUpdate) && ka(d, s, t, c), ta(e, !0);
 				let f = Ei(e), p = e.subTree;
-				e.subTree = f, v(p, f, m(p.el), be(p), e, i, a), t.el = f.el, u === null && Mi(e, f.el), r && Zi(r, i), (d = t.props && t.props.onVnodeUpdated) && Zi(() => ka(d, s, t, c), i);
+				e.subTree = f, v(p, f, m(p.el), ye(p), e, i, a), t.el = f.el, u === null && Mi(e, f.el), r && Zi(r, i), (d = t.props && t.props.onVnodeUpdated) && Zi(() => ka(d, s, t, c), i);
 			} else {
 				let o, { el: s, props: c } = t, { bm: l, m: u, parent: d, root: f, type: p } = e, m = wr(t);
-				if (ta(e, !1), l && ce(l), !m && (o = c && c.onVnodeBeforeMount) && ka(o, d, t), ta(e, !0), s && Te) {
+				if (ta(e, !1), l && ce(l), !m && (o = c && c.onVnodeBeforeMount) && ka(o, d, t), ta(e, !0), s && we) {
 					let t = () => {
-						e.subTree = Ei(e), Te(s, e.subTree, e, i, null);
+						e.subTree = Ei(e), we(s, e.subTree, e, i, null);
 					};
 					m && p.__asyncHydrate ? p.__asyncHydrate(s, e, t) : t();
 				} else {
@@ -2239,35 +2239,35 @@ function $i(e, t) {
 			}
 		};
 		e.scope.on();
-		let c = e.effect = new je(s);
+		let c = e.effect = new Ae(s);
 		e.scope.off();
 		let l = e.update = c.run.bind(c), u = e.job = c.runIfDirty.bind(c);
 		u.i = e, u.id = e.uid, c.scheduler = () => Sn(u), ta(e, !0), l();
 	}, ue = (e, t, n) => {
 		t.component = e;
 		let r = e.vnode.props;
-		e.vnode = t, e.next = null, Li(e, t.props, r, n), Xi(e, t.children, n), Ke(), Tn(e), qe();
+		e.vnode = t, e.next = null, Li(e, t.props, r, n), Xi(e, t.children, n), Ge(), Tn(e), Ke();
 	}, de = (e, t, n, r, i, a, o, s, c = !1) => {
 		let l = e && e.children, u = e ? e.shapeFlag : 0, d = t.children, { patchFlag: f, shapeFlag: m } = t;
 		if (f > 0) {
 			if (f & 128) {
-				me(l, d, n, r, i, a, o, s, c);
+				pe(l, d, n, r, i, a, o, s, c);
 				return;
 			} else if (f & 256) {
-				fe(l, d, n, r, i, a, o, s, c);
+				O(l, d, n, r, i, a, o, s, c);
 				return;
 			}
 		}
-		m & 8 ? (u & 16 && ye(l, i, a), d !== l && p(n, d)) : u & 16 ? m & 16 ? me(l, d, n, r, i, a, o, s, c) : ye(l, i, a, !0) : (u & 8 && p(n, ""), m & 16 && ne(d, n, r, i, a, o, s, c));
-	}, fe = (e, t, n, r, a, o, s, c, l) => {
+		m & 8 ? (u & 16 && ve(l, i, a), d !== l && p(n, d)) : u & 16 ? m & 16 ? pe(l, d, n, r, i, a, o, s, c) : ve(l, i, a, !0) : (u & 8 && p(n, ""), m & 16 && T(d, n, r, i, a, o, s, c));
+	}, O = (e, t, n, r, a, o, s, c, l) => {
 		e ||= i, t ||= i;
 		let u = e.length, d = t.length, f = Math.min(u, d), p;
 		for (p = 0; p < f; p++) {
 			let r = t[p] = l ? Ea(t[p]) : Ta(t[p]);
 			v(e[p], r, n, null, a, o, s, c, l);
 		}
-		u > d ? ye(e, a, o, !0, !1, f) : ne(t, n, r, a, o, s, c, l, f);
-	}, me = (e, t, n, r, a, o, s, c, l) => {
+		u > d ? ve(e, a, o, !0, !1, f) : T(t, n, r, a, o, s, c, l, f);
+	}, pe = (e, t, n, r, a, o, s, c, l) => {
 		let u = 0, d = t.length, f = e.length - 1, p = d - 1;
 		for (; u <= f && u <= p;) {
 			let r = e[u], i = t[u] = l ? Ea(t[u]) : Ta(t[u]);
@@ -2286,7 +2286,7 @@ function $i(e, t) {
 				let e = p + 1, i = e < d ? t[e].el : r;
 				for (; u <= p;) v(null, t[u] = l ? Ea(t[u]) : Ta(t[u]), n, i, a, o, s, c, l), u++;
 			}
-		} else if (u > p) for (; u <= f;) ge(e[u], a, o, !0), u++;
+		} else if (u > p) for (; u <= f;) he(e[u], a, o, !0), u++;
 		else {
 			let m = u, h = u, g = /* @__PURE__ */ new Map();
 			for (u = h; u <= p; u++) {
@@ -2298,7 +2298,7 @@ function $i(e, t) {
 			for (u = m; u <= f; u++) {
 				let r = e[u];
 				if (y >= b) {
-					ge(r, a, o, !0);
+					he(r, a, o, !0);
 					continue;
 				}
 				let i;
@@ -2307,18 +2307,18 @@ function $i(e, t) {
 					i = _;
 					break;
 				}
-				i === void 0 ? ge(r, a, o, !0) : (C[i - h] = u + 1, i >= S ? S = i : x = !0, v(r, t[i], n, null, a, o, s, c, l), y++);
+				i === void 0 ? he(r, a, o, !0) : (C[i - h] = u + 1, i >= S ? S = i : x = !0, v(r, t[i], n, null, a, o, s, c, l), y++);
 			}
 			let w = x ? ia(C) : i;
 			for (_ = w.length - 1, u = b - 1; u >= 0; u--) {
 				let e = h + u, i = t[e], f = t[e + 1], p = e + 1 < d ? f.el || sa(f) : r;
-				C[u] === 0 ? v(null, i, n, p, a, o, s, c, l) : x && (_ < 0 || u !== w[_] ? he(i, n, p, 2) : _--);
+				C[u] === 0 ? v(null, i, n, p, a, o, s, c, l) : x && (_ < 0 || u !== w[_] ? me(i, n, p, 2) : _--);
 			}
 		}
-	}, he = (e, t, n, r, i = null) => {
+	}, me = (e, t, n, r, i = null) => {
 		let { el: a, type: c, transition: l, children: u, shapeFlag: d } = e;
 		if (d & 6) {
-			he(e.component.subTree, t, n, r);
+			me(e.component.subTree, t, n, r);
 			return;
 		}
 		if (d & 128) {
@@ -2326,12 +2326,12 @@ function $i(e, t) {
 			return;
 		}
 		if (d & 64) {
-			c.move(e, t, n, Ce);
+			c.move(e, t, n, Se);
 			return;
 		}
 		if (c === V) {
 			o(a, t, n);
-			for (let e = 0; e < u.length; e++) he(u[e], t, n, r);
+			for (let e = 0; e < u.length; e++) me(u[e], t, n, r);
 			o(e.anchor, t, n);
 			return;
 		}
@@ -2352,29 +2352,29 @@ function $i(e, t) {
 			i ? i(a, u, d) : d();
 		}
 		else o(a, t, n);
-	}, ge = (e, t, n, r = !1, i = !1) => {
+	}, he = (e, t, n, r = !1, i = !1) => {
 		let { type: a, props: o, ref: s, children: c, dynamicChildren: l, shapeFlag: u, patchFlag: d, dirs: f, cacheIndex: p, memo: m } = e;
-		if (d === -2 && (i = !1), s != null && (Ke(), Sr(s, null, n, e, !0), qe()), p != null && (t.renderCache[p] = void 0), u & 256) {
+		if (d === -2 && (i = !1), s != null && (Ge(), Sr(s, null, n, e, !0), Ke()), p != null && (t.renderCache[p] = void 0), u & 256) {
 			t.ctx.deactivate(e);
 			return;
 		}
 		let h = u & 1 && f, g = !wr(e), _;
-		if (g && (_ = o && o.onVnodeBeforeUnmount) && ka(_, t, e), u & 6) O(e.component, n, r);
+		if (g && (_ = o && o.onVnodeBeforeUnmount) && ka(_, t, e), u & 6) k(e.component, n, r);
 		else {
 			if (u & 128) {
 				e.suspense.unmount(n, r);
 				return;
 			}
-			h && Mn(e, null, t, "beforeUnmount"), u & 64 ? e.type.remove(e, t, n, Ce, r) : l && !l.hasOnce && (a !== V || d > 0 && d & 64) ? ye(l, t, n, !1, !0) : (a === V && d & 384 || !i && u & 16) && ye(c, t, n), r && _e(e);
+			h && Mn(e, null, t, "beforeUnmount"), u & 64 ? e.type.remove(e, t, n, Se, r) : l && !l.hasOnce && (a !== V || d > 0 && d & 64) ? ve(l, t, n, !1, !0) : (a === V && d & 384 || !i && u & 16) && ve(c, t, n), r && ge(e);
 		}
 		let v = m != null && p == null;
 		(g && (_ = o && o.onVnodeUnmounted) || h || v) && Zi(() => {
 			_ && ka(_, t, e), h && Mn(e, null, t, "unmounted"), v && (e.el = null);
 		}, n);
-	}, _e = (e) => {
+	}, ge = (e) => {
 		let { type: t, el: n, anchor: r, transition: i } = e;
 		if (t === V) {
-			ve(n, r);
+			_e(n, r);
 			return;
 		}
 		if (t === da) {
@@ -2388,41 +2388,41 @@ function $i(e, t) {
 			let { leave: t, delayLeave: r } = i, o = () => t(n, a);
 			r ? r(e.el, a, o) : o();
 		} else a();
-	}, ve = (e, t) => {
+	}, _e = (e, t) => {
 		let n;
 		for (; e !== t;) n = h(e), s(e), e = n;
 		s(t);
-	}, O = (e, t, n) => {
+	}, k = (e, t, n) => {
 		let { bum: r, scope: i, job: a, subTree: o, um: s, m: c, a: l } = e;
-		oa(c), oa(l), r && ce(r), i.stop(), a && (a.flags |= 8, ge(o, e, t, n)), s && Zi(s, t), Zi(() => {
+		oa(c), oa(l), r && ce(r), i.stop(), a && (a.flags |= 8, he(o, e, t, n)), s && Zi(s, t), Zi(() => {
 			e.isUnmounted = !0;
 		}, t);
-	}, ye = (e, t, n, r = !1, i = !1, a = 0) => {
-		for (let o = a; o < e.length; o++) ge(e[o], t, n, r, i);
-	}, be = (e) => {
-		if (e.shapeFlag & 6) return be(e.component.subTree);
+	}, ve = (e, t, n, r = !1, i = !1, a = 0) => {
+		for (let o = a; o < e.length; o++) he(e[o], t, n, r, i);
+	}, ye = (e) => {
+		if (e.shapeFlag & 6) return ye(e.component.subTree);
 		if (e.shapeFlag & 128) return e.suspense.next();
 		let t = h(e.anchor || e.el), n = t && t[Un];
 		return n ? h(n) : t;
-	}, xe = !1, Se = (e, t, n) => {
+	}, be = !1, xe = (e, t, n) => {
 		let r;
-		e == null ? t._vnode && (ge(t._vnode, null, null, !0), r = t._vnode.component) : v(t._vnode || null, e, t, null, null, null, n), t._vnode = e, xe ||= (xe = !0, Tn(r), En(), !1);
-	}, Ce = {
+		e == null ? t._vnode && (he(t._vnode, null, null, !0), r = t._vnode.component) : v(t._vnode || null, e, t, null, null, null, n), t._vnode = e, be ||= (be = !0, Tn(r), En(), !1);
+	}, Se = {
 		p: v,
-		um: ge,
-		m: he,
-		r: _e,
+		um: he,
+		m: me,
+		r: ge,
 		mt: se,
-		mc: ne,
+		mc: T,
 		pc: de,
 		pbc: E,
-		n: be,
+		n: ye,
 		o: e
-	}, we, Te;
-	return t && ([we, Te] = t(Ce)), {
-		render: Se,
-		hydrate: we,
-		createApp: vi(Se, we)
+	}, Ce, we;
+	return t && ([Ce, we] = t(Se)), {
+		render: xe,
+		hydrate: Ce,
+		createApp: vi(xe, Ce)
 	};
 }
 function ea({ type: e, props: t }, n) {
@@ -2499,7 +2499,7 @@ function va(e) {
 function ya(e, t) {
 	return e.type === t.type && e.key === t.key;
 }
-var ba = ({ key: e }) => e ?? null, xa = ({ ref: e, ref_key: t, ref_for: n }) => (typeof e == "number" && (e = "" + e), e == null ? null : v(e) || /* @__PURE__ */ P(e) || _(e) ? {
+var ba = ({ key: e }) => e ?? null, xa = ({ ref: e, ref_key: t, ref_for: n }) => (typeof e == "number" && (e = "" + e), e == null ? null : v(e) || /* @__PURE__ */ F(e) || _(e) ? {
 	i: R,
 	r: e,
 	k: t,
@@ -2546,13 +2546,13 @@ function Sa(e, t = null, n = null, r = 0, i = null, a = !1) {
 	if (Xa(e) && (e = e.__vccOpts), t) {
 		t = Ca(t);
 		let { class: e, style: n } = t;
-		e && !v(e) && (t.class = O(e)), b(n) && (/* @__PURE__ */ Wt(n) && !p(n) && (n = l({}, n)), t.style = me(n));
+		e && !v(e) && (t.class = k(e)), b(n) && (/* @__PURE__ */ Ut(n) && !p(n) && (n = l({}, n)), t.style = pe(n));
 	}
 	let o = v(e) ? 1 : ca(e) ? 128 : Wn(e) ? 64 : b(e) ? 4 : _(e) ? 2 : 0;
 	return K(e, t, n, r, i, o, a, !0);
 }
 function Ca(e) {
-	return e ? /* @__PURE__ */ Wt(e) || Fi(e) ? l({}, e) : e : null;
+	return e ? /* @__PURE__ */ Ut(e) || Fi(e) ? l({}, e) : e : null;
 }
 function wa(e, t, n = !1, r = !1) {
 	let { props: i, ref: a, patchFlag: o, children: s, transition: c } = e, l = t ? Oa(i || {}, t) : i, u = {
@@ -2623,8 +2623,8 @@ function Oa(...e) {
 	let t = {};
 	for (let n = 0; n < e.length; n++) {
 		let r = e[n];
-		for (let e in r) if (e === "class") t.class !== r.class && (t.class = O([t.class, r.class]));
-		else if (e === "style") t.style = me([t.style, r.style]);
+		for (let e in r) if (e === "class") t.class !== r.class && (t.class = k([t.class, r.class]));
+		else if (e === "style") t.style = pe([t.style, r.style]);
 		else if (s(e)) {
 			let n = t[e], i = r[e];
 			i && n !== i && !(p(n) && n.includes(i)) ? t[e] = n ? [].concat(n, i) : i : i == null && n == null && !c(e) && (t[e] = i);
@@ -2633,7 +2633,7 @@ function Oa(...e) {
 	return t;
 }
 function ka(e, t, n, r = null) {
-	dn(e, t, 7, [n, r]);
+	un(e, t, 7, [n, r]);
 }
 var Aa = gi(), ja = 0;
 function Ma(e, t, n) {
@@ -2649,7 +2649,7 @@ function Ma(e, t, n) {
 		effect: null,
 		update: null,
 		job: null,
-		scope: new Oe(!0),
+		scope: new De(!0),
 		render: null,
 		proxy: null,
 		exposed: null,
@@ -2705,7 +2705,7 @@ function Ma(e, t, n) {
 }
 var X = null, Na = () => X || R, Pa, Fa;
 {
-	let e = pe(), t = (t, n) => {
+	let e = fe(), t = (t, n) => {
 		let r;
 		return (r = e[t]) || (r = e[t] = []), r.push(n), (e) => {
 			r.length > 1 ? r.forEach((t) => t(e)) : r[0](e);
@@ -2737,20 +2737,20 @@ function Va(e, t) {
 	e.accessCache = /* @__PURE__ */ Object.create(null), e.proxy = new Proxy(e.ctx, Qr);
 	let { setup: r } = n;
 	if (r) {
-		Ke();
-		let n = e.setupContext = r.length > 1 ? qa(e) : null, i = Ia(e), a = un(r, e, 0, [e.props, n]), o = x(a);
-		if (qe(), i(), (o || e.sp) && !wr(e) && yr(e), o) {
+		Ge();
+		let n = e.setupContext = r.length > 1 ? qa(e) : null, i = Ia(e), a = ln(r, e, 0, [e.props, n]), o = x(a);
+		if (Ke(), i(), (o || e.sp) && !wr(e) && yr(e), o) {
 			if (a.then(La, La), t) return a.then((n) => {
 				Ha(e, n, t);
 			}).catch((t) => {
-				fn(t, e, 0);
+				dn(t, e, 0);
 			});
 			e.asyncDep = a;
 		} else Ha(e, a, t);
 	} else Ga(e, t);
 }
 function Ha(e, t, n) {
-	_(t) ? e.type.__ssrInlineRender ? e.ssrRender = t : e.render = t : b(t) && (e.setupState = Qt(t)), Ga(e, n);
+	_(t) ? e.type.__ssrInlineRender ? e.ssrRender = t : e.render = t : b(t) && (e.setupState = Zt(t)), Ga(e, n);
 }
 var Ua, Wa;
 function Ga(e, t, n) {
@@ -2770,16 +2770,16 @@ function Ga(e, t, n) {
 	}
 	{
 		let t = Ia(e);
-		Ke();
+		Ge();
 		try {
 			ni(e);
 		} finally {
-			qe(), t();
+			Ke(), t();
 		}
 	}
 }
 var Ka = { get(e, t) {
-	return M(e, "get", ""), e[t];
+	return N(e, "get", ""), e[t];
 } };
 function qa(e) {
 	return {
@@ -2792,7 +2792,7 @@ function qa(e) {
 	};
 }
 function Ja(e) {
-	return e.exposed ? e.exposeProxy ||= new Proxy(Qt(Gt(e.exposed)), {
+	return e.exposed ? e.exposeProxy ||= new Proxy(Zt(Wt(e.exposed)), {
 		get(t, n) {
 			if (n in t) return t[n];
 			if (n in Xr) return Xr[n](e);
@@ -2808,7 +2808,7 @@ function Ya(e, t = !0) {
 function Xa(e) {
 	return _(e) && "__vccOpts" in e;
 }
-var Z = (e, t) => /* @__PURE__ */ nn(e, t, za);
+var Z = (e, t) => /* @__PURE__ */ tn(e, t, za);
 function Za(e, t, n) {
 	try {
 		ga(-1);
@@ -2893,9 +2893,9 @@ function go(e) {
 	if (e.css === !1) return t;
 	let { name: n = "v", type: r, duration: i, enterFromClass: a = `${n}-enter-from`, enterActiveClass: o = `${n}-enter-active`, enterToClass: s = `${n}-enter-to`, appearFromClass: c = a, appearActiveClass: u = o, appearToClass: d = s, leaveFromClass: f = `${n}-leave-from`, leaveActiveClass: p = `${n}-leave-active`, leaveToClass: m = `${n}-leave-to` } = e, h = _o(i), g = h && h[0], _ = h && h[1], { onBeforeEnter: v, onEnter: y, onEnterCancelled: b, onLeave: x, onLeaveCancelled: S, onBeforeAppear: C = v, onAppear: w = y, onAppearCancelled: ee = b } = t, te = (e, t, n, r) => {
 		e._enterCancelled = r, bo(e, t ? d : s), bo(e, t ? u : o), n && n();
-	}, T = (e, t) => {
+	}, ne = (e, t) => {
 		e._isLeaving = !1, bo(e, f), bo(e, m), bo(e, p), t && t();
-	}, ne = (e) => (t, n) => {
+	}, T = (e) => (t, n) => {
 		let i = e ? w : y, o = () => te(t, e, n);
 		mo(i, [t, o]), xo(() => {
 			bo(t, e ? c : a), yo(t, e ? d : s), ho(i) || Co(t, r, g, o);
@@ -2908,11 +2908,11 @@ function go(e) {
 		onBeforeAppear(e) {
 			mo(C, [e]), yo(e, c), yo(e, u);
 		},
-		onEnter: ne(!1),
-		onAppear: ne(!0),
+		onEnter: T(!1),
+		onAppear: T(!0),
 		onLeave(e, t) {
 			e._isLeaving = !0;
-			let n = () => T(e, t);
+			let n = () => ne(e, t);
 			yo(e, f), e._enterCancelled ? (yo(e, p), Do(e)) : (Do(e), yo(e, p)), xo(() => {
 				e._isLeaving && (bo(e, f), yo(e, m), ho(x) || Co(e, r, _, n));
 			}), mo(x, [e, n]);
@@ -2924,7 +2924,7 @@ function go(e) {
 			te(e, !0, void 0, !0), mo(ee, [e]);
 		},
 		onLeaveCancelled(e) {
-			T(e), mo(S, [e]);
+			ne(e), mo(S, [e]);
 		}
 	});
 }
@@ -3046,8 +3046,8 @@ function zo(e, t, n, r) {
 	return e.tagName === "TEXTAREA" && (t === "width" || t === "height") && v(r) && n === r;
 }
 var Bo = "http://www.w3.org/1999/xlink";
-function Vo(e, t, n, r, i, a = be(t)) {
-	r && t.startsWith("xlink:") ? n == null ? e.removeAttributeNS(Bo, t.slice(6, t.length)) : e.setAttributeNS(Bo, t, n) : n == null || a && !xe(n) ? e.removeAttribute(t) : e.setAttribute(t, a ? "" : y(n) ? String(n) : n);
+function Vo(e, t, n, r, i, a = ye(t)) {
+	r && t.startsWith("xlink:") ? n == null ? e.removeAttributeNS(Bo, t.slice(6, t.length)) : e.setAttributeNS(Bo, t, n) : n == null || a && !be(n) ? e.removeAttribute(t) : e.setAttribute(t, a ? "" : y(n) ? String(n) : n);
 }
 function Ho(e, t, n, r, i) {
 	if (t === "innerHTML" || t === "textContent") {
@@ -3063,7 +3063,7 @@ function Ho(e, t, n, r, i) {
 	let o = !1;
 	if (n === "" || n == null) {
 		let r = typeof e[t];
-		r === "boolean" ? n = xe(n) : n == null && r === "string" ? (n = "", o = !0) : r === "number" && (n = 0, o = !0);
+		r === "boolean" ? n = be(n) : n == null && r === "string" ? (n = "", o = !0) : r === "number" && (n = 0, o = !0);
 	}
 	try {
 		e[t] = n;
@@ -3109,9 +3109,9 @@ function Qo(e, t) {
 			let i = r.slice(), a = [e];
 			for (let n = 0; n < i.length && !e._stopped; n++) {
 				let e = i[n];
-				e && dn(e, t, 5, a);
+				e && un(e, t, 5, a);
 			}
-		} else dn(r, t, 5, [e]);
+		} else un(r, t, 5, [e]);
 	};
 	return n.value = e, n.attached = Zo(), n;
 }
@@ -3175,7 +3175,7 @@ var Q = {
 		e[os] = rs(n), Uo(e, "change", () => {
 			let t = e._modelValue, n = ps(e), r = e.checked, i = e[os];
 			if (p(t)) {
-				let e = we(t, n), a = e !== -1;
+				let e = Ce(t, n), a = e !== -1;
 				if (r && !a) i(t.concat(n));
 				else if (!r && a) {
 					let n = [...t];
@@ -3195,22 +3195,22 @@ var Q = {
 function ls(e, { value: t, oldValue: n }, r) {
 	e._modelValue = t;
 	let i;
-	if (p(t)) i = we(t, r.props.value) > -1;
+	if (p(t)) i = Ce(t, r.props.value) > -1;
 	else if (h(t)) i = t.has(r.props.value);
 	else {
 		if (t === n) return;
-		i = Ce(t, ms(e, !0));
+		i = Se(t, ms(e, !0));
 	}
 	e.checked !== i && (e.checked = i);
 }
 var us = {
 	created(e, { value: t }, n) {
-		e.checked = Ce(t, n.props.value), e[os] = rs(n), Uo(e, "change", () => {
+		e.checked = Se(t, n.props.value), e[os] = rs(n), Uo(e, "change", () => {
 			e[os](ps(e));
 		});
 	},
 	beforeUpdate(e, { value: t, oldValue: n }, r) {
-		e[os] = rs(r), t !== n && (e.checked = Ce(t, r.props.value));
+		e[os] = rs(r), t !== n && (e.checked = Se(t, r.props.value));
 	}
 }, ds = {
 	deep: !0,
@@ -3240,9 +3240,9 @@ function fs(e, t) {
 			let a = e.options[i], o = ps(a);
 			if (n) if (r) {
 				let e = typeof o;
-				e === "string" || e === "number" ? a.selected = t.some((e) => String(e) === String(o)) : a.selected = we(t, o) > -1;
+				e === "string" || e === "number" ? a.selected = t.some((e) => String(e) === String(o)) : a.selected = Ce(t, o) > -1;
 			} else a.selected = t.has(o);
-			else if (Ce(ps(a), t)) {
+			else if (Se(ps(a), t)) {
 				e.selectedIndex !== i && (e.selectedIndex = i);
 				return;
 			}
@@ -3541,13 +3541,16 @@ var ks = (e) => {
 		d: "m15 15-3-3-3 3",
 		key: "15xj92"
 	}]
-]), ec = $("gauge", [["path", {
+]), ec = $("folder-open", [["path", {
+	d: "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
+	key: "usdka0"
+}]]), tc = $("gauge", [["path", {
 	d: "m12 14 4-4",
 	key: "9kzdfg"
 }], ["path", {
 	d: "M3.34 19a10 10 0 1 1 17.32 0",
 	key: "19p75a"
-}]]), tc = $("globe", [
+}]]), nc = $("globe", [
 	["circle", {
 		cx: "12",
 		cy: "12",
@@ -3562,19 +3565,30 @@ var ks = (e) => {
 		d: "M2 12h20",
 		key: "9i4pu4"
 	}]
-]), nc = $("house", [["path", {
+]), rc = $("house", [["path", {
 	d: "M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8",
 	key: "5wwlr5"
 }], ["path", {
 	d: "M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
 	key: "r6nss1"
-}]]), rc = $("link", [["path", {
+}]]), ic = $("link", [["path", {
 	d: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
 	key: "1cjeqo"
 }], ["path", {
 	d: "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
 	key: "19qd67"
-}]]), ic = $("monitor", [
+}]]), ac = $("lock", [["rect", {
+	width: "18",
+	height: "11",
+	x: "3",
+	y: "11",
+	rx: "2",
+	ry: "2",
+	key: "1w4ew1"
+}], ["path", {
+	d: "M7 11V7a5 5 0 0 1 10 0v4",
+	key: "fwvmzm"
+}]]), oc = $("monitor", [
 	["rect", {
 		width: "20",
 		height: "14",
@@ -3597,7 +3611,7 @@ var ks = (e) => {
 		y2: "21",
 		key: "vw1qmm"
 	}]
-]), ac = $("network", [
+]), sc = $("network", [
 	["rect", {
 		x: "16",
 		y: "16",
@@ -3630,7 +3644,7 @@ var ks = (e) => {
 		d: "M12 12V8",
 		key: "2874zd"
 	}]
-]), oc = $("pause", [["rect", {
+]), cc = $("pause", [["rect", {
 	x: "14",
 	y: "3",
 	width: "5",
@@ -3644,22 +3658,22 @@ var ks = (e) => {
 	height: "18",
 	rx: "1",
 	key: "1wsw3u"
-}]]), sc = $("play", [["path", {
+}]]), lc = $("play", [["path", {
 	d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
 	key: "10ikf1"
-}]]), cc = $("plus", [["path", {
+}]]), uc = $("plus", [["path", {
 	d: "M5 12h14",
 	key: "1ays0h"
 }], ["path", {
 	d: "M12 5v14",
 	key: "s699le"
-}]]), lc = $("power", [["path", {
+}]]), dc = $("power", [["path", {
 	d: "M12 2v10",
 	key: "mnfbl"
 }], ["path", {
 	d: "M18.4 6.6a9 9 0 1 1-12.77.04",
 	key: "obofu9"
-}]]), uc = $("radio", [
+}]]), fc = $("radio", [
 	["path", {
 		d: "M16.247 7.761a6 6 0 0 1 0 8.478",
 		key: "1fwjs5"
@@ -3682,7 +3696,7 @@ var ks = (e) => {
 		r: "2",
 		key: "1c9p78"
 	}]
-]), dc = $("refresh-cw", [
+]), pc = $("refresh-cw", [
 	["path", {
 		d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8",
 		key: "v9h5vc"
@@ -3699,7 +3713,7 @@ var ks = (e) => {
 		d: "M8 16H3v5",
 		key: "1cv678"
 	}]
-]), fc = $("search", [["path", {
+]), mc = $("search", [["path", {
 	d: "m21 21-4.34-4.34",
 	key: "14j7rj"
 }], ["circle", {
@@ -3707,7 +3721,13 @@ var ks = (e) => {
 	cy: "11",
 	r: "8",
 	key: "4ej97u"
-}]]), pc = $("settings-2", [
+}]]), hc = $("send", [["path", {
+	d: "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
+	key: "1ffxy3"
+}], ["path", {
+	d: "m21.854 2.147-10.94 10.939",
+	key: "12cjpa"
+}]]), gc = $("settings-2", [
 	["path", {
 		d: "M14 17H5",
 		key: "gfn3mx"
@@ -3728,13 +3748,13 @@ var ks = (e) => {
 		r: "3",
 		key: "dfmy0x"
 	}]
-]), mc = $("shield-check", [["path", {
+]), _c = $("shield-check", [["path", {
 	d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
 	key: "oel41y"
 }], ["path", {
 	d: "m9 12 2 2 4-4",
 	key: "dzmm74"
-}]]), hc = $("shield-off", [
+}]]), vc = $("shield-off", [
 	["path", {
 		d: "m2 2 20 20",
 		key: "1ooewy"
@@ -3747,7 +3767,7 @@ var ks = (e) => {
 		d: "M9.309 3.652A12.252 12.252 0 0 0 11.24 2.28a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v7a9.784 9.784 0 0 1-.08 1.264",
 		key: "18rp1v"
 	}]
-]), gc = $("sliders-horizontal", [
+]), yc = $("sliders-horizontal", [
 	["path", {
 		d: "M10 5H3",
 		key: "1qgfaw"
@@ -3784,22 +3804,22 @@ var ks = (e) => {
 		d: "M8 12H3",
 		key: "a7s4jb"
 	}]
-]), _c = $("undo-2", [["path", {
+]), bc = $("undo-2", [["path", {
 	d: "M9 14 4 9l5-5",
 	key: "102s5s"
 }], ["path", {
 	d: "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11",
 	key: "f3b9sd"
-}]]), vc = $("x", [["path", {
+}]]), xc = $("x", [["path", {
 	d: "M18 6 6 18",
 	key: "1bl5f8"
 }], ["path", {
 	d: "m6 6 12 12",
 	key: "d8bk6v"
-}]]), yc = $("zap", [["path", {
+}]]), Sc = $("zap", [["path", {
 	d: "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z",
 	key: "1xq2db"
-}]]), bc = (t) => t == null ? "—" : `${e(t)}/s`, xc = (e) => ({
+}]]), Cc = (t) => t == null ? "—" : `${e(t)}/s`, wc = (e) => ({
 	active: "下载中",
 	waiting: "等待中",
 	paused: "已暂停",
@@ -3807,24 +3827,24 @@ var ks = (e) => {
 	removed: "已取消",
 	error: "下载失败",
 	recoverable: "待恢复"
-})[e] || "等待中", Sc = (e) => e ? new Date(e).toLocaleString("zh-CN", {
+})[e] || "等待中", Tc = (e) => e ? new Date(e).toLocaleString("zh-CN", {
 	month: "2-digit",
 	day: "2-digit",
 	hour: "2-digit",
 	minute: "2-digit"
-}) : "刚刚", Cc = (e) => e === "DIRECT" ? "直接连接" : e === "REJECT" ? "阻止连接" : e || "尚未选择线路";
-function wc(e, t, n = 0) {
+}) : "刚刚", Ec = (e) => e === "DIRECT" ? "直接连接" : e === "REJECT" ? "阻止连接" : e || "尚未选择线路";
+function Dc(e, t, n = 0) {
 	let r = e?.[t];
-	return !r || !Array.isArray(r.all) || !r.now || n > 4 ? t : wc(e, r.now, n + 1);
+	return !r || !Array.isArray(r.all) || !r.now || n > 4 ? t : Dc(e, r.now, n + 1);
 }
-function Tc(e) {
+function Oc(e) {
 	let t = e?.proxies;
 	if (!t) return "";
 	let n = Object.entries(t).filter(([, e]) => Array.isArray(e.all) && e.now), r = n.find(([e]) => e === "GLOBAL") || n.find(([, e]) => e.type === "Selector") || n[0];
-	return r ? wc(t, r[1].now) : "";
+	return r ? Dc(t, r[1].now) : "";
 }
-function Ec(e) {
-	let n = /* @__PURE__ */ Jt(null), r = /* @__PURE__ */ F(null), i = /* @__PURE__ */ F([]), a = Z(() => n.value?.downloads || []), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(""), l = /* @__PURE__ */ F(""), u = /* @__PURE__ */ F(""), d = /* @__PURE__ */ F(!1), f = !1, p, m = async (t, n = {}) => {
+function kc(e) {
+	let n = /* @__PURE__ */ qt(null), r = /* @__PURE__ */ I(null), i = /* @__PURE__ */ I([]), a = Z(() => n.value?.downloads || []), o = /* @__PURE__ */ I(null), s = /* @__PURE__ */ I(""), c = /* @__PURE__ */ I(""), l = /* @__PURE__ */ I(""), u = /* @__PURE__ */ I(""), d = /* @__PURE__ */ I(!1), f = !1, p, m = async (t, n = {}) => {
 		if (f || e.signal?.aborted) throw Error("页面已关闭");
 		let r = await e.rpc(`easynet.${t}`, n);
 		if (f || e.signal?.aborted) throw Error("页面已关闭");
@@ -3862,6 +3882,16 @@ function Ec(e) {
 		s.value = e, c.value = "", l.value = "";
 		try {
 			let i = await m(e, n);
+			if (!i.cancelled && [
+				"system.apply",
+				"system.restore",
+				"accelerator.start",
+				"accelerator.stop",
+				"proxy.start",
+				"proxy.stop"
+			].includes(e)) try {
+				window.dispatchEvent(new CustomEvent("sunday:easynet-network-changed", { detail: { method: e } }));
+			} catch {}
 			return l.value = i.cancelled ? "已取消操作" : r, await t.refresh(), i;
 		} catch (e) {
 			return f || (c.value = e instanceof Error ? e.message : String(e)), null;
@@ -3916,11 +3946,11 @@ function Ec(e) {
 			name: t
 		}, `已切换到 ${t}`) && await g();
 	}
-	async function T(e) {
+	async function ne(e) {
 		let t = await y("proxy.optimize", { group: e });
 		return t ? (t.selected ? (l.value = `已自动选择 ${t.selected}${t.delay ? `（${t.delay} ms）` : ""}`, await g()) : l.value = "没有可用线路，已保留当前选择", t) : null;
 	}
-	async function ne(e, t = "basic") {
+	async function T(e, t = "basic") {
 		let n = e.trim();
 		try {
 			n.includes("://") && (n = new URL(n).hostname);
@@ -3957,7 +3987,7 @@ function Ec(e) {
 			g()
 		]);
 	}
-	return /* @__PURE__ */ Lt({
+	return /* @__PURE__ */ It({
 		state: n,
 		proxy: r,
 		interfaces: i,
@@ -3972,6 +4002,7 @@ function Ec(e) {
 		connectionError: u,
 		run: y,
 		read: h,
+		openFile: (t) => e.openFile?.(t),
 		refresh: ie,
 		loadProxy: g,
 		loadTasks: v,
@@ -3980,652 +4011,187 @@ function Ec(e) {
 		toggleAcceleration: w,
 		setMode: ee,
 		selectNode: te,
-		optimizeNode: T,
-		diagnose: ne
+		optimizeNode: ne,
+		diagnose: T
 	});
 }
 //#endregion
 //#region ../src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue
-var Dc = { class: "nx-home" }, Oc = {
+var Ac = { class: "nx-home" }, jc = {
 	class: "nx-stat-bar",
 	"data-stat-bar": "",
 	"aria-label": "实时网络数据"
-}, kc = {
-	class: "nx-stat",
-	"data-stat": "download"
-}, Ac = {
-	class: "nx-stat",
-	"data-stat": "upload"
-}, jc = {
-	class: "nx-stat",
-	"data-stat": "total"
 }, Mc = {
 	class: "nx-stat",
+	"data-stat": "download"
+}, Nc = {
+	class: "nx-stat",
+	"data-stat": "upload"
+}, Pc = {
+	class: "nx-stat",
+	"data-stat": "total"
+}, Fc = {
+	class: "nx-stat",
 	"data-stat": "delay"
-}, Nc = { class: "nx-home-grid" }, Pc = { class: "nx-quick-head" }, Fc = { class: "nx-quick-icon" }, Ic = { class: "nx-quick-main" }, Lc = { class: "nx-quick-actions" }, Rc = ["aria-pressed", "disabled"], zc = { class: "nx-quick-head" }, Bc = { class: "nx-quick-icon" }, Vc = { class: "nx-quick-main" }, Hc = { class: "nx-quick-actions" }, Uc = ["aria-pressed", "disabled"], Wc = { class: "nx-quick-head" }, Gc = { class: "nx-quick-icon" }, Kc = { class: "nx-quick-main" }, qc = { class: "nx-quick-actions nx-quick-actions--stack" }, Jc = ["disabled"], Yc = {
+}, Ic = {
+	class: "nx-status-strip",
+	"data-network-strip": ""
+}, Lc = { class: "nx-status-cell" }, Rc = { class: "nx-status-cell" }, zc = { class: "nx-status-cell" }, Bc = { class: "nx-home-grid" }, Vc = { class: "nx-quick-head" }, Hc = { class: "nx-quick-icon" }, Uc = { class: "nx-quick-main" }, Wc = { class: "nx-quick-actions" }, Gc = ["aria-pressed", "disabled"], Kc = { class: "nx-quick-head" }, qc = { class: "nx-quick-icon" }, Jc = { class: "nx-quick-main" }, Yc = { class: "nx-quick-actions" }, Xc = ["aria-pressed", "disabled"], Zc = { class: "nx-quick-head" }, Qc = { class: "nx-quick-icon" }, $c = { class: "nx-quick-main" }, el = { class: "nx-quick-actions nx-quick-actions--stack" }, tl = ["disabled"], nl = { class: "nx-quick-icon" }, rl = {
 	__name: "HomeView",
 	props: { session: Object },
 	emits: ["navigate"],
 	setup(t, { emit: n }) {
-		let r = t, i = n, a = /* @__PURE__ */ F(""), o = Z(() => !!r.session.accelerated), s = Z(() => Number(r.session.state?.traffic?.download || 0)), c = Z(() => Number(r.session.state?.traffic?.upload || 0)), l = Z(() => Number(r.session.state?.traffic?.received || 0) + Number(r.session.state?.traffic?.sent || 0)), u = Z(() => !!r.session.state?.proxy?.config_saved), d = Z(() => !!r.session.state?.proxy?.running), f = Z(() => Tc(r.session.proxy)), p = Z(() => f.value ? Cc(f.value) : d.value ? "正在读取线路" : "尚未连接"), m = Z(() => Number(r.session.proxy?.proxies?.[f.value]?.history?.at(-1)?.delay || 0)), h = Z(() => r.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), g = Z(() => r.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), _ = Z(() => r.session.busy === "proxy.start" ? "正在准备线路…" : r.session.busy === "accelerator.start" ? "正在准备…" : r.session.busy === "system.apply" ? "正在开启…" : o.value ? "停止加速" : "一键加速"), v = Z(() => r.session.busy === "proxy.start" ? "连接中…" : r.session.busy === "proxy.stop" ? "关闭中…" : d.value ? "关闭代理" : u.value ? "开启代理" : "添加订阅");
-		async function y() {
+		let r = t, i = n, a = /* @__PURE__ */ I(""), o = Z(() => (r.session.interfaces || [])[0] || null), s = Z(() => (o.value?.ipv4 || [])[0] || ""), c = Z(() => (o.value?.gateway || [])[0] || ""), l = Z(() => (r.session.state?.reports || []).at(-1) || null), u = Z(() => (r.session.state?.events || []).at(-1) || null), d = Z(() => o.value ? s.value ? c.value ? {
+			text: "已连接",
+			tone: "ok"
+		} : {
+			text: "已连接，但没有默认网关",
+			tone: "warn"
+		} : {
+			text: "没有拿到本机地址",
+			tone: "warn"
+		} : {
+			text: "正在读取网络接口",
+			tone: ""
+		}), f = Z(() => !!r.session.accelerated), p = Z(() => Number(r.session.state?.traffic?.download || 0)), m = Z(() => Number(r.session.state?.traffic?.upload || 0)), h = Z(() => Number(r.session.state?.traffic?.received || 0) + Number(r.session.state?.traffic?.sent || 0)), g = Z(() => !!r.session.state?.proxy?.config_saved), _ = Z(() => !!r.session.state?.proxy?.running), v = Z(() => Oc(r.session.proxy)), y = Z(() => v.value ? Ec(v.value) : _.value ? "正在读取线路" : "尚未连接"), b = Z(() => Number(r.session.proxy?.proxies?.[v.value]?.history?.at(-1)?.delay || 0)), x = Z(() => r.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), S = Z(() => r.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), C = Z(() => r.session.busy === "proxy.start" ? "正在准备线路…" : r.session.busy === "accelerator.start" ? "正在准备…" : r.session.busy === "system.apply" ? "正在开启…" : f.value ? "停止加速" : "一键加速"), w = Z(() => r.session.busy === "proxy.start" ? "连接中…" : r.session.busy === "proxy.stop" ? "关闭中…" : _.value ? "关闭代理" : g.value ? "开启代理" : "添加订阅");
+		async function ee() {
 			await r.session.toggleAcceleration();
 		}
-		async function b() {
-			if (!u.value) {
+		async function te() {
+			if (!g.value) {
 				i("navigate", "proxy");
 				return;
 			}
 			await r.session.toggleProxy();
 		}
-		async function x() {
+		async function ne() {
 			let e = a.value.trim();
 			await r.session.run("transfer.add", { url: e }, "已开始下载") && (a.value = "", await r.session.loadTasks());
 		}
-		return (n, r) => (U(), W("div", Dc, [K("section", Oc, [
-			K("div", kc, [K("span", null, [q(I(zs), { size: 13 }), r[4] ||= J("实时下载", -1)]), K("strong", null, k(I(bc)(s.value)), 1)]),
-			K("div", Ac, [K("span", null, [q(I(Hs), { size: 13 }), r[5] ||= J("实时上传", -1)]), K("strong", null, k(I(bc)(c.value)), 1)]),
-			K("div", jc, [K("span", null, [q(I(Js), { size: 13 }), r[6] ||= J("累计流量", -1)]), K("strong", null, k(I(e)(l.value)), 1)]),
-			K("div", Mc, [K("span", null, [q(I(ec), { size: 13 }), r[7] ||= J("线路延迟", -1)]), K("strong", null, k(m.value ? `${m.value} ms` : "—"), 1)])
-		]), K("div", Nc, [
-			K("section", {
-				class: O(["nx-quick-card", { "is-on": o.value }]),
-				"data-home-block": "acceleration"
-			}, [
-				K("header", Pc, [
-					K("span", Fc, [q(I(yc), { size: 19 })]),
-					r[8] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "加速"), K("p", null, "本机加速")], -1),
-					K("span", { class: O(["nx-quick-state", { "is-live": o.value }]) }, k(o.value ? "运行中" : "未加速"), 3)
+		return (n, r) => (U(), W("div", Ac, [
+			K("section", jc, [
+				K("div", Mc, [K("span", null, [q(L(zs), { size: 13 }), r[6] ||= J("实时下载", -1)]), K("strong", null, A(L(Cc)(p.value)), 1)]),
+				K("div", Nc, [K("span", null, [q(L(Hs), { size: 13 }), r[7] ||= J("实时上传", -1)]), K("strong", null, A(L(Cc)(m.value)), 1)]),
+				K("div", Pc, [K("span", null, [q(L(Js), { size: 13 }), r[8] ||= J("累计流量", -1)]), K("strong", null, A(L(e)(h.value)), 1)]),
+				K("div", Fc, [K("span", null, [q(L(tc), { size: 13 }), r[9] ||= J("线路延迟", -1)]), K("strong", null, A(b.value ? `${b.value} ms` : "—"), 1)])
+			]),
+			K("section", Ic, [
+				K("div", Lc, [
+					r[10] ||= K("span", null, "连接方式", -1),
+					K("strong", null, A(o.value?.name || "读取中"), 1),
+					K("em", { class: k(`is-${d.value.tone}`) }, A(d.value.text), 3)
 				]),
-				K("div", Ic, [K("strong", null, k(o.value ? "常用站点直连" : "无需订阅"), 1), K("p", null, k(o.value ? d.value ? "本机直连 · 线路兜底已就绪" : "DoH 选路，失败时按系统解析" : "有订阅会自动准备线路兜底"), 1)]),
-				K("div", Lc, [K("button", {
-					class: O(["btn nx-button", o.value ? "btn--secondary" : "btn--primary"]),
-					"aria-pressed": o.value,
-					disabled: !!t.session.busy || !t.session.systemProxyReady,
-					"data-acceleration": "",
-					onClick: y
-				}, [q(I(lc), { size: 15 }), J(k(_.value), 1)], 10, Rc), K("button", {
-					class: "btn nx-button btn--quiet nx-quick-link",
-					"data-home-open": "overview",
-					onClick: r[0] ||= (e) => i("navigate", "overview")
-				}, [r[9] ||= J(" 详情", -1), q(I(Vs), { size: 13 })])])
-			], 2),
-			K("section", {
-				class: O(["nx-quick-card", { "is-on": d.value }]),
-				"data-home-block": "proxy"
-			}, [
-				K("header", zc, [
-					K("span", Bc, [q(I(tc), { size: 19 })]),
-					r[10] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "代理"), K("p", null, "订阅线路")], -1),
-					K("span", { class: O(["nx-quick-state", { "is-live": d.value }]) }, k(d.value ? "已连接" : u.value ? "待连接" : "未配置"), 3)
+				K("div", Rc, [
+					r[11] ||= K("span", null, "本机地址", -1),
+					K("strong", null, A(s.value || "—"), 1),
+					K("em", null, A(c.value ? `网关 ${c.value}` : "没有默认网关"), 1)
 				]),
-				K("div", Vc, [K("strong", null, k(p.value), 1), K("p", null, k(d.value && m.value ? `${m.value} ms · 当前线路` : u.value ? "开启后加载订阅里的节点" : "先去代理页添加订阅"), 1)]),
-				K("div", Hc, [K("button", {
-					class: O(["btn nx-button", d.value ? "btn--secondary" : "btn--primary"]),
-					"aria-pressed": d.value,
-					disabled: !!t.session.busy,
-					"data-home-proxy": "",
-					onClick: b
-				}, [q(I(lc), { size: 15 }), J(k(v.value), 1)], 10, Uc), K("button", {
-					class: "btn nx-button btn--quiet nx-quick-link",
-					"data-home-open": "proxy",
-					onClick: r[1] ||= (e) => i("navigate", "proxy")
-				}, [r[11] ||= J(" 选线路", -1), q(I(Vs), { size: 13 })])])
-			], 2),
-			K("section", {
-				class: O(["nx-quick-card", { "is-on": h.value > 0 }]),
-				"data-home-block": "transfer"
-			}, [
-				K("header", Wc, [
-					K("span", Gc, [q(I(Ys), { size: 19 })]),
-					r[12] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "下载"), K("p", null, "快速取回文件")], -1),
-					K("span", { class: O(["nx-quick-state", { "is-live": h.value > 0 }]) }, k(h.value ? "进行中" : "空闲"), 3)
+				K("div", zc, [
+					r[12] ||= K("span", null, "最近检查", -1),
+					K("strong", null, A(l.value ? `${l.value.target} · ${l.value.failures > 0 ? "有未通过项" : "通过"}` : "还没检查过"), 1),
+					K("em", null, A(u.value ? u.value.message : "暂无网络事件"), 1)
 				]),
-				K("div", Kc, [K("strong", null, k(h.value ? `${h.value} 个任务` : "没有进行中的下载"), 1), K("p", null, k(h.value ? `${I(bc)(g.value)} 总速度` : "粘贴链接即可开始，默认 8 连接"), 1)]),
-				K("div", qc, [K("form", {
-					class: "nx-home-download",
-					"data-home-download": "",
-					onSubmit: bs(x, ["prevent"])
-				}, [z(K("input", {
-					"onUpdate:modelValue": r[2] ||= (e) => a.value = e,
-					class: "nx-input",
-					"aria-label": "下载链接",
-					placeholder: "粘贴下载链接",
-					required: ""
-				}, null, 512), [[Q, a.value]]), K("button", {
-					class: "btn nx-button btn--primary",
-					disabled: !!t.session.busy || !a.value.trim(),
-					"aria-label": "开始下载"
-				}, [q(I(Ys), { size: 15 })], 8, Jc)], 32), K("button", {
-					class: "btn nx-button btn--quiet nx-quick-link",
-					"data-home-open": "transfer",
-					onClick: r[3] ||= (e) => i("navigate", "transfer")
-				}, [r[13] ||= J(" 打开下载页", -1), q(I(Vs), { size: 13 })])])
-			], 2)
-		])]));
-	}
-}, Xc = {
-	class: "nx-panel nx-speed",
-	"data-network-chart": ""
-}, Zc = { class: "nx-panel-heading" }, Qc = { class: "nx-speed-values" }, $c = { class: "nx-plot" }, el = {
-	key: 0,
-	viewBox: "0 0 640 164",
-	preserveAspectRatio: "none",
-	role: "img",
-	"aria-label": "实时下载和上传速度趋势"
-}, tl = ["d"], nl = ["d"], rl = ["d"], il = ["d"], al = {
-	key: 1,
-	class: "nx-chart-wait"
-}, ol = { class: "nx-chart-axis" }, sl = { key: 0 }, cl = {
-	__name: "SpeedChart",
-	props: {
-		history: { default: () => [] },
-		traffic: { default: null },
-		compact: Boolean
-	},
-	setup(t) {
-		let n = t, r = `nx-speed-${vr().replace(/:/g, "")}`, i = Z(() => Math.max(1024, ...n.history.flatMap((e) => [Number(e.download || 0), Number(e.upload || 0)])));
-		function a(e) {
-			let t = n.history;
-			return t.length < 2 ? "" : t.map((n, r) => `${r ? "L" : "M"}${(r / (t.length - 1) * 640).toFixed(2)},${(154 - Number(n[e] || 0) / i.value * 138).toFixed(2)}`).join(" ");
-		}
-		let o = Z(() => a("download")), s = Z(() => a("upload")), c = Z(() => o.value ? `${o.value} L640,164 L0,164 Z` : "");
-		return (n, a) => (U(), W("section", Xc, [
-			K("div", Zc, [K("h2", null, [q(I(Ls), { size: 17 }), a[0] ||= J("实时网速", -1)]), a[1] ||= K("span", { class: "nx-subtle" }, "系统接口", -1)]),
-			K("div", Qc, [K("span", null, [
-				q(I(zs), { size: 17 }),
-				K("strong", null, k(I(bc)(t.traffic?.download)), 1),
-				a[2] ||= K("small", null, "下载", -1)
-			]), K("span", null, [
-				q(I(Hs), { size: 17 }),
-				K("strong", null, k(I(bc)(t.traffic?.upload)), 1),
-				a[3] ||= K("small", null, "上传", -1)
-			])]),
-			K("div", $c, [t.history.length > 1 ? (U(), W("svg", el, [
-				K("defs", null, [K("linearGradient", {
-					id: r,
-					x1: "0",
-					x2: "0",
-					y1: "0",
-					y2: "1"
-				}, [...a[4] ||= [K("stop", {
-					offset: "0%",
-					"stop-color": "currentColor",
-					"stop-opacity": ".18"
-				}, null, -1), K("stop", {
-					offset: "100%",
-					"stop-color": "currentColor",
-					"stop-opacity": "0"
-				}, null, -1)]])]),
-				(U(), W(V, null, B([
-					26,
-					72,
-					118,
-					163
-				], (e) => K("path", {
-					key: e,
-					d: `M0,${e}H640`,
-					class: "nx-chart-grid"
-				}, null, 8, tl)), 64)),
-				K("path", {
-					d: c.value,
-					style: me({ fill: `url(#${r})` }),
-					class: "nx-chart-area"
-				}, null, 12, nl),
-				K("path", {
-					d: s.value,
-					class: "nx-chart-upload"
-				}, null, 8, rl),
-				K("path", {
-					d: o.value,
-					class: "nx-chart-download"
-				}, null, 8, il)
-			])) : (U(), W("div", al, [
-				q(I(Ls), { size: 22 }),
-				a[5] ||= K("span", null, "正在收集网速变化", -1),
-				a[6] ||= K("small", null, "新的采样会自动显示在这里", -1)
-			]))]),
-			K("div", ol, [
-				K("span", null, k(t.history.length > 1 ? "较早" : "等待采样"), 1),
-				t.history.length > 1 ? (U(), W("span", sl, "最高 " + k(I(e)(i.value)) + "/s", 1)) : Y("", !0),
-				a[7] ||= K("span", null, "现在", -1)
+				K("button", {
+					class: "btn nx-button btn--secondary nx-status-action",
+					"data-home-diagnose": "",
+					onClick: r[0] ||= (e) => i("navigate", "diagnose")
+				}, [q(L(Ls), { size: 15 }), r[13] ||= J("检查网络 ", -1)])
+			]),
+			K("div", Bc, [
+				K("section", {
+					class: k(["nx-quick-card", { "is-on": f.value }]),
+					"data-home-block": "acceleration"
+				}, [
+					K("header", Vc, [
+						K("span", Hc, [q(L(Sc), { size: 19 })]),
+						r[14] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "加速"), K("p", null, "本机加速")], -1),
+						K("span", { class: k(["nx-quick-state", { "is-live": f.value }]) }, A(f.value ? "运行中" : "未加速"), 3)
+					]),
+					K("div", Uc, [K("strong", null, A(f.value ? "常用站点直连" : "无需订阅"), 1), K("p", null, A(f.value ? _.value ? "本机直连 · 线路兜底已就绪" : "DoH 选路，失败时按系统解析" : "有订阅会自动准备线路兜底"), 1)]),
+					K("div", Wc, [K("button", {
+						class: k(["btn nx-button", f.value ? "btn--secondary" : "btn--primary"]),
+						"aria-pressed": f.value,
+						disabled: !!t.session.busy || !t.session.systemProxyReady,
+						"data-acceleration": "",
+						onClick: ee
+					}, [q(L(dc), { size: 15 }), J(A(C.value), 1)], 10, Gc), K("button", {
+						class: "btn nx-button btn--quiet nx-quick-link",
+						"data-home-open": "acceleration",
+						onClick: r[1] ||= (e) => i("navigate", "acceleration")
+					}, [r[15] ||= J(" 详情", -1), q(L(Vs), { size: 13 })])])
+				], 2),
+				K("section", {
+					class: k(["nx-quick-card", { "is-on": _.value }]),
+					"data-home-block": "proxy"
+				}, [
+					K("header", Kc, [
+						K("span", qc, [q(L(nc), { size: 19 })]),
+						r[16] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "代理"), K("p", null, "订阅线路")], -1),
+						K("span", { class: k(["nx-quick-state", { "is-live": _.value }]) }, A(_.value ? "已连接" : g.value ? "待连接" : "未配置"), 3)
+					]),
+					K("div", Jc, [K("strong", null, A(y.value), 1), K("p", null, A(_.value && b.value ? `${b.value} ms · 当前线路` : g.value ? "开启后加载订阅里的节点" : "先去代理页添加订阅"), 1)]),
+					K("div", Yc, [K("button", {
+						class: k(["btn nx-button", _.value ? "btn--secondary" : "btn--primary"]),
+						"aria-pressed": _.value,
+						disabled: !!t.session.busy,
+						"data-home-proxy": "",
+						onClick: te
+					}, [q(L(dc), { size: 15 }), J(A(w.value), 1)], 10, Xc), K("button", {
+						class: "btn nx-button btn--quiet nx-quick-link",
+						"data-home-open": "proxy",
+						onClick: r[2] ||= (e) => i("navigate", "proxy")
+					}, [r[17] ||= J(" 选线路", -1), q(L(Vs), { size: 13 })])])
+				], 2),
+				K("section", {
+					class: k(["nx-quick-card", { "is-on": x.value > 0 }]),
+					"data-home-block": "transfer"
+				}, [
+					K("header", Zc, [
+						K("span", Qc, [q(L(Ys), { size: 19 })]),
+						r[18] ||= K("div", { class: "nx-quick-title" }, [K("h2", null, "下载"), K("p", null, "快速取回文件")], -1),
+						K("span", { class: k(["nx-quick-state", { "is-live": x.value > 0 }]) }, A(x.value ? "进行中" : "空闲"), 3)
+					]),
+					K("div", $c, [K("strong", null, A(x.value ? `${x.value} 个任务` : "没有进行中的下载"), 1), K("p", null, A(x.value ? `${L(Cc)(S.value)} 总速度` : "粘贴链接即可开始，默认 8 连接"), 1)]),
+					K("div", el, [K("form", {
+						class: "nx-home-download",
+						"data-home-download": "",
+						onSubmit: bs(ne, ["prevent"])
+					}, [z(K("input", {
+						"onUpdate:modelValue": r[3] ||= (e) => a.value = e,
+						class: "nx-input",
+						"aria-label": "下载链接",
+						placeholder: "粘贴下载链接",
+						required: ""
+					}, null, 512), [[Q, a.value]]), K("button", {
+						class: "btn nx-button btn--primary",
+						disabled: !!t.session.busy || !a.value.trim(),
+						"aria-label": "开始下载"
+					}, [q(L(Ys), { size: 15 })], 8, tl)], 32), K("button", {
+						class: "btn nx-button btn--quiet nx-quick-link",
+						"data-home-open": "transfer",
+						onClick: r[4] ||= (e) => i("navigate", "transfer")
+					}, [r[19] ||= J(" 打开下载页", -1), q(L(Vs), { size: 13 })])])
+				], 2)
+			]),
+			K("button", {
+				class: "nx-home-link",
+				"data-home-open": "devices",
+				onClick: r[5] ||= (e) => i("navigate", "devices")
+			}, [
+				K("span", nl, [q(L(sc), {
+					size: 18,
+					"stroke-width": 1.7
+				})]),
+				r[20] ||= K("span", { class: "nx-home-link-copy" }, [K("strong", null, "我的设备"), K("em", null, "手机与电脑的配对、发文件和接收文件都在设备连接里")], -1),
+				q(L(Gs), { size: 16 })
 			])
 		]));
 	}
-}, ll = { class: "nx-accel-page" }, ul = { class: "nx-accel-orb" }, dl = { class: "nx-accel-copy" }, fl = ["aria-pressed", "disabled"], pl = { class: "nx-accel-grid" }, ml = { class: "nx-panel nx-accel-facts" }, hl = { class: "nx-panel-heading" }, gl = { class: "nx-fact" }, _l = { class: "nx-panel nx-site-check" }, vl = { class: "nx-panel-heading" }, yl = ["disabled"], bl = { class: "nx-site-shortcuts" }, xl = ["onClick"], Sl = {
-	key: 0,
-	class: "nx-panel nx-recent"
-}, Cl = { class: "nx-section-heading" }, wl = {
-	__name: "DashboardView",
-	props: { session: Object },
-	emits: ["navigate", "diagnostic"],
-	setup(e, { emit: t }) {
-		let n = e, r = t, i = /* @__PURE__ */ F("github.com"), a = Z(() => !!n.session.accelerated);
-		async function o() {
-			await n.session.toggleAcceleration();
-		}
-		async function s() {
-			let e = await n.session.diagnose(i.value);
-			e?.report && r("diagnostic", e.report);
-		}
-		return (t, n) => (U(), W("div", ll, [
-			K("section", { class: O(["nx-accel-control", { "is-on": a.value }]) }, [
-				K("div", ul, [q(I(lc), {
-					size: 24,
-					"stroke-width": 1.7
-				})]),
-				K("div", dl, [
-					n[3] ||= K("span", { class: "nx-kicker" }, "LOCAL ACCELERATION", -1),
-					K("h2", null, k(a.value ? "本机加速中" : "未加速"), 1),
-					K("p", null, k(a.value ? "本机直连：命中 GitHub、Steam 等常用站点时用 DoH 选 IP。" : "不需要订阅。点一下，用 DoH 选路直连 GitHub、Steam 等常用站点。"), 1)
-				]),
-				K("button", {
-					class: O(["btn nx-button nx-large", a.value ? "btn--secondary" : "btn--primary"]),
-					"aria-pressed": a.value,
-					disabled: !!e.session.busy || !e.session.systemProxyReady,
-					"data-acceleration": "",
-					onClick: o
-				}, [q(I(lc), { size: 17 }), J(k(e.session.busy === "proxy.start" ? "正在准备线路…" : e.session.busy === "accelerator.start" ? "正在准备…" : e.session.busy === "system.apply" ? "正在开启…" : a.value ? "停止加速" : "一键加速"), 1)], 10, fl)
-			], 2),
-			K("div", pl, [q(cl, {
-				history: e.session.state?.history || [],
-				traffic: e.session.state?.traffic
-			}, null, 8, ["history", "traffic"]), K("section", ml, [
-				K("div", hl, [K("h2", null, [q(I(mc), { size: 17 }), n[4] ||= J("运行方式", -1)])]),
-				n[7] ||= K("div", { class: "nx-fact" }, [K("span", null, "加速方式"), K("strong", null, "DoH 选 IP 直连")], -1),
-				n[8] ||= K("div", { class: "nx-fact" }, [K("span", null, "系统改动"), K("strong", null, "仅系统代理")], -1),
-				n[9] ||= K("div", { class: "nx-fact" }, [K("span", null, "证书 / hosts"), K("strong", null, "不修改")], -1),
-				K("div", gl, [n[6] ||= K("span", null, "订阅线路", -1), K("button", {
-					class: "btn nx-button btn--quiet nx-fact-link",
-					onClick: n[0] ||= (e) => r("navigate", "proxy")
-				}, [n[5] ||= J(" 去代理页管理", -1), q(I(Vs), { size: 13 })])]),
-				n[10] ||= K("p", { class: "nx-help" }, " 有订阅时会自动准备线路兜底，但不改系统代理；直连失败的域名会记住并优先走线路。 ", -1)
-			])]),
-			K("div", { class: O(["nx-accel-lower", { "nx-single": !e.session.state?.events?.length }]) }, [K("section", _l, [
-				K("div", vl, [K("h2", null, [q(I(rc), { size: 17 }), n[11] ||= J("检查网站访问", -1)])]),
-				K("form", {
-					class: "nx-inline-form",
-					onSubmit: bs(s, ["prevent"])
-				}, [z(K("input", {
-					"onUpdate:modelValue": n[1] ||= (e) => i.value = e,
-					class: "nx-input",
-					"aria-label": "要检查的网站",
-					placeholder: "输入网址，例如 github.com",
-					required: ""
-				}, null, 512), [[Q, i.value]]), K("button", {
-					class: "btn nx-button btn--secondary",
-					disabled: !!e.session.busy
-				}, [q(I(Ls), { size: 15 }), J(k(e.session.busy === "diagnose" ? "检查中…" : "检查一下"), 1)], 8, yl)], 32),
-				K("div", bl, [n[12] ||= K("span", null, "常用网站", -1), (U(), W(V, null, B([
-					"github.com",
-					"huggingface.co",
-					"google.com"
-				], (e) => K("button", {
-					key: e,
-					class: "btn nx-button btn--quiet",
-					onClick: (t) => i.value = e
-				}, k(e), 9, xl)), 64))])
-			]), e.session.state?.events?.length ? (U(), W("section", Sl, [K("div", Cl, [n[14] ||= K("h2", null, "最近活动", -1), K("button", {
-				class: "btn nx-button btn--quiet",
-				onClick: n[2] ||= (e) => r("navigate", "advanced")
-			}, [n[13] ||= J(" 查看记录", -1), q(I(Vs), { size: 13 })])]), (U(!0), W(V, null, B([...e.session.state.events].reverse().slice(0, 3), (e, t) => (U(), W("div", {
-				key: t,
-				class: "nx-event"
-			}, [
-				q(I(Us), { size: 14 }),
-				K("span", null, k(e.message), 1),
-				K("time", null, k(I(Sc)(e.time)), 1)
-			]))), 128))])) : Y("", !0)], 2)
-		]));
-	}
-}, Tl = [
-	"checked",
-	"disabled",
-	"aria-label"
-], El = {
-	class: "sunday-switch__track",
-	"aria-hidden": "true"
-}, Dl = { class: "sunday-switch__thumb" }, Ol = {
-	key: 0,
-	class: "sunday-switch__label"
-}, kl = /* @__PURE__ */ _r({
-	name: "SundaySwitch",
-	__name: "SundaySwitch",
-	props: /*@__PURE__*/ ei({
-		disabled: {
-			type: Boolean,
-			default: !1
-		},
-		label: {},
-		size: { default: "md" }
-	}, {
-		modelValue: {
-			type: Boolean,
-			default: !1
-		},
-		modelModifiers: {}
-	}),
-	emits: ["update:modelValue"],
-	setup(e) {
-		let t = bi(e, "modelValue");
-		function n(e) {
-			let n = e.target;
-			t.value = n.checked, bn(() => {
-				n.checked = t.value;
-			});
-		}
-		return (r, i) => (U(), W("label", { class: O(["sunday-switch", { "sunday-switch--sm": e.size === "sm" }]) }, [
-			K("input", {
-				class: "sunday-switch__input",
-				type: "checkbox",
-				role: "switch",
-				checked: t.value,
-				disabled: e.disabled,
-				"aria-label": e.label,
-				onChange: n
-			}, null, 40, Tl),
-			K("span", El, [K("span", Dl, [qr(r.$slots, "thumb")])]),
-			r.$slots.default ? (U(), W("span", Ol, [qr(r.$slots, "default")])) : Y("", !0)
-		], 2));
-	}
-}), Al = { class: "nx-panel nx-nodes" }, jl = { class: "nx-panel-heading" }, Ml = { class: "nx-node-head-actions" }, Nl = ["disabled"], Pl = ["disabled"], Fl = {
-	class: "nx-line-groups",
-	role: "group",
-	"aria-label": "线路分组"
-}, Il = ["aria-pressed", "onClick"], Ll = { class: "nx-subtle" }, Rl = [
-	"data-node",
-	"aria-pressed",
-	"disabled",
-	"onClick"
-], zl = { class: "nx-line-radio" }, Bl = { class: "nx-line-name" }, Vl = {
-	key: 0,
-	class: "nx-subtle nx-line-exit"
-}, Hl = { class: "nx-line-ms" }, Ul = [
-	"disabled",
-	"aria-label",
-	"onClick"
-], Wl = {
-	key: 1,
-	class: "nx-empty nx-empty--small"
-}, Gl = {
-	__name: "NodePicker",
-	props: {
-		session: Object,
-		compact: Boolean
-	},
-	emits: ["import"],
-	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(""), r = /* @__PURE__ */ F(""), i = /* @__PURE__ */ F({}), a = Z(() => {
-			let e = Object.entries(t.session.proxy?.proxies || {}).filter(([, e]) => Array.isArray(e.all) && e.type === "Selector"), n = t.session.proxy?.mode === "global";
-			return e.sort(([e], [t]) => Number(t === "GLOBAL") * (n ? 1 : -1) - Number(e === "GLOBAL") * (n ? 1 : -1));
-		});
-		Rn(a, (e) => {
-			e.some(([e]) => e === n.value) || (n.value = e[0]?.[0] || "");
-		}, { immediate: !0 });
-		let o = Z(() => a.value.find(([e]) => e === n.value)?.[1]), s = Z(() => (o.value?.all || []).filter((e) => e.toLowerCase().includes(r.value.toLowerCase())));
-		function c(e, n = 0) {
-			let r = t.session.proxy?.proxies?.[e];
-			if (!r) return 0;
-			let i = Number(r.history?.at(-1)?.delay);
-			if (i > 0) return i;
-			let a = r.now;
-			return n >= 4 || !a || a === e ? 0 : c(a, n + 1);
-		}
-		function l(e) {
-			let t = i.value[e] ?? c(e);
-			return Number(t) > 0 ? Number(t) : 0;
-		}
-		function u(e) {
-			let t = l(e);
-			return t > 0 ? `${t} ms` : "未测速";
-		}
-		function d(e) {
-			let n = t.session.proxy?.proxies?.[e];
-			if (!n || !Array.isArray(n.all)) return "";
-			let r = n.now;
-			return r && r !== e ? r : "";
-		}
-		function f(e) {
-			let t = l(e);
-			return t ? Math.max(8, Math.round(100 - Math.min(100, t / 3))) : 8;
-		}
-		function p(e) {
-			let t = l(e);
-			return t ? t <= 90 ? "is-fast" : t <= 200 ? "is-mid" : "is-slow" : "is-unknown";
-		}
-		async function m(e) {
-			let n = await t.session.run("proxy.delay", { name: e });
-			n?.delay != null && (i.value[e] = n.delay);
-		}
-		async function h() {
-			let e = await t.session.optimizeNode(n.value);
-			if (e) for (let t of e.candidates || []) Number(t.delay) > 0 && (i.value[t.name] = t.delay);
-		}
-		return (t, i) => (U(), W("section", Al, [
-			K("div", jl, [K("div", null, [i[5] ||= K("span", { class: "nx-kicker" }, "03 / 线路与测速", -1), K("h2", null, [q(I(uc), { size: 17 }), i[4] ||= J("选择线路", -1)])]), K("div", Ml, [K("button", {
-				class: "btn nx-button btn--quiet nx-icon-button",
-				"aria-label": "刷新线路",
-				disabled: !!e.session.busy,
-				onClick: i[0] ||= (t) => e.session.loadProxy()
-			}, [q(I(dc), { size: 15 })], 8, Nl), K("button", {
-				class: "btn nx-button btn--secondary nx-optimize",
-				"data-optimize": "",
-				disabled: !!e.session.busy || !s.value.length,
-				onClick: h
-			}, [q(I(yc), { size: 13 }), J(k(e.session.busy === "proxy.optimize" ? "测速中…" : "选择最快"), 1)], 8, Pl)])]),
-			i[9] ||= K("p", { class: "nx-help" }, "点一行直接切换；右侧刷新键单独测速。", -1),
-			a.value.length ? (U(), W(V, { key: 0 }, [
-				K("div", Fl, [(U(!0), W(V, null, B(a.value, ([e]) => (U(), W("button", {
-					key: e,
-					class: O(["nx-line-group", { "is-active": n.value === e }]),
-					"aria-pressed": n.value === e,
-					onClick: (t) => n.value = e
-				}, [J(k(e) + " ", 1), K("span", null, k((a.value.length, "")), 1)], 10, Il))), 128)), K("span", Ll, k(s.value.length) + " 条", 1)]),
-				s.value.length > 8 ? z((U(), W("input", {
-					key: 0,
-					"onUpdate:modelValue": i[1] ||= (e) => r.value = e,
-					class: "nx-input nx-node-search",
-					placeholder: "搜索线路",
-					"aria-label": "搜索线路"
-				}, null, 512)), [[Q, r.value]]) : Y("", !0),
-				K("div", { class: O(["nx-line-list", { "nx-node-list--compact": e.compact }]) }, [(U(!0), W(V, null, B(s.value, (t) => (U(), W("div", {
-					key: t,
-					class: O(["nx-line-row", { "is-selected": o.value.now === t }])
-				}, [K("button", {
-					class: "nx-line-choice",
-					"data-node": t,
-					"aria-pressed": o.value.now === t,
-					disabled: !!e.session.busy,
-					onClick: (r) => e.session.selectNode(n.value, t)
-				}, [
-					K("span", zl, [o.value.now === t ? (U(), G(I(Us), {
-						key: 0,
-						size: 11
-					})) : Y("", !0)]),
-					K("span", Bl, k(t === "DIRECT" ? "直接连接" : t === "REJECT" ? "阻止连接" : t), 1),
-					d(t) ? (U(), W("span", Vl, k(d(t)), 1)) : Y("", !0),
-					K("span", { class: O(["nx-line-meter", p(t)]) }, [K("i", { style: me({ width: `${f(t)}%` }) }, null, 4)], 2),
-					K("span", Hl, k(u(t)), 1)
-				], 8, Rl), e.compact ? Y("", !0) : (U(), W("button", {
-					key: 0,
-					class: "btn nx-button btn--quiet nx-icon-button nx-line-refresh",
-					disabled: !!e.session.busy,
-					"aria-label": `测试 ${t} 的延迟`,
-					onClick: (e) => m(t)
-				}, [q(I(dc), { size: 13 })], 8, Ul))], 2))), 128))], 2),
-				K("button", {
-					class: "btn nx-button btn--quiet nx-add-profile",
-					onClick: i[2] ||= (e) => t.$emit("import")
-				}, [q(I(cc), { size: 14 }), i[6] ||= J("添加或更新订阅 ", -1)])
-			], 64)) : (U(), W("div", Wl, [
-				q(I(uc), { size: 24 }),
-				K("strong", null, k(e.session.state?.proxy?.running ? "尚未找到可选线路" : "开启代理后可切换线路"), 1),
-				i[8] ||= K("p", null, "添加订阅，使用你已有的代理节点。", -1),
-				K("button", {
-					class: "btn nx-button btn--secondary",
-					onClick: i[3] ||= (e) => t.$emit("import")
-				}, [q(I(cc), { size: 14 }), i[7] ||= J("添加订阅 ", -1)])
-			]))
-		]));
-	}
-}, Kl = {
-	class: "nx-panel nx-import",
-	"data-profile-import": ""
-}, ql = { class: "nx-panel-heading" }, Jl = { class: "nx-input-with-action" }, Yl = ["type"], Xl = ["aria-label"], Zl = ["disabled"], Ql = {
-	key: 0,
-	class: "nx-help"
-}, $l = { class: "nx-import-options" }, eu = ["disabled"], tu = ["aria-expanded"], nu = ["disabled"], ru = {
-	key: 2,
-	class: "nx-help"
-}, iu = {
-	__name: "ImportProfile",
-	props: {
-		session: Object,
-		autoStart: Boolean
-	},
-	emits: ["close"],
-	setup(e, { emit: t }) {
-		let n = e, r = t, i = /* @__PURE__ */ F(""), a = /* @__PURE__ */ F(!1), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(!1), c = /* @__PURE__ */ F("");
-		async function l(e) {
-			let t = !!n.session.state?.proxy?.running, a = !!n.session.accelerated;
-			if (t) {
-				let e = await n.session.run("proxy.stop", {}, "");
-				if (!e || e.cancelled) return;
-			}
-			let o = await n.session.run("proxy.config", e, "");
-			if (!o || o.cancelled) {
-				if (t) {
-					let e = n.session.error, t = n.session.notice, r = await n.session.run("proxy.start", {}, "");
-					r && !r.cancelled && (await n.session.loadProxy(), n.session.error = e, n.session.notice = t);
-				}
-				return;
-			}
-			if (i.value = "", c.value = "", r("close"), t) {
-				let e = await n.session.run("proxy.start", {}, "");
-				e && !e.cancelled && (n.session.notice = "订阅已更新，线路已重新连接", await n.session.loadProxy(), a && await n.session.toggleAcceleration());
-			} else n.autoStart ? await n.session.toggleAcceleration() : n.session.notice = "订阅已保存，现在可以开启加速";
-		}
-		async function u(e) {
-			let t = e.target.files?.[0];
-			if (t) {
-				if (t.size > 2 * 1024 * 1024) {
-					n.session.error = "配置文件不能超过 2 MB";
-					return;
-				}
-				await l({ content: await t.text() });
-			}
-		}
-		return (t, n) => (U(), W("section", Kl, [
-			K("div", ql, [K("h2", null, [q(I(rc), { size: 17 }), n[8] ||= J("添加订阅", -1)]), K("button", {
-				class: "btn nx-button btn--quiet nx-icon-button",
-				"aria-label": "收起订阅设置",
-				onClick: n[0] ||= (e) => t.$emit("close")
-			}, [q(I(vc), { size: 16 })])]),
-			n[10] ||= K("p", { class: "nx-help" }, "粘贴你的订阅链接。已有配置文件也可以直接导入。", -1),
-			K("form", {
-				class: "nx-inline-form",
-				onSubmit: n[3] ||= bs((e) => l({ subscription: i.value.trim() }), ["prevent"])
-			}, [K("label", Jl, [z(K("input", {
-				"onUpdate:modelValue": n[1] ||= (e) => i.value = e,
-				type: a.value ? "text" : "password",
-				class: "nx-input",
-				required: "",
-				placeholder: "https://…",
-				"aria-label": "订阅链接",
-				autocomplete: "off"
-			}, null, 8, Yl), [[hs, i.value]]), K("button", {
-				class: "btn nx-button btn--quiet nx-icon-button",
-				type: "button",
-				"aria-label": a.value ? "隐藏订阅链接" : "显示订阅链接",
-				onClick: n[2] ||= (e) => a.value = !a.value
-			}, [(U(), G(Wr(a.value ? I(Xs) : I(Zs)), { size: 16 }))], 8, Xl)]), K("button", {
-				class: "btn nx-button btn--primary",
-				disabled: !!e.session.busy || !i.value.trim()
-			}, k(e.session.busy === "proxy.config" ? "正在下载…" : "保存订阅"), 9, Zl)], 32),
-			e.session.busy === "proxy.config" ? (U(), W("p", Ql, " 正在下载订阅。慢速订阅可能需要几十秒，请不要关闭页面。 ")) : Y("", !0),
-			K("div", $l, [
-				K("button", {
-					class: "btn nx-button btn--quiet",
-					disabled: !!e.session.busy,
-					onClick: n[4] ||= (e) => o.value.click()
-				}, [q(I($s), { size: 14 }), n[9] ||= J("导入配置文件", -1)], 8, eu),
-				K("button", {
-					class: "btn nx-button btn--quiet",
-					"aria-expanded": s.value,
-					onClick: n[5] ||= (e) => s.value = !s.value
-				}, k(s.value ? "收起文本配置" : "粘贴配置文本"), 9, tu),
-				K("input", {
-					ref_key: "fileInput",
-					ref: o,
-					type: "file",
-					accept: ".yaml,.yml,.txt",
-					hidden: "",
-					onChange: u
-				}, null, 544)
-			]),
-			s.value ? (U(), W("form", {
-				key: 1,
-				class: "nx-form",
-				onSubmit: n[7] ||= bs((e) => l({ content: c.value }), ["prevent"])
-			}, [z(K("textarea", {
-				"onUpdate:modelValue": n[6] ||= (e) => c.value = e,
-				class: "nx-input nx-code",
-				rows: "7",
-				"aria-label": "代理配置文本",
-				placeholder: "粘贴 Mihomo / Clash YAML 配置",
-				required: ""
-			}, null, 512), [[Q, c.value]]), K("button", {
-				class: "btn nx-button btn--secondary",
-				disabled: !!e.session.busy
-			}, " 保存配置 ", 8, nu)], 32)) : Y("", !0),
-			e.session.state?.proxy?.running ? (U(), W("p", ru, " 当前连接已开启。保存订阅或配置时会自动断开并重新连接，不需要手动关闭。 ")) : Y("", !0)
-		]));
-	}
-}, au = { class: "nx-view-stack" }, ou = { class: "nx-section-heading" }, su = { class: "nx-proxy-top" }, cu = { class: "nx-panel nx-subscribe-summary" }, lu = { class: "nx-subscribe-copy" }, uu = { class: "nx-panel nx-proxy-connection" }, du = { class: "nx-proxy-connection-row" }, fu = { class: "nx-route-icon" }, pu = { class: "nx-control-copy" }, mu = {
-	__name: "ProxyView",
-	props: { session: Object },
-	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(!1), r = Z(() => !!t.session.state?.proxy?.config_saved);
-		return (t, i) => (U(), W("div", au, [
-			K("div", ou, [i[5] ||= K("div", null, [
-				K("span", { class: "nx-kicker" }, "PROXY DESK"),
-				K("h2", null, "订阅与线路"),
-				K("p", null, "先有订阅，再选一条线路。")
-			], -1), K("button", {
-				class: "btn nx-button btn--secondary",
-				onClick: i[0] ||= (e) => n.value = !n.value
-			}, [q(I(cc), { size: 15 }), J(k(r.value ? "更新订阅" : "添加订阅"), 1)])]),
-			n.value ? (U(), G(iu, {
-				key: 0,
-				session: e.session,
-				onClose: i[1] ||= (e) => n.value = !1
-			}, null, 8, ["session"])) : Y("", !0),
-			K("div", su, [K("section", cu, [
-				i[6] ||= K("span", { class: "nx-kicker" }, "01 / 订阅", -1),
-				K("div", lu, [K("h3", null, k(r.value ? "订阅已保存" : "还没有订阅"), 1), K("p", null, k(r.value ? "已使用当前 Windows 账户加密保存。更新订阅会自动重连。" : "粘贴服务商给你的 HTTPS 订阅链接，节点会自动出现。"), 1)]),
-				K("button", {
-					class: O(["btn nx-button", r.value ? "btn--quiet" : "btn--primary"]),
-					onClick: i[2] ||= (e) => n.value = !0
-				}, [q(I(rc), { size: 14 }), J(k(r.value ? "更新订阅" : "粘贴订阅链接"), 1)], 2)
-			]), K("section", uu, [i[7] ||= K("span", { class: "nx-kicker" }, "02 / 连接", -1), K("div", du, [
-				K("span", fu, [q(I(lc), { size: 18 })]),
-				K("div", pu, [K("strong", null, k(e.session.state?.proxy?.running ? "已连接" : "未连接"), 1), K("p", null, k(r.value ? e.session.state?.proxy?.running ? "节点已加载，可以在下面切换。" : "开启后加载订阅里的节点。" : "先保存订阅，才能启动代理。"), 1)]),
-				q(kl, {
-					"data-proxy-switch": "",
-					label: "代理连接",
-					"model-value": !!e.session.state?.proxy?.running,
-					disabled: !!e.session.busy || !r.value,
-					"onUpdate:modelValue": i[3] ||= (t) => e.session.toggleProxy()
-				}, null, 8, ["model-value", "disabled"])
-			])])]),
-			q(Gl, {
-				session: e.session,
-				onImport: i[4] ||= (e) => n.value = !0
-			}, null, 8, ["session"])
-		]));
-	}
-}, hu = {
+}, il = {
 	交互内容: "交互内容",
+	"关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。": "关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。",
+	"安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。": "安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。",
+	更新已就绪: "更新已就绪",
 	查看代码: "查看代码",
 	"交互内容运行失败，可查看代码或重试": "交互内容运行失败，可查看代码或重试",
 	"交互内容过大，请缩小后重试": "交互内容过大，请缩小后重试",
@@ -7307,6 +6873,8 @@ var Dc = { class: "nx-home" }, Oc = {
 	한국어: "韩语",
 	"已开始发送：{0}": "已开始发送：{0}",
 	切换工作区布局: "切换工作区布局",
+	切换到别的子代理: "切换到别的子代理",
+	还没有其他子代理: "还没有其他子代理",
 	切换主内容: "切换主内容",
 	内容类型: "内容类型",
 	打开方式: "打开方式",
@@ -7395,8 +6963,11 @@ var Dc = { class: "nx-home" }, Oc = {
 	还没有网页: "还没有网页",
 	菜单打开时网页暂时让位: "菜单打开时网页暂时让位",
 	切换运行模式: "切换运行模式"
-}, gu = {
+}, al = {
 	交互内容: "互動內容",
+	"关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。": "關掉卡片不會中斷下載，可以繼續用 Sunday；點左側的更新圖示回來看進度。",
+	"安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。": "安裝包已下載並校驗；點「立即安裝」後 Sunday 會結束，裝好後自動開啟。",
+	更新已就绪: "更新已就緒",
 	查看代码: "檢視程式碼",
 	"交互内容运行失败，可查看代码或重试": "互動內容執行失敗，可檢視程式碼或重試",
 	"交互内容过大，请缩小后重试": "互動內容過大，請縮小後重試",
@@ -10078,6 +9649,8 @@ var Dc = { class: "nx-home" }, Oc = {
 	한국어: "韓語",
 	"已开始发送：{0}": "已開始傳送：{0}",
 	切换工作区布局: "切換工作區版面",
+	切换到别的子代理: "切換到其他子代理",
+	还没有其他子代理: "還沒有其他子代理",
 	切换主内容: "切換主內容",
 	内容类型: "內容類型",
 	打开方式: "開啟方式",
@@ -10166,8 +9739,11 @@ var Dc = { class: "nx-home" }, Oc = {
 	还没有网页: "還沒有網頁",
 	菜单打开时网页暂时让位: "選單開啟時網頁暫時讓位",
 	切换运行模式: "切換執行模式"
-}, _u = {
+}, ol = {
 	交互内容: "インタラクティブコンテンツ",
+	"关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。": "カードを閉じてもダウンロードは続きます。Sunday を使いながら、左側の更新アイコンから進捗を確認できます。",
+	"安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。": "インストーラーはダウンロードと検証が完了しています。「今すぐインストール」を押すと Sunday が終了し、完了後に自動で起動します。",
+	更新已就绪: "アップデートの準備ができました",
 	查看代码: "コードを表示",
 	"交互内容运行失败，可查看代码或重试": "実行に失敗しました。コードを確認するか、再試行してください。",
 	"交互内容过大，请缩小后重试": "コンテンツが大きすぎます。縮小して再試行してください。",
@@ -12849,6 +12425,8 @@ var Dc = { class: "nx-home" }, Oc = {
 	한국어: "韓国語",
 	"已开始发送：{0}": "送信を開始しました：{0}",
 	切换工作区布局: "ワークスペースのレイアウトを切り替え",
+	切换到别的子代理: "別のサブエージェントに切り替え",
+	还没有其他子代理: "まだ他のサブエージェントはいません",
 	切换主内容: "メイン内容を切り替え",
 	内容类型: "コンテンツ種別",
 	打开方式: "開き方",
@@ -12937,8 +12515,11 @@ var Dc = { class: "nx-home" }, Oc = {
 	还没有网页: "まだページがありません",
 	菜单打开时网页暂时让位: "メニューを開いている間、ページは退避します",
 	切换运行模式: "実行モードを切り替え"
-}, vu = {
+}, sl = {
 	交互内容: "Interactive content",
+	"关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。": "Closing this card keeps the download running in the background — carry on with Sunday and click the update icon on the left to see the progress.",
+	"安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。": "The installer is downloaded and verified. “Install now” quits Sunday and reopens it when the installation finishes.",
+	更新已就绪: "Update ready",
 	查看代码: "View source",
 	"交互内容运行失败，可查看代码或重试": "Interactive content failed. View the source or retry.",
 	"交互内容过大，请缩小后重试": "Interactive content is too large. Reduce its size and retry.",
@@ -15620,6 +15201,8 @@ var Dc = { class: "nx-home" }, Oc = {
 	한국어: "Korean",
 	"已开始发送：{0}": "Sending started: {0}",
 	切换工作区布局: "Switch workspace layout",
+	切换到别的子代理: "Switch to another sub-agent",
+	还没有其他子代理: "No other sub-agents yet",
 	切换主内容: "Switch main content",
 	内容类型: "Content types",
 	打开方式: "How to open",
@@ -15708,28 +15291,28 @@ var Dc = { class: "nx-home" }, Oc = {
 	还没有网页: "No page yet",
 	菜单打开时网页暂时让位: "The page steps aside while a menu is open",
 	切换运行模式: "Switch run mode"
-}, yu = /* @__PURE__ */ F("zh-CN"), bu = {
-	"zh-CN": hu,
-	"zh-TW": gu,
-	ja: _u,
-	en: vu
+}, cl = /* @__PURE__ */ I("zh-CN"), ll = {
+	"zh-CN": il,
+	"zh-TW": al,
+	ja: ol,
+	en: sl
 };
-function xu(e, t = {}) {
-	return (bu[yu.value][e] ?? bu["zh-CN"][e] ?? e).replace(/\{(\w+)\}/g, (e, n) => Object.hasOwn(t, n) ? String(t[n]) : e);
+function ul(e, t = {}) {
+	return (ll[cl.value][e] ?? ll["zh-CN"][e] ?? e).replace(/\{(\w+)\}/g, (e, n) => Object.hasOwn(t, n) ? String(t[n]) : e);
 }
 //#endregion
 //#region src/components/UiSelect.vue?vue&type=script&setup=true&lang.ts
-var Su = [
+var dl = [
 	"disabled",
 	"aria-label",
 	"aria-expanded"
-], Cu = {
+], fl = {
 	key: 0,
 	class: "ui-select-arrow"
-}, wu = {
+}, pl = {
 	key: 0,
 	class: "ui-select-group-label"
-}, Tu = ["disabled", "onClick"], Eu = 8, Du = 6, Ou = 96, ku = /*#__PURE__*/ ((e, t) => {
+}, ml = ["disabled", "onClick"], hl = 8, gl = 6, _l = 96, vl = /*#__PURE__*/ ((e, t) => {
 	let n = e.__vccOpts || e;
 	for (let [e, r] of t) n[e] = r;
 	return n;
@@ -15751,7 +15334,7 @@ var Su = [
 	},
 	emits: ["update:modelValue"],
 	setup(e, { emit: t }) {
-		let n = e, r = t, i = /* @__PURE__ */ F(!1), a = /* @__PURE__ */ F(null), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(null), c = /* @__PURE__ */ F({
+		let n = e, r = t, i = /* @__PURE__ */ I(!1), a = /* @__PURE__ */ I(null), o = /* @__PURE__ */ I(null), s = /* @__PURE__ */ I(null), c = /* @__PURE__ */ I({
 			up: !1,
 			alignRight: !1,
 			left: 0,
@@ -15759,7 +15342,7 @@ var Su = [
 			bottom: null,
 			width: 280,
 			maxHeight: 320
-		}), l = /* @__PURE__ */ F(0), u = /* @__PURE__ */ F(!1), d = /* @__PURE__ */ F({}), f = [
+		}), l = /* @__PURE__ */ I(0), u = /* @__PURE__ */ I(!1), d = /* @__PURE__ */ I({}), f = [
 			"--settings-control-solid",
 			"--settings-control-text",
 			"--ui-select-layer"
@@ -15785,18 +15368,18 @@ var Su = [
 				top: 0,
 				bottom: 0,
 				width: 0
-			}, s = Math.max(120, r - Eu * 2), c = Math.min(n.menuWidth ?? Math.max(n.menuMinWidth, a.width), s), l = i - a.bottom - Du - Eu, u = a.top - Du - Eu, d = n.direction === "up";
+			}, s = Math.max(120, r - hl * 2), c = Math.min(n.menuWidth ?? Math.max(n.menuMinWidth, a.width), s), l = i - a.bottom - gl - hl, u = a.top - gl - hl, d = n.direction === "up";
 			if (!(d ? u >= e : l >= e)) {
 				let e = u > l;
 				(d ? !e : e) && (d = !d);
 			}
-			let f = Math.max(Ou, Math.min(n.menuMaxHeight, d ? u : l)), p = n.menuAlign === "right" || !n.menuAlign && a.left + c > r - Eu, m = p ? a.right - c : a.left;
+			let f = Math.max(_l, Math.min(n.menuMaxHeight, d ? u : l)), p = n.menuAlign === "right" || !n.menuAlign && a.left + c > r - hl, m = p ? a.right - c : a.left;
 			return {
 				up: d,
 				alignRight: p,
-				left: Math.min(Math.max(Eu, m), Math.max(Eu, r - Eu - c)),
-				top: d ? null : a.bottom + Du,
-				bottom: d ? i - a.top + Du : null,
+				left: Math.min(Math.max(hl, m), Math.max(hl, r - hl - c)),
+				top: d ? null : a.bottom + gl,
+				bottom: d ? i - a.top + gl : null,
 				width: c,
 				maxHeight: f
 			};
@@ -15839,7 +15422,7 @@ var Su = [
 		}, { deep: !0 });
 		let S = Z(() => {
 			let e = n.options.find((e) => e.value === n.modelValue);
-			return e?.selectedLabel || e?.label?.replace(/^\s*-\s*/, "") || n.placeholder || xu("未指定");
+			return e?.selectedLabel || e?.label?.replace(/^\s*-\s*/, "") || n.placeholder || ul("未指定");
 		}), C = Z(() => ({
 			open: i.value,
 			"ui-select--up": c.value.up,
@@ -15861,7 +15444,7 @@ var Su = [
 		function te() {
 			return Array.from(s.value?.querySelectorAll(".ui-select-option:not(:disabled)") ?? []);
 		}
-		function T(e) {
+		function ne(e) {
 			if (e.key === "Tab") {
 				o.value?.focus(), x();
 				return;
@@ -15880,7 +15463,7 @@ var Su = [
 			else return;
 			e.preventDefault(), t[r]?.focus();
 		}
-		function ne(e) {
+		function T(e) {
 			n.disabled || e.disabled || (r("update:modelValue", e.value), x(), o.value?.focus());
 		}
 		function re(e) {
@@ -15894,18 +15477,18 @@ var Su = [
 		}), (t, n) => (U(), W("div", {
 			ref_key: "root",
 			ref: a,
-			class: O(["ui-select", C.value])
+			class: k(["ui-select", C.value])
 		}, [K("button", {
 			ref_key: "triggerEl",
 			ref: o,
 			class: "ui-select-trigger",
 			type: "button",
 			disabled: e.disabled,
-			"aria-label": e.ariaLabel || I(xu)("当前选择：{0}", { 0: S.value }),
+			"aria-label": e.ariaLabel || L(ul)("当前选择：{0}", { 0: S.value }),
 			"aria-expanded": i.value,
 			onClick: ee,
-			onKeydown: [n[0] ||= Ss((e) => i.value && T(e), ["esc"]), n[1] ||= Ss((e) => i.value && x(), ["tab"])]
-		}, [K("span", null, k(S.value), 1), e.hideArrow ? Y("", !0) : (U(), W("span", Cu))], 40, Su), (U(), G($n, { to: "body" }, [q(po, {
+			onKeydown: [n[0] ||= Ss((e) => i.value && ne(e), ["esc"]), n[1] ||= Ss((e) => i.value && x(), ["tab"])]
+		}, [K("span", null, A(S.value), 1), e.hideArrow ? Y("", !0) : (U(), W("span", fl))], 40, dl), (U(), G($n, { to: "body" }, [q(po, {
 			name: "sunday-motion-fade",
 			onBeforeLeave: n[2] ||= (e) => e.setAttribute("inert", "")
 		}, {
@@ -15913,15 +15496,15 @@ var Su = [
 				key: 0,
 				ref_key: "menuEl",
 				ref: s,
-				class: O(["ui-select-menu sunday-motion-popover", { "ui-select-menu--up": c.value.up }]),
-				style: me(g.value),
-				onKeydown: T
+				class: k(["ui-select-menu sunday-motion-popover", { "ui-select-menu--up": c.value.up }]),
+				style: pe(g.value),
+				onKeydown: ne
 			}, [(U(!0), W(V, null, B(w.value, (t) => (U(), W("div", {
 				key: t.group || "default",
 				class: "ui-select-group"
-			}, [t.group ? (U(), W("div", wu, k(t.group), 1)) : Y("", !0), (U(!0), W(V, null, B(t.options, (t) => (U(), W("button", {
+			}, [t.group ? (U(), W("div", pl, A(t.group), 1)) : Y("", !0), (U(!0), W(V, null, B(t.options, (t) => (U(), W("button", {
 				key: t.value,
-				class: O(["ui-select-option", {
+				class: k(["ui-select-option", {
 					active: t.selected ?? t.value === e.modelValue,
 					"active-accent": t.activeAccent,
 					"separator-before": t.separatorBefore,
@@ -15929,29 +15512,45 @@ var Su = [
 				}]),
 				type: "button",
 				disabled: t.disabled,
-				onClick: (e) => ne(t)
-			}, k(t.label), 11, Tu))), 128))]))), 128))], 38)) : Y("", !0)]),
+				onClick: (e) => T(t)
+			}, A(t.label), 11, ml))), 128))]))), 128))], 38)) : Y("", !0)]),
 			_: 1
 		})]))], 2));
 	}
-}), [["__scopeId", "data-v-8923c713"]]), Au = { class: "nx-view-stack" }, ju = { class: "nx-download-stats" }, Mu = { class: "nx-panel-heading" }, Nu = { class: "nx-inline-form" }, Pu = ["disabled"], Fu = { class: "nx-download-options" }, Iu = { class: "nx-download-option" }, Lu = { class: "nx-download-option" }, Ru = ["aria-expanded"], zu = {
+}), [["__scopeId", "data-v-8923c713"]]), yl = { class: "nx-view-stack" }, bl = { class: "nx-download-stats" }, xl = { class: "nx-panel-heading" }, Sl = { class: "nx-inline-form" }, Cl = ["disabled"], wl = { class: "nx-download-options" }, Tl = { class: "nx-download-option" }, El = { class: "nx-download-option" }, Dl = ["aria-expanded"], Ol = {
 	key: 0,
 	class: "nx-form-grid"
-}, Bu = { class: "nx-form-field" }, Vu = { class: "nx-list-toolbar" }, Hu = { class: "nx-filter-tabs" }, Uu = { class: "nx-panel nx-task-list" }, Wu = ["data-task"], Gu = { class: "nx-file-icon" }, Ku = { class: "nx-download-body" }, qu = { class: "nx-task-title" }, Ju = ["aria-valuenow", "aria-label"], Yu = { class: "nx-task-meta" }, Xu = { key: 0 }, Zu = { key: 1 }, Qu = { key: 2 }, $u = { class: "nx-task-controls" }, ed = ["disabled", "onClick"], td = ["disabled", "onClick"], nd = [
+}, kl = { class: "nx-form-field" }, Al = {
+	class: "nx-panel nx-download-settings",
+	"data-download-settings": ""
+}, jl = ["aria-expanded"], Ml = { class: "nx-subtle" }, Nl = {
+	key: 0,
+	class: "nx-form-grid"
+}, Pl = { class: "nx-form-field" }, Fl = { class: "nx-form-field" }, Il = { class: "nx-form-field" }, Ll = { class: "nx-form-field nx-form-field--wide" }, Rl = {
+	class: "nx-subtle",
+	"data-download-default": ""
+}, zl = { class: "nx-form-field" }, Bl = ["disabled"], Vl = { class: "nx-list-toolbar" }, Hl = { class: "nx-filter-tabs" }, Ul = { class: "nx-panel nx-task-list" }, Wl = [
+	"data-task",
+	"title",
+	"onDblclick"
+], Gl = { class: "nx-file-icon" }, Kl = { class: "nx-download-body" }, ql = { class: "nx-task-title" }, Jl = ["aria-valuenow", "aria-label"], Yl = { class: "nx-task-meta" }, Xl = { key: 0 }, Zl = { key: 1 }, Ql = {
+	key: 2,
+	"data-task-error": ""
+}, $l = { class: "nx-task-controls" }, eu = ["disabled", "onClick"], tu = ["disabled", "onClick"], nu = [
 	"aria-label",
 	"aria-expanded",
 	"onClick"
-], rd = {
+], ru = {
 	key: 0,
 	class: "nx-task-details"
-}, id = { class: "nx-subtle" }, ad = { class: "nx-actions" }, od = { class: "nx-small-select" }, sd = ["disabled", "onClick"], cd = ["disabled", "onClick"], ld = ["disabled", "onClick"], ud = {
+}, iu = { class: "nx-subtle" }, au = { class: "nx-actions" }, ou = { class: "nx-small-select" }, su = ["disabled", "onClick"], cu = ["disabled", "onClick"], lu = ["onClick"], uu = ["disabled", "onClick"], du = {
 	key: 0,
 	class: "nx-empty"
-}, dd = {
+}, fu = {
 	__name: "TransferView",
 	props: { session: Object },
 	setup(t) {
-		let n = t, r = /* @__PURE__ */ F("active"), i = /* @__PURE__ */ F(""), a = /* @__PURE__ */ F(""), o = /* @__PURE__ */ F(""), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F("auto"), l = /* @__PURE__ */ F(!1), u = /* @__PURE__ */ F(8), d = /* @__PURE__ */ F(0), f = /* @__PURE__ */ F(!1), p = /* @__PURE__ */ F(""), m = [
+		let n = t, r = /* @__PURE__ */ I("active"), i = /* @__PURE__ */ I(""), a = /* @__PURE__ */ I(""), o = /* @__PURE__ */ I(""), s = /* @__PURE__ */ I(""), c = /* @__PURE__ */ I("auto"), l = /* @__PURE__ */ I(!1), u = /* @__PURE__ */ I(8), d = /* @__PURE__ */ I(0), f = /* @__PURE__ */ I(!1), p = /* @__PURE__ */ I(""), m = [
 			1,
 			2,
 			4,
@@ -15991,18 +15590,70 @@ var Su = [
 				label: "当前代理",
 				disabled: !n.session.state?.proxy?.running
 			}
-		]), _ = /* @__PURE__ */ Lt({}), v = /* @__PURE__ */ Lt({}), y = Z(() => n.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), b = Z(() => n.session.tasks.map((e) => ({
+		]), _ = /* @__PURE__ */ It({}), v = /* @__PURE__ */ It({}), y = /* @__PURE__ */ I("3"), b = /* @__PURE__ */ I("5"), x = /* @__PURE__ */ I("0"), S = /* @__PURE__ */ I(""), C = /* @__PURE__ */ I(!1), w = /* @__PURE__ */ I(!1), ee = [
+			1,
+			2,
+			3,
+			4,
+			6,
+			8
+		].map((e) => ({
+			value: String(e),
+			label: `${e} 个`
+		})), te = [
+			1,
+			3,
+			5,
+			10,
+			20
+		].map((e) => ({
+			value: String(e),
+			label: `${e} 次`
+		}));
+		Rn(() => n.session.state?.settings?.download, (e) => {
+			e && (y.value = String(e.concurrency ?? 3), b.value = String(e.max_tries ?? 5), x.value = String(e.bytes_per_second ?? 0), S.value = String(e.directory || ""));
+		}, {
+			immediate: !0,
+			deep: !0
+		});
+		async function ne() {
+			if (!w.value) {
+				w.value = !0;
+				try {
+					await n.session.run("settings.update", {
+						revision: n.session.state?.revision,
+						settings: { download: {
+							concurrency: Number(y.value),
+							max_tries: Number(b.value),
+							bytes_per_second: Number(x.value),
+							directory: S.value.trim()
+						} }
+					}, "下载设置已保存") && await n.session.refresh();
+				} finally {
+					w.value = !1;
+				}
+			}
+		}
+		function T(e) {
+			let t = e.path || [e.directory, e.filename].filter(Boolean).join("\\");
+			if (!t) {
+				n.session.error = "还没有文件路径，稍后刷新一次";
+				return;
+			}
+			n.session.openFile(t);
+		}
+		let re = Z(() => n.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), E = Z(() => n.session.tasks.map((e) => ({
 			...n.session.state?.downloads?.find((t) => t.gid === e.gid),
 			...e
-		})).filter((e) => r.value === "all" || (r.value === "complete" ? e.status === "complete" : !["complete", "removed"].includes(e.status)))), x = Z(() => n.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), S = Z(() => n.session.tasks.filter((e) => e.status === "complete").length);
-		function C(e) {
+		})).filter((e) => r.value === "all" || (r.value === "complete" ? e.status === "complete" : !["complete", "removed"].includes(e.status)))), ie = Z(() => n.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), ae = Z(() => n.session.tasks.filter((e) => e.status === "complete").length);
+		function oe(e) {
 			return Math.min(100, Number(e.completedLength || 0) / Math.max(1, Number(e.totalLength || 0)) * 100);
 		}
-		function w(e) {
+		function se(e) {
 			let t = (Number(e.totalLength || 0) - Number(e.completedLength || 0)) / Math.max(0, Number(e.downloadSpeed || 0));
 			return Number.isFinite(t) && t > 0 ? t < 60 ? `约 ${Math.ceil(t)} 秒` : `约 ${Math.ceil(t / 60)} 分钟` : "等待传输";
 		}
-		async function ee() {
+		async function D() {
 			let e = a.value.trim(), t = {
 				url: i.value.trim(),
 				...e ? { filename: e } : {},
@@ -16014,7 +15665,7 @@ var Su = [
 			};
 			await n.session.run("transfer.add", t, "已开始下载") && (i.value = "", a.value = "", s.value = "", await n.session.loadTasks());
 		}
-		function te(e) {
+		function ce(e) {
 			f.value = !1;
 			let t = (e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("text/plain") || "").split(/\r?\n/).map((e) => e.trim()).find(Boolean);
 			if (!t || !/^https?:\/\//i.test(t)) {
@@ -16023,13 +15674,13 @@ var Su = [
 			}
 			i.value = t, n.session.notice = "链接已填入，点“开始下载”";
 		}
-		async function T(e, t) {
+		async function le(e, t) {
 			e.status === "recoverable" && t === "resume" && !await n.session.run("transfer.recover", {}) || (await n.session.run("transfer.action", {
 				gid: e.gid,
 				action: t
 			}), await n.session.loadTasks());
 		}
-		async function ne(e, t) {
+		async function ue(e, t) {
 			if (!(v[e.gid] || t === (_[e.gid] || "0"))) {
 				v[e.gid] = !0;
 				try {
@@ -16044,29 +15695,29 @@ var Su = [
 				}
 			}
 		}
-		async function re(e) {
+		async function de(e) {
 			let t = await n.session.run("transfer.verify", { gid: e.gid });
 			t && (t.verified === !1 ? n.session.error = "文件与预期校验值不一致，请核对下载来源" : n.session.notice = t.verified === !0 ? "文件校验通过" : `文件校验值：${t.sha256}`);
 		}
-		return (n, E) => (U(), W("div", Au, [
-			E[35] ||= K("div", { class: "nx-section-heading" }, [K("div", null, [K("h2", null, "下载"), K("p", null, "粘贴链接或把链接拖进来，点“开始下载”。")])], -1),
-			K("div", ju, [
-				K("div", null, [E[15] ||= K("span", null, "进行中", -1), K("strong", null, k(x.value), 1)]),
-				K("div", null, [E[16] ||= K("span", null, "已完成", -1), K("strong", null, k(S.value), 1)]),
-				K("div", null, [E[17] ||= K("span", null, "总速度", -1), K("strong", null, k(I(bc)(y.value)), 1)])
+		return (n, O) => (U(), W("div", yl, [
+			O[47] ||= K("div", { class: "nx-section-heading" }, [K("div", null, [K("h2", null, "下载"), K("p", null, "粘贴链接或把链接拖进来，点“开始下载”。")])], -1),
+			K("div", bl, [
+				K("div", null, [O[20] ||= K("span", null, "进行中", -1), K("strong", null, A(ie.value), 1)]),
+				K("div", null, [O[21] ||= K("span", null, "已完成", -1), K("strong", null, A(ae.value), 1)]),
+				K("div", null, [O[22] ||= K("span", null, "总速度", -1), K("strong", null, A(L(Cc)(re.value)), 1)])
 			]),
 			K("form", {
-				class: O(["nx-panel nx-download-composer", { "is-dragging": f.value }]),
+				class: k(["nx-panel nx-download-composer", { "is-dragging": f.value }]),
 				"data-download-drop": "",
-				onSubmit: bs(ee, ["prevent"]),
-				onDragover: E[8] ||= bs(() => {}, ["prevent"]),
-				onDragenter: E[9] ||= bs((e) => f.value = !0, ["prevent"]),
-				onDragleave: E[10] ||= (e) => f.value = !1,
-				onDrop: bs(te, ["prevent"])
+				onSubmit: bs(D, ["prevent"]),
+				onDragover: O[8] ||= bs(() => {}, ["prevent"]),
+				onDragenter: O[9] ||= bs((e) => f.value = !0, ["prevent"]),
+				onDragleave: O[10] ||= (e) => f.value = !1,
+				onDrop: bs(ce, ["prevent"])
 			}, [
-				K("div", Mu, [K("h2", null, [q(I(Ys), { size: 17 }), E[18] ||= J("新建下载", -1)]), E[19] ||= K("span", { class: "nx-subtle" }, "支持 HTTP / HTTPS", -1)]),
-				K("div", Nu, [z(K("input", {
-					"onUpdate:modelValue": E[0] ||= (e) => i.value = e,
+				K("div", xl, [K("h2", null, [q(L(Ys), { size: 17 }), O[23] ||= J("新建下载", -1)]), O[24] ||= K("span", { class: "nx-subtle" }, "支持 HTTP / HTTPS", -1)]),
+				K("div", Sl, [z(K("input", {
+					"onUpdate:modelValue": O[0] ||= (e) => i.value = e,
 					name: "url",
 					class: "nx-input",
 					required: "",
@@ -16075,47 +15726,47 @@ var Su = [
 				}, null, 512), [[Q, i.value]]), K("button", {
 					class: "btn nx-button btn--primary",
 					disabled: !!t.session.busy || !i.value.trim()
-				}, " 开始下载 ", 8, Pu)]),
-				K("div", Fu, [K("div", Iu, [E[20] ||= K("span", null, "并行数量", -1), q(ku, {
+				}, " 开始下载 ", 8, Cl)]),
+				K("div", wl, [K("div", Tl, [O[25] ||= K("span", null, "并行数量", -1), q(vl, {
 					"model-value": String(u.value),
-					options: I(m),
+					options: L(m),
 					"aria-label": "并行数量",
 					"data-transfer-connections": "",
 					"menu-min-width": 100,
-					"onUpdate:modelValue": E[1] ||= (e) => u.value = Number(e)
-				}, null, 8, ["model-value", "options"])]), K("div", Lu, [E[21] ||= K("span", null, "下载限速", -1), q(ku, {
+					"onUpdate:modelValue": O[1] ||= (e) => u.value = Number(e)
+				}, null, 8, ["model-value", "options"])]), K("div", El, [O[26] ||= K("span", null, "下载限速", -1), q(vl, {
 					"model-value": String(d.value),
 					options: h,
 					"aria-label": "下载限速",
 					"data-transfer-speed": "",
 					"menu-min-width": 120,
-					"onUpdate:modelValue": E[2] ||= (e) => d.value = Number(e)
+					"onUpdate:modelValue": O[2] ||= (e) => d.value = Number(e)
 				}, null, 8, ["model-value"])])]),
 				K("button", {
 					type: "button",
 					class: "btn nx-button btn--quiet nx-options-button",
 					"aria-expanded": l.value,
-					onClick: E[3] ||= (e) => l.value = !l.value
-				}, [E[22] ||= J(" 更多选项", -1), q(I(Ws), { size: 13 })], 8, Ru),
-				l.value ? (U(), W("div", zu, [
-					K("label", null, [E[23] ||= K("span", null, "文件名", -1), z(K("input", {
-						"onUpdate:modelValue": E[4] ||= (e) => a.value = e,
+					onClick: O[3] ||= (e) => l.value = !l.value
+				}, [O[27] ||= J(" 更多选项", -1), q(L(Ws), { size: 13 })], 8, Dl),
+				l.value ? (U(), W("div", Ol, [
+					K("label", null, [O[28] ||= K("span", null, "文件名", -1), z(K("input", {
+						"onUpdate:modelValue": O[4] ||= (e) => a.value = e,
 						class: "nx-input",
 						placeholder: "自动使用链接中的文件名"
 					}, null, 512), [[Q, a.value]])]),
-					K("label", null, [E[24] ||= K("span", null, "保存目录", -1), z(K("input", {
-						"onUpdate:modelValue": E[5] ||= (e) => o.value = e,
+					K("label", null, [O[29] ||= K("span", null, "保存目录", -1), z(K("input", {
+						"onUpdate:modelValue": O[5] ||= (e) => o.value = e,
 						class: "nx-input",
 						placeholder: "留空使用默认下载目录"
 					}, null, 512), [[Q, o.value]])]),
-					K("label", null, [E[25] ||= K("span", null, "文件校验值（可选）", -1), z(K("input", {
-						"onUpdate:modelValue": E[6] ||= (e) => s.value = e,
+					K("label", null, [O[30] ||= K("span", null, "文件校验值（可选）", -1), z(K("input", {
+						"onUpdate:modelValue": O[6] ||= (e) => s.value = e,
 						class: "nx-input",
 						placeholder: "SHA-256"
 					}, null, 512), [[Q, s.value]])]),
-					K("div", Bu, [E[26] ||= K("span", null, "下载线路", -1), q(ku, {
+					K("div", kl, [O[31] ||= K("span", null, "下载线路", -1), q(vl, {
 						modelValue: c.value,
-						"onUpdate:modelValue": E[7] ||= (e) => c.value = e,
+						"onUpdate:modelValue": O[7] ||= (e) => c.value = e,
 						options: g.value,
 						"aria-label": "下载线路",
 						"data-transfer-route": "",
@@ -16123,82 +15774,136 @@ var Su = [
 					}, null, 8, ["modelValue", "options"])])
 				])) : Y("", !0)
 			], 34),
-			K("div", Vu, [K("div", Hu, [
+			K("section", Al, [K("button", {
+				class: "nx-settings-toggle",
+				type: "button",
+				"aria-expanded": C.value,
+				onClick: O[11] ||= (e) => C.value = !C.value
+			}, [
+				q(L(yc), { size: 16 }),
+				O[32] ||= K("span", null, "下载设置", -1),
+				K("span", Ml, "同时 " + A(y.value) + " 个 · 失败重试 " + A(b.value) + " 次", 1),
+				(U(), G(Wr(C.value ? L(Ks) : L(Ws)), { size: 14 }))
+			], 8, jl), C.value ? (U(), W("div", Nl, [
+				K("div", Pl, [O[33] ||= K("span", null, "同时下载", -1), q(vl, {
+					modelValue: y.value,
+					"onUpdate:modelValue": O[12] ||= (e) => y.value = e,
+					options: L(ee),
+					"aria-label": "同时下载数量",
+					"data-download-concurrency": "",
+					"menu-min-width": 110
+				}, null, 8, ["modelValue", "options"])]),
+				K("div", Fl, [O[34] ||= K("span", null, "失败重试", -1), q(vl, {
+					modelValue: b.value,
+					"onUpdate:modelValue": O[13] ||= (e) => b.value = e,
+					options: L(te),
+					"aria-label": "失败重试次数",
+					"data-download-retries": "",
+					"menu-min-width": 110
+				}, null, 8, ["modelValue", "options"])]),
+				K("div", Il, [O[35] ||= K("span", null, "全局限速", -1), q(vl, {
+					modelValue: x.value,
+					"onUpdate:modelValue": O[14] ||= (e) => x.value = e,
+					options: h,
+					"aria-label": "全局下载限速",
+					"data-download-limit": "",
+					"menu-min-width": 120
+				}, null, 8, ["modelValue"])]),
+				K("div", Ll, [
+					O[36] ||= K("span", null, "默认保存位置", -1),
+					z(K("input", {
+						"onUpdate:modelValue": O[15] ||= (e) => S.value = e,
+						class: "nx-input",
+						"data-download-directory": "",
+						placeholder: "留空使用默认目录",
+						"aria-label": "下载默认保存位置"
+					}, null, 512), [[Q, S.value]]),
+					K("small", Rl, "当前：" + A(t.session.state?.download_default || "读取中"), 1)
+				]),
+				K("div", zl, [O[37] ||= K("span", null, "\xA0", -1), K("button", {
+					class: "btn nx-button btn--secondary",
+					disabled: w.value,
+					onClick: ne
+				}, " 保存设置 ", 8, Bl)])
+			])) : Y("", !0)]),
+			K("div", Vl, [K("div", Hl, [
 				K("button", {
-					class: O({ active: r.value === "active" }),
-					onClick: E[11] ||= (e) => r.value = "active"
-				}, [E[27] ||= J(" 进行中", -1), K("span", null, k(x.value), 1)], 2),
+					class: k({ active: r.value === "active" }),
+					onClick: O[16] ||= (e) => r.value = "active"
+				}, [O[38] ||= J(" 进行中", -1), K("span", null, A(ie.value), 1)], 2),
 				K("button", {
-					class: O({ active: r.value === "complete" }),
-					onClick: E[12] ||= (e) => r.value = "complete"
-				}, [E[28] ||= J(" 已完成", -1), K("span", null, k(S.value), 1)], 2),
+					class: k({ active: r.value === "complete" }),
+					onClick: O[17] ||= (e) => r.value = "complete"
+				}, [O[39] ||= J(" 已完成", -1), K("span", null, A(ae.value), 1)], 2),
 				K("button", {
-					class: O({ active: r.value === "all" }),
-					onClick: E[13] ||= (e) => r.value = "all"
+					class: k({ active: r.value === "all" }),
+					onClick: O[18] ||= (e) => r.value = "all"
 				}, " 全部 ", 2)
 			]), K("button", {
 				class: "btn nx-button btn--quiet nx-icon-button",
 				"aria-label": "刷新下载列表",
-				onClick: E[14] ||= (e) => t.session.loadTasks()
-			}, [q(I(dc), { size: 15 })])]),
-			K("section", Uu, [(U(!0), W(V, null, B(b.value, (n) => (U(), W("article", {
+				onClick: O[19] ||= (e) => t.session.loadTasks()
+			}, [q(L(pc), { size: 15 })])]),
+			K("section", Ul, [(U(!0), W(V, null, B(E.value, (n) => (U(), W("article", {
 				key: n.gid,
 				class: "nx-download-row",
-				"data-task": n.gid
+				"data-task": n.gid,
+				title: n.status === "complete" ? "双击打开文件" : "",
+				onDblclick: (e) => n.status === "complete" && T(n)
 			}, [
-				K("div", Gu, [q(I(Qs), {
+				K("div", Gl, [q(L(Qs), {
 					size: 22,
 					"stroke-width": 1.5
 				})]),
-				K("div", Ku, [
-					K("div", qu, [K("strong", null, k(n.filename || "未命名下载"), 1), K("span", { class: O({ "nx-state-error": n.status === "error" }) }, k(I(xc)(n.status)), 3)]),
+				K("div", Kl, [
+					K("div", ql, [K("strong", null, A(n.filename || "未命名下载"), 1), K("span", { class: k({ "nx-state-error": n.status === "error" }) }, A(L(wc)(n.status)), 3)]),
 					K("div", {
 						class: "nx-progress-track",
 						role: "progressbar",
-						"aria-valuenow": Math.round(C(n)),
+						"aria-valuenow": Math.round(oe(n)),
 						"aria-valuemin": "0",
 						"aria-valuemax": "100",
 						"aria-label": `${n.filename || "下载"}的进度`
-					}, [K("span", { style: me({ width: `${C(n)}%` }) }, null, 4)], 8, Ju),
-					K("div", Yu, [K("span", null, [
-						J(k(I(e)(n.completedLength)), 1),
-						E[29] ||= K("span", { class: "nx-meta-divider" }, " / ", -1),
-						J(k(I(e)(n.totalLength)), 1)
-					]), n.status === "active" ? (U(), W("span", Xu, [
-						J(k(I(bc)(n.downloadSpeed)), 1),
-						E[30] ||= K("span", { class: "nx-meta-divider" }, "·", -1),
-						J(k(w(n)), 1)
-					])) : n.status === "complete" ? (U(), W("span", Zu, "已保存到本地")) : n.status === "error" ? (U(), W("span", Qu, "链接可能失效，或下载源暂时不可用")) : Y("", !0)])
+					}, [K("span", { style: pe({ width: `${oe(n)}%` }) }, null, 4)], 8, Jl),
+					K("div", Yl, [K("span", null, [
+						J(A(L(e)(n.completedLength)), 1),
+						O[40] ||= K("span", { class: "nx-meta-divider" }, " / ", -1),
+						J(A(L(e)(n.totalLength)), 1)
+					]), n.status === "active" ? (U(), W("span", Xl, [
+						J(A(L(Cc)(n.downloadSpeed)), 1),
+						O[41] ||= K("span", { class: "nx-meta-divider" }, "·", -1),
+						J(A(se(n)), 1)
+					])) : n.status === "complete" ? (U(), W("span", Zl, "已保存到本地")) : n.status === "error" ? (U(), W("span", Ql, A(n.errorText || "下载失败，请检查链接或稍后重试"), 1)) : Y("", !0)])
 				]),
-				K("div", $u, [n.status === "active" || n.status === "waiting" ? (U(), W("button", {
+				K("div", $l, [n.status === "active" || n.status === "waiting" ? (U(), W("button", {
 					key: 0,
 					class: "btn nx-button btn--secondary nx-icon-button",
 					"aria-label": "暂停下载",
 					"data-task-action": "pause",
 					disabled: !!t.session.busy,
-					onClick: (e) => T(n, "pause")
-				}, [q(I(oc), { size: 15 })], 8, ed)) : ["paused", "recoverable"].includes(n.status) ? (U(), W("button", {
+					onClick: (e) => le(n, "pause")
+				}, [q(L(cc), { size: 15 })], 8, eu)) : ["paused", "recoverable"].includes(n.status) ? (U(), W("button", {
 					key: 1,
 					class: "btn nx-button btn--secondary nx-icon-button",
 					"aria-label": "继续下载",
 					"data-task-action": "resume",
 					disabled: !!t.session.busy,
-					onClick: (e) => T(n, "resume")
-				}, [q(I(sc), { size: 15 })], 8, td)) : Y("", !0), K("button", {
+					onClick: (e) => le(n, "resume")
+				}, [q(L(lc), { size: 15 })], 8, tu)) : Y("", !0), K("button", {
 					class: "btn nx-button btn--quiet nx-icon-button",
 					"aria-label": p.value === n.gid ? "收起下载详情" : "展开下载详情",
 					"aria-expanded": p.value === n.gid,
 					onClick: (e) => p.value = p.value === n.gid ? "" : n.gid
-				}, [(U(), G(Wr(p.value === n.gid ? I(Ks) : I(Ws)), { size: 15 }))], 8, nd)]),
-				p.value === n.gid ? (U(), W("div", rd, [K("span", id, k(n.directory || "默认下载目录"), 1), K("div", ad, [
-					K("div", od, [E[31] ||= K("span", null, "下载速度", -1), q(ku, {
+				}, [(U(), G(Wr(p.value === n.gid ? L(Ks) : L(Ws)), { size: 15 }))], 8, nu)]),
+				p.value === n.gid ? (U(), W("div", ru, [K("span", iu, A(n.directory || "默认下载目录"), 1), K("div", au, [
+					K("div", ou, [O[42] ||= K("span", null, "下载速度", -1), q(vl, {
 						"model-value": _[n.gid] || "0",
 						options: h,
 						disabled: !!t.session.busy || !!v[n.gid],
 						"aria-label": "下载速度限制",
 						"data-transfer-task-limit": "",
 						"menu-min-width": 120,
-						"onUpdate:modelValue": (e) => ne(n, e)
+						"onUpdate:modelValue": (e) => ue(n, e)
 					}, null, 8, [
 						"model-value",
 						"disabled",
@@ -16208,63 +15913,159 @@ var Su = [
 						key: 0,
 						class: "btn nx-button btn--quiet",
 						disabled: !!t.session.busy,
-						onClick: (e) => T(n, "first")
-					}, [q(I(Hs), { size: 13 }), E[32] ||= J("优先下载", -1)], 8, sd)),
+						onClick: (e) => le(n, "first")
+					}, [q(L(Hs), { size: 13 }), O[43] ||= J("优先下载", -1)], 8, su)),
 					n.status === "complete" ? (U(), W("button", {
 						key: 1,
 						class: "btn nx-button btn--quiet",
 						disabled: !!t.session.busy,
-						onClick: (e) => re(n)
-					}, [q(I(mc), { size: 13 }), E[33] ||= J("校验文件", -1)], 8, cd)) : Y("", !0),
-					["complete", "removed"].includes(n.status) ? Y("", !0) : (U(), W("button", {
+						onClick: (e) => de(n)
+					}, [q(L(_c), { size: 13 }), O[44] ||= J("校验文件", -1)], 8, cu)) : Y("", !0),
+					n.status === "complete" ? (U(), W("button", {
 						key: 2,
+						class: "btn nx-button btn--quiet",
+						"data-task-open": "",
+						onClick: (e) => T(n)
+					}, [q(L(ec), { size: 13 }), O[45] ||= J("打开文件", -1)], 8, lu)) : Y("", !0),
+					["complete", "removed"].includes(n.status) ? Y("", !0) : (U(), W("button", {
+						key: 3,
 						class: "btn nx-button btn--quiet nx-danger-text",
 						disabled: !!t.session.busy,
-						onClick: (e) => T(n, "cancel")
-					}, [q(I(vc), { size: 13 }), E[34] ||= J("取消下载 ", -1)], 8, ld))
+						onClick: (e) => le(n, "cancel")
+					}, [q(L(xc), { size: 13 }), O[46] ||= J("取消下载 ", -1)], 8, uu))
 				])])) : Y("", !0)
-			], 8, Wu))), 128)), b.value.length ? Y("", !0) : (U(), W("div", ud, [
-				q(I(Ys), {
+			], 40, Wl))), 128)), E.value.length ? Y("", !0) : (U(), W("div", du, [
+				q(L(Ys), {
 					size: 32,
 					"stroke-width": 1.3
 				}),
-				K("strong", null, k(r.value === "complete" ? "还没有完成的下载" : "准备好下载了吗？"), 1),
-				K("p", null, k(r.value === "complete" ? "完成的文件会显示在这里。" : "把链接放到上面的框里，就会开始下载。"), 1)
+				K("strong", null, A(r.value === "complete" ? "还没有完成的下载" : "准备好下载了吗？"), 1),
+				K("p", null, A(r.value === "complete" ? "完成的文件会显示在这里。" : "把链接放到上面的框里，就会开始下载。"), 1)
 			]))])
 		]));
 	}
-}, fd = { class: "nx-view-stack" }, pd = { class: "nx-panel nx-diagnose-start" }, md = { class: "nx-diagnose-symbol" }, hd = { class: "nx-input-with-icon" }, gd = ["disabled"], _d = { class: "nx-diagnose-options" }, vd = {
+}, pu = { class: "nx-view-stack" }, mu = { class: "nx-panel nx-interconnect-hero" }, hu = { class: "nx-quick-icon" }, gu = { class: "nx-interconnect-grid" }, _u = { class: "nx-panel" }, vu = { class: "nx-panel-heading" }, yu = { class: "nx-panel" }, bu = { class: "nx-panel-heading" }, xu = { class: "nx-panel" }, Su = { class: "nx-panel-heading" }, Cu = ["disabled"], wu = {
+	key: 0,
+	class: "nx-fact-list"
+}, Tu = {
+	key: 1,
+	class: "nx-help"
+}, Eu = {
+	key: 2,
+	class: "nx-help nx-danger-text",
+	role: "alert"
+}, Du = { class: "nx-help" }, Ou = {
+	__name: "InterconnectView",
+	props: { session: Object },
+	setup(e) {
+		let t = e, n = /* @__PURE__ */ I([]), r = /* @__PURE__ */ I(!1), i = /* @__PURE__ */ I(""), a = Z(() => (t.session.interfaces || []).flatMap((e) => (e.ipv4 || []).map((t) => ({
+			name: e.name,
+			ip: t
+		}))).filter((e) => e.ip && !e.ip.startsWith("127.")));
+		async function o() {
+			r.value = !0, i.value = "";
+			try {
+				let e = await t.session.read("lan");
+				e && (n.value = e.devices || []);
+			} finally {
+				r.value = !1;
+			}
+		}
+		function s() {
+			window.dispatchEvent(new CustomEvent("sunday:open-app-page", { detail: { view: "account" } }));
+		}
+		return Nr(o), (e, t) => (U(), W("div", pu, [
+			K("section", mu, [
+				K("div", hu, [q(L(sc), {
+					size: 20,
+					"stroke-width": 1.7
+				})]),
+				t[1] ||= K("div", { class: "nx-control-copy" }, [K("h2", null, "我的设备"), K("p", null, " 手机与电脑的配对、扫码和解除绑定都在「设备连接」里完成，这里不重复一套。 ")], -1),
+				K("button", {
+					class: "btn nx-button btn--primary",
+					"data-open-device-page": "",
+					onClick: s
+				}, [t[0] ||= J(" 打开设备连接", -1), q(L(Vs), { size: 14 })])
+			]),
+			K("div", gu, [K("section", _u, [
+				K("div", vu, [K("h2", null, [q(L(hc), { size: 17 }), t[2] ||= J("文件互传", -1)])]),
+				t[3] ||= K("p", { class: "nx-help" }, " 发送文件走「设备连接」里的设备列表：只允许已信任设备，传输有进度、可取消。 接收到的文件落在对方约定的目录，重名不会覆盖。 ", -1),
+				K("div", { class: "nx-actions" }, [K("button", {
+					class: "btn nx-button btn--secondary",
+					onClick: s
+				}, " 选择设备发送 ")])
+			]), K("section", yu, [K("div", bu, [K("h2", null, [q(L(ac), { size: 17 }), t[4] ||= J("私人网络（虚拟局域网）", -1)]), t[5] ||= K("span", { class: "nx-subtle" }, "尚未提供", -1)]), t[6] ||= K("p", { class: "nx-help" }, " 让异地设备像在同一局域网里互访（共享文件夹、NAS、局域网应用）属于可选增强， 需要先评估内核许可与资源占用，当前版本没有实现，界面也不会假装已开启。 ", -1)])]),
+			K("section", xu, [
+				K("div", Su, [t[7] ||= K("h2", null, "本机在局域网中的地址", -1), K("button", {
+					class: "btn nx-button btn--quiet nx-icon-button",
+					"aria-label": "刷新局域网设备",
+					disabled: r.value,
+					onClick: o
+				}, [q(L(pc), { size: 15 })], 8, Cu)]),
+				a.value.length ? (U(), W("div", wu, [(U(!0), W(V, null, B(a.value, (e) => (U(), W("div", {
+					key: e.ip,
+					class: "nx-fact"
+				}, [K("span", null, A(e.name), 1), K("strong", null, A(e.ip), 1)]))), 128))])) : (U(), W("p", Tu, "还没有读到本机地址，稍后刷新一次。")),
+				i.value ? (U(), W("p", Eu, A(i.value), 1)) : Y("", !0),
+				K("p", Du, " 同一局域网内已知设备 " + A(n.value.length) + " 台（来自系统邻居缓存，不代表全部在线）。 ", 1)
+			])
+		]));
+	}
+}, ku = { class: "nx-view-stack" }, Au = {
+	class: "nx-panel nx-network-check",
+	"data-network-check-panel": ""
+}, ju = { class: "nx-panel-heading" }, Mu = { class: "nx-subtle" }, Nu = { class: "nx-actions" }, Pu = ["disabled"], Fu = {
+	key: 0,
+	class: "nx-network-result",
+	"data-network-result": ""
+}, Iu = {
+	key: 0,
+	class: "nx-help"
+}, Lu = { class: "nx-check-list" }, Ru = { class: "nx-subtle" }, zu = { class: "nx-panel nx-diagnose-start" }, Bu = { class: "nx-diagnose-symbol" }, Vu = { class: "nx-input-with-icon" }, Hu = ["disabled"], Uu = { class: "nx-diagnose-options" }, Wu = {
 	key: 0,
 	class: "nx-panel nx-diagnose-pending",
 	"aria-live": "polite"
-}, yd = {
+}, Gu = {
 	key: 1,
 	class: "nx-panel nx-report"
-}, bd = { class: "nx-report-heading" }, xd = { class: "nx-check-list" }, Sd = { key: 0 }, Cd = {
+}, Ku = { class: "nx-report-heading" }, qu = { class: "nx-check-list" }, Ju = { key: 0 }, Yu = {
 	key: 0,
 	class: "nx-report-advice"
-}, wd = ["aria-expanded"], Td = {
+}, Xu = ["aria-expanded"], Zu = {
 	key: 1,
 	class: "nx-check-evidence"
-}, Ed = {
+}, Qu = {
 	key: 2,
 	class: "nx-history"
-}, Dd = { class: "nx-section-heading" }, Od = { class: "nx-subtle" }, kd = ["onClick"], Ad = {
+}, $u = { class: "nx-section-heading" }, ed = { class: "nx-subtle" }, td = ["onClick"], nd = {
 	key: 3,
 	class: "nx-empty nx-diagnose-empty"
-}, jd = {
+}, rd = {
 	__name: "DiagnoseView",
 	props: {
 		session: Object,
 		report: Object
 	},
 	setup(e) {
-		let t = e, n = /* @__PURE__ */ F("github.com"), r = /* @__PURE__ */ F(null), i = /* @__PURE__ */ F(!1), a = /* @__PURE__ */ F("basic");
+		let t = e, n = /* @__PURE__ */ I("github.com"), r = /* @__PURE__ */ I(null), i = /* @__PURE__ */ I(!1), a = /* @__PURE__ */ I("basic");
 		Rn(() => t.report, (e) => {
 			e && (r.value = e, n.value = e.target);
 		}, { immediate: !0 });
-		let o = Z(() => r.value || t.session.state?.reports?.at(-1));
-		function s(e) {
+		let o = Z(() => r.value || t.session.state?.reports?.at(-1)), s = /* @__PURE__ */ I([...t.session.state?.reports || []].reverse().find((e) => e.kind === "network") || null), c = Z(() => t.session.busy === "diagnose");
+		async function l() {
+			let e = await t.session.run("diagnose", { kind: "network" }, "");
+			e?.report && (s.value = e.report);
+		}
+		function u(e) {
+			return {
+				本机网络: "本机网络",
+				网关: "网关与局域网",
+				DNS: "域名解析",
+				外网连接: "外网连接",
+				代理: "代理设置"
+			}[e] || e;
+		}
+		function d(e) {
 			return {
 				DNS: "找到网站地址",
 				TCP: "建立网络连接",
@@ -16274,24 +16075,53 @@ var Su = [
 				ICMP: "检查网络响应"
 			}[e] || e;
 		}
-		async function c() {
+		async function f() {
 			let e = await t.session.diagnose(n.value, a.value);
 			e?.report && (r.value = e.report, i.value = !1);
 		}
-		return (t, l) => (U(), W("div", fd, [
-			K("section", pd, [
-				K("div", md, [q(I(Ls), {
+		return (t, p) => (U(), W("div", ku, [
+			K("section", Au, [
+				K("div", ju, [K("h2", null, [q(L(Ls), { size: 17 }), p[5] ||= J("这台电脑的网络", -1)]), K("span", Mu, A(s.value ? L(Tc)(s.value.time) : "还没检查"), 1)]),
+				p[6] ||= K("p", { class: "nx-help" }, " 检查本机连接、网关、域名解析、外网和代理，不用先想一个网站。 ", -1),
+				K("div", Nu, [K("button", {
+					class: "btn nx-button btn--primary",
+					"data-network-check": "",
+					disabled: c.value,
+					onClick: l
+				}, A(c.value ? "检查中…" : "检查网络"), 9, Pu)]),
+				s.value ? (U(), W("div", Fu, [
+					K("strong", { class: k({ "nx-danger-text": s.value.failures > 0 }) }, A(s.value.conclusion?.text || "检查完成"), 3),
+					s.value.conclusion?.suggestion ? (U(), W("p", Iu, A(s.value.conclusion.suggestion), 1)) : Y("", !0),
+					K("div", Lu, [(U(!0), W(V, null, B(s.value.checks || [], (e, t) => (U(), W("div", {
+						key: t,
+						class: "nx-check-row"
+					}, [
+						K("span", { class: k(["nx-check-status", { "is-failure": !e.ok }]) }, [e.ok ? (U(), G(L(Us), {
+							key: 0,
+							size: 14
+						})) : (U(), G(L(xc), {
+							key: 1,
+							size: 14
+						}))], 2),
+						K("strong", null, A(u(e.stage)), 1),
+						K("span", null, A(e.ok ? "通过" : "未通过"), 1),
+						K("span", Ru, A(e.evidence), 1)
+					]))), 128))])
+				])) : Y("", !0)
+			]),
+			K("section", zu, [
+				K("div", Bu, [q(L(Ls), {
 					size: 25,
 					"stroke-width": 1.5
 				})]),
-				l[8] ||= K("h2", null, "看看哪里没连上", -1),
-				l[9] ||= K("p", null, "输入一个网站，检查地址解析、连接和响应。", -1),
+				p[10] ||= K("h2", null, "看看哪里没连上", -1),
+				p[11] ||= K("p", null, "输入一个网站，检查地址解析、连接和响应。", -1),
 				K("form", {
 					class: "nx-inline-form",
 					"data-diagnose-form": "",
-					onSubmit: bs(c, ["prevent"])
-				}, [K("label", hd, [q(I(tc), { size: 16 }), z(K("input", {
-					"onUpdate:modelValue": l[0] ||= (e) => n.value = e,
+					onSubmit: bs(f, ["prevent"])
+				}, [K("label", Vu, [q(L(nc), { size: 16 }), z(K("input", {
+					"onUpdate:modelValue": p[0] ||= (e) => n.value = e,
 					name: "target",
 					class: "nx-input",
 					placeholder: "例如 github.com",
@@ -16300,94 +16130,648 @@ var Su = [
 				}, null, 512), [[Q, n.value]])]), K("button", {
 					class: "btn nx-button btn--primary",
 					disabled: !!e.session.busy
-				}, [q(I(fc), { size: 15 }), J(k(e.session.busy === "diagnose" ? "检查中…" : "开始检测"), 1)], 8, gd)], 32),
-				K("div", _d, [
+				}, [q(L(mc), { size: 15 }), J(A(e.session.busy === "diagnose" ? "检查中…" : "开始检测"), 1)], 8, Hu)], 32),
+				K("div", Uu, [
 					K("label", null, [z(K("input", {
-						"onUpdate:modelValue": l[1] ||= (e) => a.value = e,
+						"onUpdate:modelValue": p[1] ||= (e) => a.value = e,
 						type: "radio",
 						value: "basic"
-					}, null, 512), [[us, a.value]]), l[5] ||= J("快速检查", -1)]),
+					}, null, 512), [[us, a.value]]), p[7] ||= J("快速检查", -1)]),
 					K("label", null, [z(K("input", {
-						"onUpdate:modelValue": l[2] ||= (e) => a.value = e,
+						"onUpdate:modelValue": p[2] ||= (e) => a.value = e,
 						type: "radio",
 						value: "ping"
-					}, null, 512), [[us, a.value]]), l[6] ||= J("加测延迟", -1)]),
+					}, null, 512), [[us, a.value]]), p[8] ||= J("加测延迟", -1)]),
 					K("label", null, [z(K("input", {
-						"onUpdate:modelValue": l[3] ||= (e) => a.value = e,
+						"onUpdate:modelValue": p[3] ||= (e) => a.value = e,
 						type: "radio",
 						value: "traceroute"
-					}, null, 512), [[us, a.value]]), l[7] ||= J("查看访问路径", -1)])
+					}, null, 512), [[us, a.value]]), p[9] ||= J("查看访问路径", -1)])
 				])
 			]),
-			e.session.busy === "diagnose" ? (U(), W("section", vd, [
-				l[10] ||= K("div", { class: "nx-skeleton nx-skeleton-title" }, null, -1),
-				l[11] ||= K("p", null, "正在检查网站地址、连接和安全响应…", -1),
+			e.session.busy === "diagnose" ? (U(), W("section", Wu, [
+				p[12] ||= K("div", { class: "nx-skeleton nx-skeleton-title" }, null, -1),
+				p[13] ||= K("p", null, "正在检查网站地址、连接和安全响应…", -1),
 				(U(), W(V, null, B(3, (e) => K("div", {
 					key: e,
 					class: "nx-skeleton nx-skeleton-row"
 				})), 64))
-			])) : o.value ? (U(), W("section", yd, [
-				K("div", bd, [K("span", { class: O(["nx-result-icon", { "is-failure": o.value.failures > 0 }]) }, [o.value.failures ? (U(), G(I(vc), {
+			])) : o.value ? (U(), W("section", Gu, [
+				K("div", Ku, [K("span", { class: k(["nx-result-icon", { "is-failure": o.value.failures > 0 }]) }, [o.value.failures ? (U(), G(L(xc), {
 					key: 1,
 					size: 22
-				})) : (U(), G(I(Us), {
+				})) : (U(), G(L(Us), {
 					key: 0,
 					size: 22
-				}))], 2), K("div", null, [K("h2", null, k(o.value.failures > 0 ? "发现未通过的检查" : "检查通过"), 1), K("p", null, [
-					J(k(o.value.target), 1),
-					l[12] ||= K("span", { class: "nx-meta-divider" }, "·", -1),
-					J(k(I(Sc)(o.value.time)), 1)
+				}))], 2), K("div", null, [K("h2", null, A(o.value.failures > 0 ? "发现未通过的检查" : "检查通过"), 1), K("p", null, [
+					J(A(o.value.target), 1),
+					p[14] ||= K("span", { class: "nx-meta-divider" }, "·", -1),
+					J(A(L(Tc)(o.value.time)), 1)
 				])])]),
-				K("div", xd, [(U(!0), W(V, null, B(o.value.checks || [], (e, t) => (U(), W("div", {
+				K("div", qu, [(U(!0), W(V, null, B(o.value.checks || [], (e, t) => (U(), W("div", {
 					key: t,
 					class: "nx-check-row"
 				}, [
-					K("span", { class: O(["nx-check-status", { "is-failure": !e.ok }]) }, [e.ok ? (U(), G(I(Us), {
+					K("span", { class: k(["nx-check-status", { "is-failure": !e.ok }]) }, [e.ok ? (U(), G(L(Us), {
 						key: 0,
 						size: 14
-					})) : (U(), G(I(vc), {
+					})) : (U(), G(L(xc), {
 						key: 1,
 						size: 14
 					}))], 2),
-					K("strong", null, k(s(e.stage)), 1),
-					K("span", null, k(e.ok ? "通过" : "未通过"), 1),
-					e.ms == null ? Y("", !0) : (U(), W("time", Sd, k(e.ms) + " ms", 1))
+					K("strong", null, A(d(e.stage)), 1),
+					K("span", null, A(e.ok ? "通过" : "未通过"), 1),
+					e.ms == null ? Y("", !0) : (U(), W("time", Ju, A(e.ms) + " ms", 1))
 				]))), 128))]),
-				o.value.recommendation ? (U(), W("p", Cd, k(o.value.recommendation), 1)) : Y("", !0),
+				o.value.recommendation ? (U(), W("p", Yu, A(o.value.recommendation), 1)) : Y("", !0),
 				K("button", {
 					class: "btn nx-button btn--quiet nx-report-detail-button",
 					"aria-expanded": i.value,
-					onClick: l[4] ||= (e) => i.value = !i.value
-				}, [J(k(i.value ? "收起" : "查看") + "检查详情", 1), q(I(Ws), { size: 13 })], 8, wd),
-				i.value ? (U(), W("div", Td, [(U(!0), W(V, null, B(o.value.checks || [], (e, t) => (U(), W("div", { key: t }, [K("strong", null, k(s(e.stage)), 1), K("p", null, k(e.evidence || e.address || e.addresses?.join("、") || (e.status ? `网站响应：${e.status}` : "未提供额外信息")), 1)]))), 128))])) : Y("", !0)
+					onClick: p[4] ||= (e) => i.value = !i.value
+				}, [J(A(i.value ? "收起" : "查看") + "检查详情", 1), q(L(Ws), { size: 13 })], 8, Xu),
+				i.value ? (U(), W("div", Zu, [(U(!0), W(V, null, B(o.value.checks || [], (e, t) => (U(), W("div", { key: t }, [K("strong", null, A(d(e.stage)), 1), K("p", null, A(e.evidence || e.address || e.addresses?.join("、") || (e.status ? `网站响应：${e.status}` : "未提供额外信息")), 1)]))), 128))])) : Y("", !0)
 			])) : Y("", !0),
-			e.session.state?.reports?.length ? (U(), W("section", Ed, [K("div", Dd, [l[13] ||= K("h2", null, "最近检查", -1), K("span", Od, k(e.session.state.reports.length) + " 条记录", 1)]), (U(!0), W(V, null, B([...e.session.state.reports].reverse().slice(0, 12), (e) => (U(), W("button", {
+			e.session.state?.reports?.length ? (U(), W("section", Qu, [K("div", $u, [p[15] ||= K("h2", null, "最近检查", -1), K("span", ed, A(e.session.state.reports.length) + " 条记录", 1)]), (U(!0), W(V, null, B([...e.session.state.reports].reverse().slice(0, 12), (e) => (U(), W("button", {
 				key: e.id,
 				class: "nx-history-row",
 				onClick: (t) => r.value = e
 			}, [
-				K("span", { class: O(["nx-history-result", { "is-failure": e.failures > 0 }]) }, [(U(), G(Wr(e.failures ? I(vc) : I(Us)), { size: 14 }))], 2),
-				K("strong", null, k(e.target), 1),
-				K("span", null, k(e.failures ? "有未通过的检查" : "检查通过"), 1),
-				K("time", null, k(I(Sc)(e.time)), 1),
-				q(I(Gs), { size: 15 })
-			], 8, kd))), 128))])) : o.value ? Y("", !0) : (U(), W("div", Ad, [q(I(qs), { size: 25 }), l[14] ||= K("span", null, "检查记录会保存在这里，方便下次对照。", -1)]))
+				K("span", { class: k(["nx-history-result", { "is-failure": e.failures > 0 }]) }, [(U(), G(Wr(e.failures ? L(xc) : L(Us)), { size: 14 }))], 2),
+				K("strong", null, A(e.target), 1),
+				K("span", null, A(e.failures ? "有未通过的检查" : "检查通过"), 1),
+				K("time", null, A(L(Tc)(e.time)), 1),
+				q(L(Gs), { size: 15 })
+			], 8, td))), 128))])) : o.value ? Y("", !0) : (U(), W("div", nd, [q(L(qs), { size: 25 }), p[16] ||= K("span", null, "检查记录会保存在这里，方便下次对照。", -1)]))
 		]));
 	}
-}, Md = { class: "nx-view-stack" }, Nd = { class: "nx-section-heading" }, Pd = ["aria-expanded"], Fd = { class: "nx-panel nx-interface-list" }, Id = { class: "nx-control-icon" }, Ld = { key: 0 }, Rd = {
+}, id = {
+	class: "nx-panel nx-speed",
+	"data-network-chart": ""
+}, ad = { class: "nx-panel-heading" }, od = { class: "nx-speed-values" }, sd = { class: "nx-plot" }, cd = {
+	key: 0,
+	viewBox: "0 0 640 164",
+	preserveAspectRatio: "none",
+	role: "img",
+	"aria-label": "实时下载和上传速度趋势"
+}, ld = ["d"], ud = ["d"], dd = ["d"], fd = ["d"], pd = {
+	key: 1,
+	class: "nx-chart-wait"
+}, md = { class: "nx-chart-axis" }, hd = { key: 0 }, gd = {
+	__name: "SpeedChart",
+	props: {
+		history: { default: () => [] },
+		traffic: { default: null },
+		compact: Boolean
+	},
+	setup(t) {
+		let n = t, r = `nx-speed-${vr().replace(/:/g, "")}`, i = Z(() => Math.max(1024, ...n.history.flatMap((e) => [Number(e.download || 0), Number(e.upload || 0)])));
+		function a(e) {
+			let t = n.history;
+			return t.length < 2 ? "" : t.map((n, r) => `${r ? "L" : "M"}${(r / (t.length - 1) * 640).toFixed(2)},${(154 - Number(n[e] || 0) / i.value * 138).toFixed(2)}`).join(" ");
+		}
+		let o = Z(() => a("download")), s = Z(() => a("upload")), c = Z(() => o.value ? `${o.value} L640,164 L0,164 Z` : "");
+		return (n, a) => (U(), W("section", id, [
+			K("div", ad, [K("h2", null, [q(L(Ls), { size: 17 }), a[0] ||= J("实时网速", -1)]), a[1] ||= K("span", { class: "nx-subtle" }, "系统接口", -1)]),
+			K("div", od, [K("span", null, [
+				q(L(zs), { size: 17 }),
+				K("strong", null, A(L(Cc)(t.traffic?.download)), 1),
+				a[2] ||= K("small", null, "下载", -1)
+			]), K("span", null, [
+				q(L(Hs), { size: 17 }),
+				K("strong", null, A(L(Cc)(t.traffic?.upload)), 1),
+				a[3] ||= K("small", null, "上传", -1)
+			])]),
+			K("div", sd, [t.history.length > 1 ? (U(), W("svg", cd, [
+				K("defs", null, [K("linearGradient", {
+					id: r,
+					x1: "0",
+					x2: "0",
+					y1: "0",
+					y2: "1"
+				}, [...a[4] ||= [K("stop", {
+					offset: "0%",
+					"stop-color": "currentColor",
+					"stop-opacity": ".18"
+				}, null, -1), K("stop", {
+					offset: "100%",
+					"stop-color": "currentColor",
+					"stop-opacity": "0"
+				}, null, -1)]])]),
+				(U(), W(V, null, B([
+					26,
+					72,
+					118,
+					163
+				], (e) => K("path", {
+					key: e,
+					d: `M0,${e}H640`,
+					class: "nx-chart-grid"
+				}, null, 8, ld)), 64)),
+				K("path", {
+					d: c.value,
+					style: pe({ fill: `url(#${r})` }),
+					class: "nx-chart-area"
+				}, null, 12, ud),
+				K("path", {
+					d: s.value,
+					class: "nx-chart-upload"
+				}, null, 8, dd),
+				K("path", {
+					d: o.value,
+					class: "nx-chart-download"
+				}, null, 8, fd)
+			])) : (U(), W("div", pd, [
+				q(L(Ls), { size: 22 }),
+				a[5] ||= K("span", null, "正在收集网速变化", -1),
+				a[6] ||= K("small", null, "新的采样会自动显示在这里", -1)
+			]))]),
+			K("div", md, [
+				K("span", null, A(t.history.length > 1 ? "较早" : "等待采样"), 1),
+				t.history.length > 1 ? (U(), W("span", hd, "最高 " + A(L(e)(i.value)) + "/s", 1)) : Y("", !0),
+				a[7] ||= K("span", null, "现在", -1)
+			])
+		]));
+	}
+}, _d = { class: "nx-accel-page" }, vd = { class: "nx-accel-orb" }, yd = { class: "nx-accel-copy" }, bd = ["aria-pressed", "disabled"], xd = { class: "nx-accel-grid" }, Sd = { class: "nx-panel nx-accel-facts" }, Cd = { class: "nx-panel-heading" }, wd = { class: "nx-fact" }, Td = { class: "nx-panel nx-site-check" }, Ed = { class: "nx-panel-heading" }, Dd = { class: "nx-actions" }, Od = {
+	key: 0,
+	class: "nx-panel nx-recent"
+}, kd = { class: "nx-section-heading" }, Ad = {
+	__name: "DashboardView",
+	props: { session: Object },
+	emits: ["navigate", "diagnostic"],
+	setup(e, { emit: t }) {
+		let n = e, r = t, i = Z(() => !!n.session.accelerated);
+		async function a() {
+			await n.session.toggleAcceleration();
+		}
+		return (t, n) => (U(), W("div", _d, [
+			K("section", { class: k(["nx-accel-control", { "is-on": i.value }]) }, [
+				K("div", vd, [q(L(dc), {
+					size: 24,
+					"stroke-width": 1.7
+				})]),
+				K("div", yd, [
+					n[3] ||= K("span", { class: "nx-kicker" }, "LOCAL ACCELERATION", -1),
+					K("h2", null, A(i.value ? "本机加速中" : "未加速"), 1),
+					K("p", null, A(i.value ? "本机直连：命中 GitHub、Steam 等常用站点时用 DoH 选 IP。" : "不需要订阅。点一下，用 DoH 选路直连 GitHub、Steam 等常用站点。"), 1)
+				]),
+				K("button", {
+					class: k(["btn nx-button nx-large", i.value ? "btn--secondary" : "btn--primary"]),
+					"aria-pressed": i.value,
+					disabled: !!e.session.busy || !e.session.systemProxyReady,
+					"data-acceleration": "",
+					onClick: a
+				}, [q(L(dc), { size: 17 }), J(A(e.session.busy === "proxy.start" ? "正在准备线路…" : e.session.busy === "accelerator.start" ? "正在准备…" : e.session.busy === "system.apply" ? "正在开启…" : i.value ? "停止加速" : "一键加速"), 1)], 10, bd)
+			], 2),
+			K("div", xd, [q(gd, {
+				history: e.session.state?.history || [],
+				traffic: e.session.state?.traffic
+			}, null, 8, ["history", "traffic"]), K("section", Sd, [
+				K("div", Cd, [K("h2", null, [q(L(_c), { size: 17 }), n[4] ||= J("运行方式", -1)])]),
+				n[7] ||= K("div", { class: "nx-fact" }, [K("span", null, "加速方式"), K("strong", null, "DoH 选 IP 直连")], -1),
+				n[8] ||= K("div", { class: "nx-fact" }, [K("span", null, "系统改动"), K("strong", null, "仅系统代理")], -1),
+				n[9] ||= K("div", { class: "nx-fact" }, [K("span", null, "证书 / hosts"), K("strong", null, "不修改")], -1),
+				K("div", wd, [n[6] ||= K("span", null, "订阅线路", -1), K("button", {
+					class: "btn nx-button btn--quiet nx-fact-link",
+					onClick: n[0] ||= (e) => r("navigate", "proxy")
+				}, [n[5] ||= J(" 去代理页管理", -1), q(L(Vs), { size: 13 })])]),
+				n[10] ||= K("p", { class: "nx-help" }, " 有订阅时会自动准备线路兜底，但不改系统代理；直连失败的域名会记住并优先走线路。 ", -1)
+			])]),
+			K("div", { class: k(["nx-accel-lower", { "nx-single": !e.session.state?.events?.length }]) }, [K("section", Td, [
+				K("div", Ed, [K("h2", null, [q(L(ic), { size: 17 }), n[11] ||= J("检查网站访问", -1)])]),
+				n[13] ||= K("p", { class: "nx-help" }, " 网站能不能打开，去「诊断」里一次看完：地址解析、连接、响应和代理。 ", -1),
+				K("div", Dd, [K("button", {
+					class: "btn nx-button btn--secondary",
+					"data-open-diagnose": "",
+					onClick: n[1] ||= (e) => r("navigate", "diagnose")
+				}, [q(L(Ls), { size: 15 }), n[12] ||= J("打开诊断 ", -1)])])
+			]), e.session.state?.events?.length ? (U(), W("section", Od, [K("div", kd, [n[15] ||= K("h2", null, "最近活动", -1), K("button", {
+				class: "btn nx-button btn--quiet",
+				onClick: n[2] ||= (e) => r("navigate", "advanced")
+			}, [n[14] ||= J(" 查看记录", -1), q(L(Vs), { size: 13 })])]), (U(!0), W(V, null, B([...e.session.state.events].reverse().slice(0, 3), (e, t) => (U(), W("div", {
+				key: t,
+				class: "nx-event"
+			}, [
+				q(L(Us), { size: 14 }),
+				K("span", null, A(e.message), 1),
+				K("time", null, A(L(Tc)(e.time)), 1)
+			]))), 128))])) : Y("", !0)], 2)
+		]));
+	}
+}, jd = [
+	"checked",
+	"disabled",
+	"aria-label"
+], Md = {
+	class: "sunday-switch__track",
+	"aria-hidden": "true"
+}, Nd = { class: "sunday-switch__thumb" }, Pd = {
+	key: 0,
+	class: "sunday-switch__label"
+}, Fd = /* @__PURE__ */ _r({
+	name: "SundaySwitch",
+	__name: "SundaySwitch",
+	props: /*@__PURE__*/ ei({
+		disabled: {
+			type: Boolean,
+			default: !1
+		},
+		label: {},
+		size: { default: "md" }
+	}, {
+		modelValue: {
+			type: Boolean,
+			default: !1
+		},
+		modelModifiers: {}
+	}),
+	emits: ["update:modelValue"],
+	setup(e) {
+		let t = bi(e, "modelValue");
+		function n(e) {
+			let n = e.target;
+			t.value = n.checked, bn(() => {
+				n.checked = t.value;
+			});
+		}
+		return (r, i) => (U(), W("label", { class: k(["sunday-switch", { "sunday-switch--sm": e.size === "sm" }]) }, [
+			K("input", {
+				class: "sunday-switch__input",
+				type: "checkbox",
+				role: "switch",
+				checked: t.value,
+				disabled: e.disabled,
+				"aria-label": e.label,
+				onChange: n
+			}, null, 40, jd),
+			K("span", Md, [K("span", Nd, [qr(r.$slots, "thumb")])]),
+			r.$slots.default ? (U(), W("span", Pd, [qr(r.$slots, "default")])) : Y("", !0)
+		], 2));
+	}
+}), Id = { class: "nx-panel nx-nodes" }, Ld = { class: "nx-panel-heading" }, Rd = { class: "nx-node-head-actions" }, zd = ["disabled"], Bd = ["disabled"], Vd = {
+	class: "nx-line-groups",
+	role: "group",
+	"aria-label": "线路分组"
+}, Hd = ["aria-pressed", "onClick"], Ud = { class: "nx-subtle" }, Wd = [
+	"data-node",
+	"aria-pressed",
+	"disabled",
+	"onClick"
+], Gd = { class: "nx-line-radio" }, Kd = { class: "nx-line-name" }, qd = {
+	key: 0,
+	class: "nx-subtle nx-line-exit"
+}, Jd = { class: "nx-line-ms" }, Yd = [
+	"disabled",
+	"aria-label",
+	"onClick"
+], Xd = {
+	key: 1,
+	class: "nx-empty nx-empty--small"
+}, Zd = {
+	__name: "NodePicker",
+	props: {
+		session: Object,
+		compact: Boolean
+	},
+	emits: ["import"],
+	setup(e) {
+		let t = e, n = /* @__PURE__ */ I(""), r = /* @__PURE__ */ I(""), i = /* @__PURE__ */ I({}), a = Z(() => {
+			let e = Object.entries(t.session.proxy?.proxies || {}).filter(([, e]) => Array.isArray(e.all) && e.type === "Selector"), n = t.session.proxy?.mode === "global";
+			return e.sort(([e], [t]) => Number(t === "GLOBAL") * (n ? 1 : -1) - Number(e === "GLOBAL") * (n ? 1 : -1));
+		});
+		Rn(a, (e) => {
+			e.some(([e]) => e === n.value) || (n.value = e[0]?.[0] || "");
+		}, { immediate: !0 });
+		let o = Z(() => a.value.find(([e]) => e === n.value)?.[1]), s = Z(() => (o.value?.all || []).filter((e) => e.toLowerCase().includes(r.value.toLowerCase())));
+		function c(e, n = 0) {
+			let r = t.session.proxy?.proxies?.[e];
+			if (!r) return 0;
+			let i = Number(r.history?.at(-1)?.delay);
+			if (i > 0) return i;
+			let a = r.now;
+			return n >= 4 || !a || a === e ? 0 : c(a, n + 1);
+		}
+		function l(e) {
+			let t = i.value[e] ?? c(e);
+			return Number(t) > 0 ? Number(t) : 0;
+		}
+		function u(e) {
+			let t = l(e);
+			return t > 0 ? `${t} ms` : "未测速";
+		}
+		function d(e) {
+			let n = t.session.proxy?.proxies?.[e];
+			if (!n || !Array.isArray(n.all)) return "";
+			let r = n.now;
+			return r && r !== e ? r : "";
+		}
+		function f(e) {
+			let t = l(e);
+			return t ? Math.max(8, Math.round(100 - Math.min(100, t / 3))) : 8;
+		}
+		function p(e) {
+			let t = l(e);
+			return t ? t <= 90 ? "is-fast" : t <= 200 ? "is-mid" : "is-slow" : "is-unknown";
+		}
+		async function m(e) {
+			let n = await t.session.run("proxy.delay", { name: e });
+			n?.delay != null && (i.value[e] = n.delay);
+		}
+		async function h() {
+			let e = await t.session.optimizeNode(n.value);
+			if (e) for (let t of e.candidates || []) Number(t.delay) > 0 && (i.value[t.name] = t.delay);
+		}
+		return (t, i) => (U(), W("section", Id, [
+			K("div", Ld, [K("div", null, [i[4] ||= K("span", { class: "nx-kicker" }, "03 / 线路与测速", -1), K("h2", null, [q(L(fc), { size: 17 }), i[3] ||= J("选择线路", -1)])]), K("div", Rd, [K("button", {
+				class: "btn nx-button btn--quiet nx-icon-button",
+				"aria-label": "刷新线路",
+				disabled: !!e.session.busy,
+				onClick: i[0] ||= (t) => e.session.loadProxy()
+			}, [q(L(pc), { size: 15 })], 8, zd), K("button", {
+				class: "btn nx-button btn--secondary nx-optimize",
+				"data-optimize": "",
+				disabled: !!e.session.busy || !s.value.length,
+				onClick: h
+			}, [q(L(Sc), { size: 13 }), J(A(e.session.busy === "proxy.optimize" ? "测速中…" : "选择最快"), 1)], 8, Bd)])]),
+			i[7] ||= K("p", { class: "nx-help" }, "点一行直接切换；右侧刷新键单独测速。", -1),
+			a.value.length ? (U(), W(V, { key: 0 }, [
+				K("div", Vd, [(U(!0), W(V, null, B(a.value, ([e]) => (U(), W("button", {
+					key: e,
+					class: k(["nx-line-group", { "is-active": n.value === e }]),
+					"aria-pressed": n.value === e,
+					onClick: (t) => n.value = e
+				}, [J(A(e) + " ", 1), K("span", null, A((a.value.length, "")), 1)], 10, Hd))), 128)), K("span", Ud, A(s.value.length) + " 条", 1)]),
+				s.value.length > 8 ? z((U(), W("input", {
+					key: 0,
+					"onUpdate:modelValue": i[1] ||= (e) => r.value = e,
+					class: "nx-input nx-node-search",
+					placeholder: "搜索线路",
+					"aria-label": "搜索线路"
+				}, null, 512)), [[Q, r.value]]) : Y("", !0),
+				K("div", { class: k(["nx-line-list", { "nx-node-list--compact": e.compact }]) }, [(U(!0), W(V, null, B(s.value, (t) => (U(), W("div", {
+					key: t,
+					class: k(["nx-line-row", { "is-selected": o.value.now === t }])
+				}, [K("button", {
+					class: "nx-line-choice",
+					"data-node": t,
+					"aria-pressed": o.value.now === t,
+					disabled: !!e.session.busy,
+					onClick: (r) => e.session.selectNode(n.value, t)
+				}, [
+					K("span", Gd, [o.value.now === t ? (U(), G(L(Us), {
+						key: 0,
+						size: 11
+					})) : Y("", !0)]),
+					K("span", Kd, A(t === "DIRECT" ? "直接连接" : t === "REJECT" ? "阻止连接" : t), 1),
+					d(t) ? (U(), W("span", qd, A(d(t)), 1)) : Y("", !0),
+					K("span", { class: k(["nx-line-meter", p(t)]) }, [K("i", { style: pe({ width: `${f(t)}%` }) }, null, 4)], 2),
+					K("span", Jd, A(u(t)), 1)
+				], 8, Wd), e.compact ? Y("", !0) : (U(), W("button", {
+					key: 0,
+					class: "btn nx-button btn--quiet nx-icon-button nx-line-refresh",
+					disabled: !!e.session.busy,
+					"aria-label": `测试 ${t} 的延迟`,
+					onClick: (e) => m(t)
+				}, [q(L(pc), { size: 13 })], 8, Yd))], 2))), 128))], 2)
+			], 64)) : (U(), W("div", Xd, [
+				q(L(fc), { size: 24 }),
+				K("strong", null, A(e.session.state?.proxy?.running ? "尚未找到可选线路" : "开启代理后可切换线路"), 1),
+				i[6] ||= K("p", null, "添加订阅，使用你已有的代理节点。", -1),
+				K("button", {
+					class: "btn nx-button btn--secondary",
+					onClick: i[2] ||= (e) => t.$emit("import")
+				}, [q(L(uc), { size: 14 }), i[5] ||= J("添加订阅 ", -1)])
+			]))
+		]));
+	}
+}, Qd = {
+	class: "nx-panel nx-import",
+	"data-profile-import": ""
+}, $d = { class: "nx-panel-heading" }, ef = { class: "nx-input-with-action" }, tf = ["type"], nf = ["aria-label"], rf = ["disabled"], af = {
+	key: 0,
+	class: "nx-help"
+}, of = { class: "nx-import-options" }, sf = ["disabled"], cf = ["aria-expanded"], lf = ["disabled"], uf = {
+	key: 2,
+	class: "nx-help"
+}, df = {
+	__name: "ImportProfile",
+	props: {
+		session: Object,
+		autoStart: Boolean
+	},
+	emits: ["close"],
+	setup(e, { emit: t }) {
+		let n = e, r = t, i = /* @__PURE__ */ I(""), a = /* @__PURE__ */ I(!1), o = /* @__PURE__ */ I(null), s = /* @__PURE__ */ I(!1), c = /* @__PURE__ */ I("");
+		async function l(e) {
+			let t = !!n.session.state?.proxy?.running, a = !!n.session.accelerated;
+			if (t) {
+				let e = await n.session.run("proxy.stop", {}, "");
+				if (!e || e.cancelled) return;
+			}
+			let o = await n.session.run("proxy.config", e, "");
+			if (!o || o.cancelled) {
+				if (t) {
+					let e = n.session.error, t = n.session.notice, r = await n.session.run("proxy.start", {}, "");
+					r && !r.cancelled && (await n.session.loadProxy(), n.session.error = e, n.session.notice = t);
+				}
+				return;
+			}
+			if (i.value = "", c.value = "", r("close"), t) {
+				let e = await n.session.run("proxy.start", {}, "");
+				e && !e.cancelled && (n.session.notice = "订阅已更新，线路已重新连接", await n.session.loadProxy(), a && await n.session.toggleAcceleration());
+			} else {
+				let e = await n.session.run("proxy.start", {}, "");
+				e && !e.cancelled ? (n.session.notice = "订阅已保存，节点已加载，可以去选线路了", await n.session.loadProxy()) : n.session.notice = "订阅已保存，开启代理后加载节点", n.autoStart && await n.session.toggleAcceleration();
+			}
+		}
+		async function u(e) {
+			let t = e.target.files?.[0];
+			if (t) {
+				if (t.size > 2 * 1024 * 1024) {
+					n.session.error = "配置文件不能超过 2 MB";
+					return;
+				}
+				await l({ content: await t.text() });
+			}
+		}
+		return (t, n) => (U(), W("section", Qd, [
+			K("div", $d, [K("h2", null, [q(L(ic), { size: 17 }), n[8] ||= J("添加订阅", -1)]), K("button", {
+				class: "btn nx-button btn--quiet nx-icon-button",
+				"aria-label": "收起订阅设置",
+				onClick: n[0] ||= (e) => t.$emit("close")
+			}, [q(L(xc), { size: 16 })])]),
+			n[10] ||= K("p", { class: "nx-help" }, "粘贴你的订阅链接。已有配置文件也可以直接导入。", -1),
+			K("form", {
+				class: "nx-inline-form",
+				onSubmit: n[3] ||= bs((e) => l({ subscription: i.value.trim() }), ["prevent"])
+			}, [K("label", ef, [z(K("input", {
+				"onUpdate:modelValue": n[1] ||= (e) => i.value = e,
+				type: a.value ? "text" : "password",
+				class: "nx-input",
+				required: "",
+				placeholder: "https://…",
+				"aria-label": "订阅链接",
+				autocomplete: "off"
+			}, null, 8, tf), [[hs, i.value]]), K("button", {
+				class: "btn nx-button btn--quiet nx-icon-button",
+				type: "button",
+				"aria-label": a.value ? "隐藏订阅链接" : "显示订阅链接",
+				onClick: n[2] ||= (e) => a.value = !a.value
+			}, [(U(), G(Wr(a.value ? L(Xs) : L(Zs)), { size: 16 }))], 8, nf)]), K("button", {
+				class: "btn nx-button btn--primary",
+				disabled: !!e.session.busy || !i.value.trim()
+			}, A(e.session.busy === "proxy.config" ? "正在下载…" : "保存订阅"), 9, rf)], 32),
+			e.session.busy === "proxy.config" ? (U(), W("p", af, " 正在下载订阅。慢速订阅可能需要几十秒，请不要关闭页面。 ")) : Y("", !0),
+			K("div", of, [
+				K("button", {
+					class: "btn nx-button btn--quiet",
+					disabled: !!e.session.busy,
+					onClick: n[4] ||= (e) => o.value.click()
+				}, [q(L($s), { size: 14 }), n[9] ||= J("导入配置文件", -1)], 8, sf),
+				K("button", {
+					class: "btn nx-button btn--quiet",
+					"aria-expanded": s.value,
+					onClick: n[5] ||= (e) => s.value = !s.value
+				}, A(s.value ? "收起文本配置" : "粘贴配置文本"), 9, cf),
+				K("input", {
+					ref_key: "fileInput",
+					ref: o,
+					type: "file",
+					accept: ".yaml,.yml,.txt",
+					hidden: "",
+					onChange: u
+				}, null, 544)
+			]),
+			s.value ? (U(), W("form", {
+				key: 1,
+				class: "nx-form",
+				onSubmit: n[7] ||= bs((e) => l({ content: c.value }), ["prevent"])
+			}, [z(K("textarea", {
+				"onUpdate:modelValue": n[6] ||= (e) => c.value = e,
+				class: "nx-input nx-code",
+				rows: "7",
+				"aria-label": "代理配置文本",
+				placeholder: "粘贴 Mihomo / Clash YAML 配置",
+				required: ""
+			}, null, 512), [[Q, c.value]]), K("button", {
+				class: "btn nx-button btn--secondary",
+				disabled: !!e.session.busy
+			}, " 保存配置 ", 8, lf)], 32)) : Y("", !0),
+			e.session.state?.proxy?.running ? (U(), W("p", uf, " 当前连接已开启。保存订阅或配置时会自动断开并重新连接，不需要手动关闭。 ")) : Y("", !0)
+		]));
+	}
+}, ff = { class: "nx-view-stack" }, pf = {
+	key: 1,
+	class: "nx-panel nx-subscribe-list",
+	"data-subscription-list": ""
+}, mf = ["data-subscription"], hf = ["title"], gf = { class: "nx-subtle" }, _f = {
+	key: 0,
+	class: "nx-quick-state is-live"
+}, vf = ["disabled", "onClick"], yf = ["disabled", "onClick"], bf = { class: "nx-proxy-top" }, xf = { class: "nx-panel nx-subscribe-summary" }, Sf = { class: "nx-subscribe-copy" }, Cf = {
+	key: 0,
+	class: "nx-subtle",
+	"data-active-subscription": ""
+}, wf = {
+	key: 1,
+	class: "nx-subtle"
+}, Tf = { class: "nx-subscribe-actions" }, Ef = ["aria-expanded"], Df = { class: "nx-panel nx-proxy-connection" }, Of = { class: "nx-proxy-connection-row" }, kf = { class: "nx-route-icon" }, Af = { class: "nx-control-copy" }, jf = {
+	__name: "ProxyView",
+	props: { session: Object },
+	setup(e) {
+		let t = e, n = /* @__PURE__ */ I(!1), r = /* @__PURE__ */ I(!1), i = Z(() => !!t.session.state?.proxy?.config_saved), a = Z(() => t.session.state?.subscriptions || []), o = Z(() => a.value.find((e) => e.active) || null);
+		async function s(e) {
+			await t.session.run("proxy.subscriptions", {
+				action: "activate",
+				id: e.id
+			}, `已切换到 ${e.host}`) && (r.value = !1, await t.session.loadProxy());
+		}
+		async function c(e) {
+			await t.session.run("proxy.subscriptions", {
+				action: "remove",
+				id: e.id
+			}, "已删除这条订阅记录");
+		}
+		return (t, l) => (U(), W("div", ff, [
+			l[8] ||= K("div", { class: "nx-section-heading" }, [K("div", null, [
+				K("span", { class: "nx-kicker" }, "PROXY DESK"),
+				K("h2", null, "订阅与线路"),
+				K("p", null, "先有订阅，再选一条线路。")
+			])], -1),
+			n.value ? (U(), G(df, {
+				key: 0,
+				session: e.session,
+				onClose: l[0] ||= (e) => n.value = !1
+			}, null, 8, ["session"])) : Y("", !0),
+			r.value && a.value.length ? (U(), W("section", pf, [l[5] ||= K("div", { class: "nx-panel-heading" }, [K("h2", null, "已保存的订阅"), K("span", { class: "nx-subtle" }, "切换会重新拉取一次订阅")], -1), (U(!0), W(V, null, B(a.value, (t) => (U(), W("div", {
+				key: t.id,
+				class: "nx-subscribe-row",
+				"data-subscription": t.id
+			}, [
+				K("span", {
+					class: "nx-subscribe-host",
+					title: t.host
+				}, A(t.host), 9, hf),
+				K("span", gf, A(L(Tc)(t.saved_at)), 1),
+				t.active ? (U(), W("span", _f, "当前")) : (U(), W("button", {
+					key: 1,
+					class: "btn nx-button btn--quiet",
+					disabled: !!e.session.busy,
+					onClick: (e) => s(t)
+				}, " 切换 ", 8, vf)),
+				K("button", {
+					class: "btn nx-button btn--quiet nx-danger-text",
+					disabled: !!e.session.busy,
+					onClick: (e) => c(t)
+				}, " 删除 ", 8, yf)
+			], 8, mf))), 128))])) : Y("", !0),
+			K("div", bf, [K("section", xf, [
+				l[6] ||= K("span", { class: "nx-kicker" }, "01 / 订阅", -1),
+				K("div", Sf, [
+					K("h3", null, A(i.value ? "订阅已保存" : "还没有订阅"), 1),
+					K("p", null, A(i.value ? "已使用当前 Windows 账户加密保存。更新订阅会自动重连。" : "粘贴服务商给你的 HTTPS 订阅链接，节点会自动出现。"), 1),
+					o.value ? (U(), W("p", Cf, " 当前订阅：" + A(o.value.host), 1)) : i.value ? (U(), W("p", wf, "当前使用的是导入的配置文件")) : Y("", !0)
+				]),
+				K("div", Tf, [K("button", {
+					class: k(["btn nx-button", i.value ? "btn--quiet" : "btn--primary"]),
+					onClick: l[1] ||= (e) => n.value = !0
+				}, [q(L(ic), { size: 14 }), J(A(i.value ? "更新订阅" : "粘贴订阅链接"), 1)], 2), a.value.length ? (U(), W("button", {
+					key: 0,
+					class: "btn nx-button btn--quiet",
+					"data-toggle-subscriptions": "",
+					"aria-expanded": r.value,
+					onClick: l[2] ||= (e) => r.value = !r.value
+				}, A(r.value ? "收起订阅列表" : `切换订阅（${a.value.length}）`), 9, Ef)) : Y("", !0)])
+			]), K("section", Df, [l[7] ||= K("span", { class: "nx-kicker" }, "02 / 连接", -1), K("div", Of, [
+				K("span", kf, [q(L(dc), { size: 18 })]),
+				K("div", Af, [K("strong", null, A(e.session.state?.proxy?.running ? "已连接" : "未连接"), 1), K("p", null, A(i.value ? e.session.state?.proxy?.running ? "节点已加载，可以在下面切换。" : "开启后加载订阅里的节点。" : "先保存订阅，才能启动代理。"), 1)]),
+				q(Fd, {
+					"data-proxy-switch": "",
+					label: "代理连接",
+					"model-value": !!e.session.state?.proxy?.running,
+					disabled: !!e.session.busy || !i.value,
+					"onUpdate:modelValue": l[3] ||= (t) => e.session.toggleProxy()
+				}, null, 8, ["model-value", "disabled"])
+			])])]),
+			q(Zd, {
+				session: e.session,
+				onImport: l[4] ||= (e) => n.value = !0
+			}, null, 8, ["session"])
+		]));
+	}
+}, Mf = { class: "nx-view-stack" }, Nf = { class: "nx-section-heading" }, Pf = ["aria-expanded"], Ff = { class: "nx-panel nx-interface-list" }, If = { class: "nx-control-icon" }, Lf = { key: 0 }, Rf = {
 	key: 0,
 	class: "nx-empty nx-empty--small"
-}, zd = { class: "nx-form-grid" }, Bd = { class: "nx-form-field" }, Vd = ["disabled"], Hd = { class: "nx-panel nx-form" }, Ud = { class: "nx-panel-heading" }, Wd = ["disabled"], Gd = {
+}, zf = { class: "nx-form-grid" }, Bf = { class: "nx-form-field" }, Vf = ["disabled"], Hf = { class: "nx-panel nx-form" }, Uf = { class: "nx-panel-heading" }, Wf = ["disabled"], Gf = {
 	key: 0,
 	class: "nx-query-result"
-}, Kd = { class: "nx-subtle" }, qd = { key: 0 }, Jd = { class: "nx-settings-fold" }, Yd = ["aria-expanded"], Xd = {
+}, Kf = { class: "nx-subtle" }, qf = { key: 0 }, Jf = { class: "nx-settings-fold" }, Yf = ["aria-expanded"], Xf = {
 	key: 0,
 	class: "nx-panel nx-form"
-}, Zd = ["onUpdate:modelValue"], Qd = ["onClick"], $d = { class: "nx-actions" }, ef = ["disabled"], tf = ["disabled"], nf = { key: 0 }, rf = {
+}, Zf = ["onUpdate:modelValue"], Qf = ["onClick"], $f = { class: "nx-actions" }, ep = ["disabled"], tp = ["disabled"], np = { key: 0 }, rp = {
 	__name: "NetworkSettings",
 	props: { session: Object },
 	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(!1), r = /* @__PURE__ */ F(""), i = /* @__PURE__ */ F("1.1.1.1,8.8.8.8"), a = /* @__PURE__ */ F("github.com"), o = /* @__PURE__ */ F("system"), s = /* @__PURE__ */ F(null), c = /* @__PURE__ */ F(!1), l = /* @__PURE__ */ F(null), u = /* @__PURE__ */ F(""), d = /* @__PURE__ */ F(null), f = Z(() => t.session.interfaces.map((e) => ({
+		let t = e, n = /* @__PURE__ */ I(!1), r = /* @__PURE__ */ I(""), i = /* @__PURE__ */ I("1.1.1.1,8.8.8.8"), a = /* @__PURE__ */ I("github.com"), o = /* @__PURE__ */ I("system"), s = /* @__PURE__ */ I(null), c = /* @__PURE__ */ I(!1), l = /* @__PURE__ */ I(null), u = /* @__PURE__ */ I(""), d = /* @__PURE__ */ I(null), f = Z(() => t.session.interfaces.map((e) => ({
 			value: String(e.index),
 			label: e.name
 		}))), p = [
@@ -16449,27 +16833,27 @@ var Su = [
 		async function y() {
 			d.value = await t.session.run("rules.test", { domain: u.value });
 		}
-		return (t, b) => (U(), W("div", Md, [
-			K("div", Nd, [b[8] ||= K("div", null, [K("h2", null, "本机网络"), K("p", null, "查看当前地址和正在使用的 DNS。")], -1), K("button", {
+		return (t, b) => (U(), W("div", Mf, [
+			K("div", Nf, [b[8] ||= K("div", null, [K("h2", null, "本机网络"), K("p", null, "查看当前地址和正在使用的 DNS。")], -1), K("button", {
 				class: "btn nx-button btn--secondary",
 				"aria-expanded": n.value,
 				onClick: b[0] ||= (e) => n.value = !n.value
-			}, [q(I(pc), { size: 15 }), b[7] ||= J("调整 DNS ", -1)], 8, Pd)]),
-			K("section", Fd, [(U(!0), W(V, null, B(e.session.interfaces, (e) => (U(), W("article", {
+			}, [q(L(gc), { size: 15 }), b[7] ||= J("调整 DNS ", -1)], 8, Pf)]),
+			K("section", Ff, [(U(!0), W(V, null, B(e.session.interfaces, (e) => (U(), W("article", {
 				key: e.index,
 				class: "nx-interface"
-			}, [K("span", Id, [q(I(ic), { size: 20 })]), K("div", null, [K("strong", null, k(e.name), 1), K("dl", null, [
-				K("div", null, [b[9] ||= K("dt", null, "本机地址", -1), K("dd", null, k(e.ipv4?.join("、") || "没有 IPv4 地址"), 1)]),
-				K("div", null, [b[10] ||= K("dt", null, "DNS", -1), K("dd", null, k(e.dns?.join("、") || "由系统提供"), 1)]),
-				e.gateway?.length ? (U(), W("div", Ld, [b[11] ||= K("dt", null, "网关", -1), K("dd", null, k(e.gateway.join("、")), 1)])) : Y("", !0)
-			])])]))), 128)), e.session.interfaces.length ? Y("", !0) : (U(), W("div", Rd, [q(I(ic), { size: 25 }), b[12] ||= K("span", null, "暂时没有读取到网络接口。", -1)]))]),
+			}, [K("span", If, [q(L(oc), { size: 20 })]), K("div", null, [K("strong", null, A(e.name), 1), K("dl", null, [
+				K("div", null, [b[9] ||= K("dt", null, "本机地址", -1), K("dd", null, A(e.ipv4?.join("、") || "没有 IPv4 地址"), 1)]),
+				K("div", null, [b[10] ||= K("dt", null, "DNS", -1), K("dd", null, A(e.dns?.join("、") || "由系统提供"), 1)]),
+				e.gateway?.length ? (U(), W("div", Lf, [b[11] ||= K("dt", null, "网关", -1), K("dd", null, A(e.gateway.join("、")), 1)])) : Y("", !0)
+			])])]))), 128)), e.session.interfaces.length ? Y("", !0) : (U(), W("div", Rf, [q(L(oc), { size: 25 }), b[12] ||= K("span", null, "暂时没有读取到网络接口。", -1)]))]),
 			n.value ? (U(), W("form", {
 				key: 0,
 				class: "nx-panel nx-form",
 				onSubmit: bs(g, ["prevent"])
 			}, [
 				b[15] ||= K("h2", null, "调整 DNS", -1),
-				K("div", zd, [K("div", Bd, [b[13] ||= K("span", null, "网络接口", -1), q(ku, {
+				K("div", zf, [K("div", Bf, [b[13] ||= K("span", null, "网络接口", -1), q(vl, {
 					modelValue: r.value,
 					"onUpdate:modelValue": b[1] ||= (e) => r.value = e,
 					options: f.value,
@@ -16487,10 +16871,10 @@ var Su = [
 				K("button", {
 					class: "btn nx-button btn--secondary",
 					disabled: !!e.session.busy || !r.value
-				}, " 确认并申请修改 ", 8, Vd)
+				}, " 确认并申请修改 ", 8, Vf)
 			], 32)) : Y("", !0),
-			K("section", Hd, [
-				K("div", Ud, [K("h2", null, [q(I(tc), { size: 17 }), b[17] ||= J("查询网站地址", -1)])]),
+			K("section", Hf, [
+				K("div", Uf, [K("h2", null, [q(L(nc), { size: 17 }), b[17] ||= J("查询网站地址", -1)])]),
 				K("form", {
 					class: "nx-inline-form",
 					onSubmit: bs(h, ["prevent"])
@@ -16502,7 +16886,7 @@ var Su = [
 						"aria-label": "查询域名",
 						required: ""
 					}, null, 512), [[Q, a.value]]),
-					q(ku, {
+					q(vl, {
 						modelValue: o.value,
 						"onUpdate:modelValue": b[4] ||= (e) => o.value = e,
 						class: "nx-shared-select",
@@ -16514,22 +16898,22 @@ var Su = [
 					K("button", {
 						class: "btn nx-button btn--secondary",
 						disabled: !!e.session.busy
-					}, [q(I(fc), { size: 14 }), b[18] ||= J("查询 ", -1)], 8, Wd)
+					}, [q(L(mc), { size: 14 }), b[18] ||= J("查询 ", -1)], 8, Wf)
 				], 32),
-				s.value ? (U(), W("div", Gd, [
-					K("span", Kd, k(s.value.domain) + " · " + k(s.value.ms || 0) + " ms", 1),
+				s.value ? (U(), W("div", Gf, [
+					K("span", Kf, A(s.value.domain) + " · " + A(s.value.ms || 0) + " ms", 1),
 					(U(!0), W(V, null, B(s.value.addresses || s.value.answers || [], (e, t) => (U(), W("div", {
 						key: t,
 						class: "nx-query-address"
-					}, k(typeof e == "string" ? e : e.data), 1))), 128)),
-					(s.value.addresses || s.value.answers || []).length ? Y("", !0) : (U(), W("span", qd, "没有查到地址"))
+					}, A(typeof e == "string" ? e : e.data), 1))), 128)),
+					(s.value.addresses || s.value.answers || []).length ? Y("", !0) : (U(), W("span", qf, "没有查到地址"))
 				])) : Y("", !0)
 			]),
-			K("section", Jd, [K("button", {
+			K("section", Jf, [K("button", {
 				class: "btn nx-button btn--quiet",
 				"aria-expanded": c.value,
 				onClick: _
-			}, [b[19] ||= J(" 网站规则匹配预览", -1), q(I(Ws), { size: 13 })], 8, Yd), c.value ? (U(), W("div", Xd, [
+			}, [b[19] ||= J(" 网站规则匹配预览", -1), q(L(Ws), { size: 13 })], 8, Yf), c.value ? (U(), W("div", Xf, [
 				b[21] ||= K("p", { class: "nx-help" }, " 用于检查匹配结果；实际代理分流以订阅中的规则为准。 ", -1),
 				(U(!0), W(V, null, B(l.value, (e, t) => (U(), W("div", {
 					key: t,
@@ -16540,8 +16924,8 @@ var Su = [
 						class: "nx-input",
 						placeholder: "例如 github.com",
 						"aria-label": "规则域名"
-					}, null, 8, Zd), [[Q, e.domain]]),
-					q(ku, {
+					}, null, 8, Zf), [[Q, e.domain]]),
+					q(vl, {
 						modelValue: e.outbound,
 						"onUpdate:modelValue": (t) => e.outbound = t,
 						class: "nx-rule-select",
@@ -16554,19 +16938,19 @@ var Su = [
 						class: "btn nx-button btn--quiet nx-icon-button",
 						"aria-label": "删除规则",
 						onClick: (e) => l.value.splice(t, 1)
-					}, [q(I(vc), { size: 14 })], 8, Qd)
+					}, [q(L(xc), { size: 14 })], 8, Qf)
 				]))), 128)),
-				K("div", $d, [K("button", {
+				K("div", $f, [K("button", {
 					class: "btn nx-button btn--quiet",
 					onClick: b[5] ||= (e) => l.value.push({
 						domain: "",
 						outbound: "DIRECT"
 					})
-				}, [q(I(cc), { size: 14 }), b[20] ||= J("添加规则", -1)]), K("button", {
+				}, [q(L(uc), { size: 14 }), b[20] ||= J("添加规则", -1)]), K("button", {
 					class: "btn nx-button btn--secondary",
 					disabled: !!e.session.busy,
 					onClick: v
-				}, " 保存规则 ", 8, ef)]),
+				}, " 保存规则 ", 8, ep)]),
 				K("form", {
 					class: "nx-inline-form",
 					onSubmit: bs(y, ["prevent"])
@@ -16579,8 +16963,8 @@ var Su = [
 				}, null, 512), [[Q, u.value]]), K("button", {
 					class: "btn nx-button btn--secondary",
 					disabled: !!e.session.busy
-				}, " 测试匹配 ", 8, tf)], 32),
-				d.value ? (U(), W("p", nf, k(d.value.matched ? `匹配到 ${d.value.matched.domain}` : "未匹配到专属规则") + " · " + k({
+				}, " 测试匹配 ", 8, tp)], 32),
+				d.value ? (U(), W("p", np, A(d.value.matched ? `匹配到 ${d.value.matched.domain}` : "未匹配到专属规则") + " · " + A({
 					DIRECT: "直接连接",
 					PROXY: "通过代理",
 					REJECT: "阻止连接"
@@ -16588,20 +16972,20 @@ var Su = [
 			])) : Y("", !0)])
 		]));
 	}
-}, af = { class: "nx-view-stack" }, of = { class: "nx-section-heading" }, sf = { class: "nx-subtle" }, cf = { class: "nx-input-with-icon" }, lf = ["disabled"], uf = { class: "nx-panel nx-table-panel" }, df = {
+}, ip = { class: "nx-view-stack" }, ap = { class: "nx-section-heading" }, op = { class: "nx-subtle" }, sp = { class: "nx-input-with-icon" }, cp = ["disabled"], lp = { class: "nx-panel nx-table-panel" }, up = {
 	key: 0,
 	class: "nx-table-loading"
-}, ff = {
+}, dp = {
 	key: 1,
 	class: "nx-table-scroll"
-}, pf = { class: "nx-table" }, mf = ["title"], hf = { key: 0 }, gf = { class: "nx-data-cell" }, _f = { class: "nx-protocol" }, vf = {
+}, fp = { class: "nx-table" }, pp = ["title"], mp = { key: 0 }, hp = { class: "nx-data-cell" }, gp = { class: "nx-protocol" }, _p = {
 	key: 0,
 	class: "nx-empty"
-}, yf = {
+}, vp = {
 	__name: "ConnectionsView",
 	props: { session: Object },
 	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(""), r = /* @__PURE__ */ F([]), i = /* @__PURE__ */ F(0), a = /* @__PURE__ */ F(150), o = /* @__PURE__ */ F(!0), s = 0;
+		let t = e, n = /* @__PURE__ */ I(""), r = /* @__PURE__ */ I([]), i = /* @__PURE__ */ I(0), a = /* @__PURE__ */ I(150), o = /* @__PURE__ */ I(!0), s = 0;
 		async function c() {
 			let e = ++s;
 			o.value = !0;
@@ -16626,12 +17010,12 @@ var Su = [
 		}
 		return Nr(c), Ir(() => {
 			s += 1;
-		}), (e, t) => (U(), W("div", af, [
-			K("div", of, [t[2] ||= K("div", null, [K("h2", null, "应用正在连接什么"), K("p", null, "按应用、地址或端口查找当前连接。")], -1), K("span", sf, k(i.value) + " 个连接", 1)]),
+		}), (e, t) => (U(), W("div", ip, [
+			K("div", ap, [t[2] ||= K("div", null, [K("h2", null, "应用正在连接什么"), K("p", null, "按应用、地址或端口查找当前连接。")], -1), K("span", op, A(i.value) + " 个连接", 1)]),
 			K("form", {
 				class: "nx-inline-form nx-searchbar",
 				onSubmit: bs(c, ["prevent"])
-			}, [K("label", cf, [q(I(fc), { size: 16 }), z(K("input", {
+			}, [K("label", sp, [q(L(mc), { size: 16 }), z(K("input", {
 				"onUpdate:modelValue": t[0] ||= (e) => n.value = e,
 				class: "nx-input",
 				placeholder: "搜索应用、IP 或端口",
@@ -16639,24 +17023,24 @@ var Su = [
 			}, null, 512), [[Q, n.value]])]), K("button", {
 				class: "btn nx-button btn--secondary",
 				disabled: o.value
-			}, [q(I(dc), { size: 14 }), t[3] ||= J("刷新 ", -1)], 8, lf)], 32),
-			K("section", uf, [o.value ? (U(), W("div", df, [(U(), W(V, null, B(5, (e) => K("div", {
+			}, [q(L(pc), { size: 14 }), t[3] ||= J("刷新 ", -1)], 8, cp)], 32),
+			K("section", lp, [o.value ? (U(), W("div", up, [(U(), W(V, null, B(5, (e) => K("div", {
 				key: e,
 				class: "nx-skeleton nx-skeleton-row"
-			})), 64))])) : (U(), W("div", ff, [K("table", pf, [t[4] ||= K("thead", null, [K("tr", null, [
+			})), 64))])) : (U(), W("div", dp, [K("table", fp, [t[4] ||= K("thead", null, [K("tr", null, [
 				K("th", null, "应用"),
 				K("th", null, "本地端口"),
 				K("th", null, "远端地址"),
 				K("th", null, "协议"),
 				K("th", null, "状态")
 			])], -1), K("tbody", null, [(U(!0), W(V, null, B(l.value, (e, t) => (U(), W("tr", { key: t }, [
-				K("td", { title: e.path || "" }, [K("strong", null, k(e.process || "未知应用"), 1), e.pid ? (U(), W("small", hf, "PID " + k(e.pid), 1)) : Y("", !0)], 8, mf),
-				K("td", null, k(e.local_port), 1),
-				K("td", gf, k(e.remote_address ? `${e.remote_address}:${e.remote_port}` : "—"), 1),
-				K("td", null, [K("span", _f, k(e.protocol), 1)]),
-				K("td", null, [K("span", { class: O(["nx-connection-state", { "is-live": e.state === "Established" }]) }, k(u(e.state)), 3)])
-			]))), 128))])]), r.value.length ? Y("", !0) : (U(), W("div", vf, [
-				q(I(Bs), { size: 28 }),
+				K("td", { title: e.path || "" }, [K("strong", null, A(e.process || "未知应用"), 1), e.pid ? (U(), W("small", mp, "PID " + A(e.pid), 1)) : Y("", !0)], 8, pp),
+				K("td", null, A(e.local_port), 1),
+				K("td", hp, A(e.remote_address ? `${e.remote_address}:${e.remote_port}` : "—"), 1),
+				K("td", null, [K("span", gp, A(e.protocol), 1)]),
+				K("td", null, [K("span", { class: k(["nx-connection-state", { "is-live": e.state === "Established" }]) }, A(u(e.state)), 3)])
+			]))), 128))])]), r.value.length ? Y("", !0) : (U(), W("div", _p, [
+				q(L(Bs), { size: 28 }),
 				t[5] ||= K("strong", null, "没有匹配的连接", -1),
 				t[6] ||= K("p", null, "试着输入其他应用名称、地址或端口。", -1)
 			]))])), r.value.length > a.value ? (U(), W("button", {
@@ -16667,17 +17051,17 @@ var Su = [
 			t[7] ||= K("p", { class: "nx-help" }, "这里显示连接和端口，不代表每个应用的流量大小。", -1)
 		]));
 	}
-}, bf = { class: "nx-view-stack" }, xf = { class: "nx-section-heading" }, Sf = {
+}, yp = { class: "nx-view-stack" }, bp = { class: "nx-section-heading" }, xp = {
 	key: 0,
 	class: "nx-panel nx-form"
-}, Cf = { class: "nx-inline-form" }, wf = { class: "nx-application-actions" }, Tf = ["disabled"], Ef = { class: "nx-inline-form" }, Df = ["disabled"], Of = { class: "nx-panel nx-transaction-list" }, kf = { class: "nx-panel-heading" }, Af = { class: "nx-subtle" }, jf = { class: "nx-transaction-icon" }, Mf = { key: 0 }, Nf = ["disabled", "onClick"], Pf = {
+}, Sp = { class: "nx-inline-form" }, Cp = { class: "nx-application-actions" }, wp = ["disabled"], Tp = { class: "nx-inline-form" }, Ep = ["disabled"], Dp = { class: "nx-panel nx-transaction-list" }, Op = { class: "nx-panel-heading" }, kp = { class: "nx-subtle" }, Ap = { class: "nx-transaction-icon" }, jp = { key: 0 }, Mp = ["disabled", "onClick"], Np = {
 	key: 0,
 	class: "nx-empty"
-}, Ff = {
+}, Pp = {
 	__name: "SecurityView",
 	props: { session: Object },
 	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(!1), r = /* @__PURE__ */ F([]), i = /* @__PURE__ */ F(""), a = /* @__PURE__ */ F(!1), o = /* @__PURE__ */ F("8000000"), s = Z(() => r.value.map((e) => ({
+		let t = e, n = /* @__PURE__ */ I(!1), r = /* @__PURE__ */ I([]), i = /* @__PURE__ */ I(""), a = /* @__PURE__ */ I(!1), o = /* @__PURE__ */ I("8000000"), s = Z(() => r.value.map((e) => ({
 			value: e.path,
 			label: `${e.process} · ${e.path.split("\\").at(-1)}`
 		}))), c = [
@@ -16730,20 +17114,20 @@ var Su = [
 				rolled_back: "已撤回"
 			}[e] || e;
 		}
-		return (t, r) => (U(), W("div", bf, [
-			K("div", xf, [r[7] ||= K("div", null, [K("h2", null, "应用联网与恢复"), K("p", null, "只修改你选择的应用，随时检查并恢复原设置。")], -1), K("button", {
+		return (t, r) => (U(), W("div", yp, [
+			K("div", bp, [r[7] ||= K("div", null, [K("h2", null, "应用联网与恢复"), K("p", null, "只修改你选择的应用，随时检查并恢复原设置。")], -1), K("button", {
 				class: "btn nx-button btn--secondary",
 				onClick: u
-			}, [q(I(ic), { size: 15 }), r[6] ||= J("选择应用 ", -1)])]),
-			n.value ? (U(), W("section", Sf, [
+			}, [q(L(oc), { size: 15 }), r[6] ||= J("选择应用 ", -1)])]),
+			n.value ? (U(), W("section", xp, [
 				r[13] ||= K("h2", null, "管理一个应用", -1),
-				K("div", Cf, [a.value ? z((U(), W("input", {
+				K("div", Sp, [a.value ? z((U(), W("input", {
 					key: 0,
 					"onUpdate:modelValue": r[0] ||= (e) => i.value = e,
 					class: "nx-input",
 					placeholder: "应用 .exe 的完整路径",
 					"aria-label": "应用路径"
-				}, null, 512)), [[Q, i.value]]) : (U(), G(ku, {
+				}, null, 512)), [[Q, i.value]]) : (U(), G(vl, {
 					key: 1,
 					modelValue: i.value,
 					"onUpdate:modelValue": r[1] ||= (e) => i.value = e,
@@ -16758,19 +17142,19 @@ var Su = [
 					onClick: r[2] ||= (e) => {
 						a.value = !a.value, i.value = "";
 					}
-				}, k(a.value ? "从列表选择" : "手动输入路径"), 1)]),
-				K("div", wf, [K("div", null, [
+				}, A(a.value ? "从列表选择" : "手动输入路径"), 1)]),
+				K("div", Cp, [K("div", null, [
 					r[9] ||= K("h3", null, "阻止这个应用联网", -1),
 					r[10] ||= K("p", null, "创建仅作用于该应用的出站防火墙规则。", -1),
 					K("button", {
 						class: "btn nx-button btn--secondary nx-danger-text",
 						disabled: !i.value || !!e.session.busy,
 						onClick: r[3] ||= (e) => d("firewall")
-					}, [q(I(hc), { size: 14 }), r[8] ||= J("申请阻止联网 ", -1)], 8, Tf)
+					}, [q(L(vc), { size: 14 }), r[8] ||= J("申请阻止联网 ", -1)], 8, wp)
 				]), K("div", null, [
 					r[11] ||= K("h3", null, "限制这个应用的上传", -1),
 					r[12] ||= K("p", null, "降低后台上传对其他任务的影响。", -1),
-					K("div", Ef, [q(ku, {
+					K("div", Tp, [q(vl, {
 						modelValue: o.value,
 						"onUpdate:modelValue": r[4] ||= (e) => o.value = e,
 						class: "nx-shared-select",
@@ -16782,23 +17166,23 @@ var Su = [
 						class: "btn nx-button btn--secondary",
 						disabled: !i.value || !!e.session.busy,
 						onClick: r[5] ||= (e) => d("qos")
-					}, " 申请限速 ", 8, Df)])
+					}, " 申请限速 ", 8, Ep)])
 				])]),
 				r[14] ||= K("p", { class: "nx-help" }, " 这两项操作可能需要 Windows 管理员权限，执行前会显示影响范围。 ", -1)
 			])) : Y("", !0),
-			K("section", Of, [
-				K("div", kf, [K("h2", null, [q(I(_c), { size: 17 }), r[15] ||= J("网络设置记录", -1)]), K("span", Af, k(l.value.length) + " 条", 1)]),
+			K("section", Dp, [
+				K("div", Op, [K("h2", null, [q(L(bc), { size: 17 }), r[15] ||= J("网络设置记录", -1)]), K("span", kp, A(l.value.length) + " 条", 1)]),
 				(U(!0), W(V, null, B(l.value, (t) => (U(), W("article", {
 					key: t.id,
 					class: "nx-transaction"
 				}, [
-					K("span", jf, [q(I(mc), { size: 18 })]),
+					K("span", Ap, [q(L(_c), { size: 18 })]),
 					K("div", null, [
-						K("strong", null, k(f(t)), 1),
-						t.request?.program ? (U(), W("p", Mf, k(t.request.program.split("\\").at(-1)), 1)) : Y("", !0),
-						K("small", null, k(I(Sc)(t.time)), 1)
+						K("strong", null, A(f(t)), 1),
+						t.request?.program ? (U(), W("p", jp, A(t.request.program.split("\\").at(-1)), 1)) : Y("", !0),
+						K("small", null, A(L(Tc)(t.time)), 1)
 					]),
-					K("span", { class: O(["nx-status-text", { "is-warning": ["external_change", "recovery_required"].includes(t.status) }]) }, k(p(t.status)), 3),
+					K("span", { class: k(["nx-status-text", { "is-warning": ["external_change", "recovery_required"].includes(t.status) }]) }, A(p(t.status)), 3),
 					[
 						"applied",
 						"prepared",
@@ -16808,10 +17192,10 @@ var Su = [
 						class: "btn nx-button btn--secondary",
 						disabled: !!e.session.busy,
 						onClick: (n) => e.session.run("system.restore", { id: t.id }, "已检查并恢复原设置")
-					}, [q(I(_c), { size: 13 }), r[16] ||= J("恢复 ", -1)], 8, Nf)) : Y("", !0)
+					}, [q(L(bc), { size: 13 }), r[16] ||= J("恢复 ", -1)], 8, Mp)) : Y("", !0)
 				]))), 128)),
-				l.value.length ? Y("", !0) : (U(), W("div", Pf, [
-					q(I(mc), {
+				l.value.length ? Y("", !0) : (U(), W("div", Np, [
+					q(L(_c), {
 						size: 31,
 						"stroke-width": 1.4
 					}),
@@ -16822,23 +17206,23 @@ var Su = [
 			r[19] ||= K("p", { class: "nx-help" }, " 如果设置已被其他软件或用户修改，会保留当前状态，避免直接覆盖。 ", -1)
 		]));
 	}
-}, If = { class: "nx-view-stack" }, Lf = { class: "nx-panel" }, Rf = { class: "nx-panel-heading" }, zf = ["disabled"], Bf = ["disabled", "onClick"], Vf = ["disabled", "onClick"], Hf = {
+}, Fp = { class: "nx-view-stack" }, Ip = { class: "nx-panel" }, Lp = { class: "nx-panel-heading" }, Rp = ["disabled"], zp = ["disabled", "onClick"], Bp = ["disabled", "onClick"], Vp = {
 	key: 1,
 	class: "nx-empty-inline"
-}, Uf = { class: "nx-panel" }, Wf = { class: "nx-panel-heading" }, Gf = ["disabled"], Kf = {
+}, Hp = { class: "nx-panel" }, Up = { class: "nx-panel-heading" }, Wp = ["disabled"], Gp = {
 	key: 1,
 	class: "nx-table-scroll"
-}, qf = { class: "nx-table" }, Jf = {
+}, Kp = { class: "nx-table" }, qp = {
 	key: 0,
 	class: "nx-empty-inline"
-}, Yf = { class: "nx-panel nx-settings-rows" }, Xf = ["disabled"], Zf = {
+}, Jp = { class: "nx-panel nx-settings-rows" }, Yp = ["disabled"], Xp = {
 	key: 0,
 	class: "nx-recent"
-}, Qf = { class: "nx-section-heading" }, $f = { class: "nx-subtle" }, ep = {
+}, Zp = { class: "nx-section-heading" }, Qp = { class: "nx-subtle" }, $p = {
 	__name: "AdvancedView",
 	props: { session: Object },
 	setup(e) {
-		let t = e, n = /* @__PURE__ */ F(!1), r = /* @__PURE__ */ F("github.com"), i = /* @__PURE__ */ F("30"), a = /* @__PURE__ */ F(null), o = /* @__PURE__ */ F(String(t.session.state?.settings?.sample_seconds || 5)), s = /* @__PURE__ */ F(!1), c = [
+		let t = e, n = /* @__PURE__ */ I(!1), r = /* @__PURE__ */ I("github.com"), i = /* @__PURE__ */ I("30"), a = /* @__PURE__ */ I(null), o = /* @__PURE__ */ I(String(t.session.state?.settings?.sample_seconds || 5)), s = /* @__PURE__ */ I(!1), c = [
 			{
 				value: "15",
 				label: "每 15 分钟"
@@ -16925,12 +17309,12 @@ var Su = [
 		async function _() {
 			a.value = await t.session.read("lan");
 		}
-		return (t, d) => (U(), W("div", If, [
-			K("section", Lf, [
-				K("div", Rf, [K("h2", null, [q(I(qs), { size: 17 }), d[3] ||= J("定时检查", -1)]), K("button", {
+		return (t, d) => (U(), W("div", Fp, [
+			K("section", Ip, [
+				K("div", Lp, [K("h2", null, [q(L(qs), { size: 17 }), d[3] ||= J("定时检查", -1)]), K("button", {
 					class: "btn nx-button btn--quiet",
 					onClick: d[0] ||= (e) => n.value = !n.value
-				}, [q(I(cc), { size: 14 }), d[4] ||= J("添加 ", -1)])]),
+				}, [q(L(uc), { size: 14 }), d[4] ||= J("添加 ", -1)])]),
 				d[6] ||= K("p", { class: "nx-help" }, "定期检查常用网站，结果会保存在“检测”中。", -1),
 				n.value ? (U(), W("form", {
 					key: 0,
@@ -16944,7 +17328,7 @@ var Su = [
 						placeholder: "检查哪个网站",
 						"aria-label": "定时检查的网站"
 					}, null, 512), [[Q, r.value]]),
-					q(ku, {
+					q(vl, {
 						modelValue: i.value,
 						"onUpdate:modelValue": d[2] ||= (e) => i.value = e,
 						class: "nx-shared-select",
@@ -16956,13 +17340,13 @@ var Su = [
 					K("button", {
 						class: "btn nx-button btn--secondary",
 						disabled: !!e.session.busy
-					}, " 添加计划 ", 8, zf)
+					}, " 添加计划 ", 8, Rp)
 				], 32)) : Y("", !0),
 				(U(!0), W(V, null, B(e.session.state?.automations || [], (t, n) => (U(), W("article", {
 					key: n,
 					class: "nx-schedule-row"
 				}, [
-					q(kl, {
+					q(Fd, {
 						size: "sm",
 						label: `${t.target} 定时检查`,
 						"model-value": t.enabled,
@@ -16974,23 +17358,23 @@ var Su = [
 						"disabled",
 						"onUpdate:modelValue"
 					]),
-					K("div", null, [K("strong", null, k(t.target), 1), K("small", null, "每 " + k(t.interval_minutes) + " 分钟检查一次", 1)]),
+					K("div", null, [K("strong", null, A(t.target), 1), K("small", null, "每 " + A(t.interval_minutes) + " 分钟检查一次", 1)]),
 					K("button", {
 						class: "btn nx-button btn--quiet",
 						disabled: !!e.session.busy,
 						onClick: (e) => h(n)
-					}, [q(I(sc), { size: 13 }), d[5] ||= J("试运行", -1)], 8, Bf),
+					}, [q(L(lc), { size: 13 }), d[5] ||= J("试运行", -1)], 8, zp),
 					K("button", {
 						class: "btn nx-button btn--quiet nx-icon-button",
 						disabled: !!e.session.busy,
 						"aria-label": "删除定时检查",
 						onClick: (e) => m(n)
-					}, [q(I(vc), { size: 14 })], 8, Vf)
+					}, [q(L(xc), { size: 14 })], 8, Bp)
 				]))), 128)),
-				!e.session.state?.automations?.length && !n.value ? (U(), W("p", Hf, " 还没有计划，需要时再添加。 ")) : Y("", !0)
+				!e.session.state?.automations?.length && !n.value ? (U(), W("p", Vp, " 还没有计划，需要时再添加。 ")) : Y("", !0)
 			]),
-			K("section", Uf, [
-				K("div", Wf, [K("h2", null, [q(I(ic), { size: 17 }), d[7] ||= J("本地设备", -1)]), K("button", {
+			K("section", Hp, [
+				K("div", Up, [K("h2", null, [q(L(oc), { size: 17 }), d[7] ||= J("本地设备", -1)]), K("button", {
 					class: "btn nx-button btn--quiet",
 					onClick: _
 				}, " 查看设备 ")]),
@@ -17000,20 +17384,20 @@ var Su = [
 					class: "btn nx-button btn--secondary",
 					disabled: !!e.session.busy,
 					onClick: _
-				}, " 读取设备列表 ", 8, Gf)),
-				a.value?.devices ? (U(), W("div", Kf, [K("table", qf, [d[8] ||= K("thead", null, [K("tr", null, [
+				}, " 读取设备列表 ", 8, Wp)),
+				a.value?.devices ? (U(), W("div", Gp, [K("table", Kp, [d[8] ||= K("thead", null, [K("tr", null, [
 					K("th", null, "设备地址"),
 					K("th", null, "硬件地址"),
 					K("th", null, "状态")
 				])], -1), K("tbody", null, [(U(!0), W(V, null, B(a.value.devices, (e, t) => (U(), W("tr", { key: t }, [
-					K("td", null, k(e.IPAddress), 1),
-					K("td", null, k(e.LinkLayerAddress || "—"), 1),
-					K("td", null, k(e.state), 1)
-				]))), 128))])]), a.value.devices.length ? Y("", !0) : (U(), W("p", Jf, " 没有读取到设备记录。 "))])) : Y("", !0)
+					K("td", null, A(e.IPAddress), 1),
+					K("td", null, A(e.LinkLayerAddress || "—"), 1),
+					K("td", null, A(e.state), 1)
+				]))), 128))])]), a.value.devices.length ? Y("", !0) : (U(), W("p", qp, " 没有读取到设备记录。 "))])) : Y("", !0)
 			]),
-			K("section", Yf, [K("div", null, [d[10] ||= K("span", null, [K("strong", null, "网速更新频率"), K("small", null, "降低更新频率可以减少后台采样。")], -1), q(ku, {
+			K("section", Jp, [K("div", null, [d[10] ||= K("span", null, [K("strong", null, "网速更新频率"), K("small", null, "降低更新频率可以减少后台采样。")], -1), q(vl, {
 				"model-value": o.value,
-				options: I(l),
+				options: L(l),
 				disabled: !!e.session.busy || s.value,
 				"aria-label": "网速采样间隔",
 				"data-network-sampling": "",
@@ -17027,249 +17411,337 @@ var Su = [
 				class: "btn nx-button btn--secondary",
 				disabled: !!e.session.busy,
 				onClick: g
-			}, [q(I(Qs), { size: 14 }), d[11] ||= J("导出 ", -1)], 8, Xf)])]),
-			e.session.state?.events?.length ? (U(), W("section", Zf, [K("div", Qf, [d[13] ||= K("h2", null, "活动记录", -1), K("span", $f, "最近 " + k(Math.min(e.session.state.events.length, 40)) + " 条", 1)]), (U(!0), W(V, null, B([...e.session.state.events].reverse().slice(0, 40), (e, t) => (U(), W("div", {
+			}, [q(L(Qs), { size: 14 }), d[11] ||= J("导出 ", -1)], 8, Yp)])]),
+			e.session.state?.events?.length ? (U(), W("section", Xp, [K("div", Zp, [d[13] ||= K("h2", null, "活动记录", -1), K("span", Qp, "最近 " + A(Math.min(e.session.state.events.length, 40)) + " 条", 1)]), (U(!0), W(V, null, B([...e.session.state.events].reverse().slice(0, 40), (e, t) => (U(), W("div", {
 				key: t,
 				class: "nx-event"
 			}, [
-				q(I(Us), { size: 14 }),
-				K("span", null, k(e.message), 1),
-				K("time", null, k(I(Sc)(e.time)), 1)
+				q(L(Us), { size: 14 }),
+				K("span", null, A(e.message), 1),
+				K("time", null, A(L(Tc)(e.time)), 1)
 			]))), 128))])) : Y("", !0)
 		]));
 	}
-}, tp = ["aria-busy"], np = { class: "nx-sidebar" }, rp = {
+}, em = {
+	class: "nx-settings",
+	"data-settings-page": ""
+}, tm = {
+	class: "nx-settings-tabs",
+	"aria-label": "设置分区"
+}, nm = [
+	"data-settings-section",
+	"aria-current",
+	"onClick"
+], rm = { class: "nx-settings-body" }, im = {
+	__name: "SettingsView",
+	props: {
+		session: Object,
+		section: {
+			type: String,
+			default: "acceleration"
+		},
+		sections: {
+			type: Array,
+			default: () => []
+		}
+	},
+	emits: [
+		"navigate",
+		"diagnostic",
+		"section"
+	],
+	setup(e, { emit: t }) {
+		let n = e, r = t, i = {
+			acceleration: Sc,
+			proxy: nc,
+			network: gc,
+			connections: Bs,
+			security: _c,
+			advanced: yc
+		}, a = {
+			acceleration: Ad,
+			proxy: jf,
+			network: rp,
+			connections: vp,
+			security: Pp,
+			advanced: $p
+		}, o = Z(() => (n.sections || []).map((e) => ({
+			...e,
+			icon: i[e.id] || gc
+		}))), s = Z(() => a[n.section] ? n.section : "acceleration"), c = Z(() => a[s.value]);
+		return (t, n) => (U(), W("div", em, [K("nav", tm, [(U(!0), W(V, null, B(o.value, (e) => (U(), W("button", {
+			key: e.id,
+			class: k(["nx-settings-tab", { "is-active": s.value === e.id }]),
+			"data-settings-section": e.id,
+			"aria-current": s.value === e.id ? "page" : void 0,
+			onClick: (t) => r("section", e.id)
+		}, [(U(), G(Wr(e.icon), {
+			size: 16,
+			"stroke-width": 1.7
+		})), K("span", null, A(e.title), 1)], 10, nm))), 128))]), K("section", rm, [(U(), G(Wr(c.value), {
+			key: s.value,
+			session: e.session,
+			onNavigate: n[0] ||= (e) => r("navigate", e),
+			onDiagnostic: n[1] ||= (e) => r("diagnostic", e)
+		}, null, 40, ["session"]))])]));
+	}
+}, am = ["aria-busy"], om = { class: "nx-sidebar" }, sm = {
 	class: "nx-brand",
 	title: "EasyNet"
-}, ip = { "aria-label": "网络工具" }, ap = [
+}, cm = { "aria-label": "网络工具" }, lm = [
 	"data-page",
 	"aria-current",
 	"title",
 	"onClick"
-], op = { class: "nx-sidebar-foot" }, sp = { class: "nx-workspace" }, cp = { class: "nx-header" }, lp = { class: "nx-header-actions" }, up = {
+], um = ["aria-current", "title"], dm = { class: "nx-sidebar-foot" }, fm = { class: "nx-workspace" }, pm = { class: "nx-header" }, mm = { class: "nx-header-actions" }, hm = {
 	key: 0,
 	class: "nx-working"
-}, dp = {
+}, gm = {
 	key: 1,
 	class: "nx-live-label"
-}, fp = ["disabled"], pp = {
+}, _m = ["disabled"], vm = {
 	key: 0,
 	class: "nx-notice nx-notice--error",
 	role: "alert"
-}, mp = ["role"], hp = { class: "nx-content ne-content" }, gp = {
+}, ym = ["role"], bm = { class: "nx-content ne-content" }, xm = {
 	key: "loading",
 	class: "nx-loading",
 	"aria-live": "polite"
-}, _p = "easynet:page", vp = {
+}, Sm = "easynet:page", Cm = {
 	__name: "NetworkApp",
 	props: { context: {
 		type: Object,
 		required: !0
 	} },
 	setup(e) {
-		let t = Ec(e.context), n = /* @__PURE__ */ F(null), r = [
-			{
-				id: "home",
-				title: "首页",
-				hint: "实时数据与常用操作",
-				icon: nc,
-				component: Yc
-			},
+		let t = kc(e.context), n = /* @__PURE__ */ I(null), r = [
 			{
 				id: "overview",
-				title: "加速",
-				hint: "本机加速开关与运行状态",
-				icon: yc,
-				component: wl
-			},
-			{
-				id: "proxy",
-				title: "代理",
-				hint: "订阅、节点与连接方式",
-				icon: tc,
-				component: mu
+				title: "概览",
+				hint: "网络状态、速率与常用操作",
+				icon: rc,
+				component: rl
 			},
 			{
 				id: "transfer",
 				title: "下载",
-				hint: "文件下载与任务",
+				hint: "任务、进度与文件",
 				icon: Ys,
-				component: dd
+				component: fu
+			},
+			{
+				id: "devices",
+				title: "互联",
+				hint: "我的设备与文件互传",
+				icon: sc,
+				component: Ou
 			},
 			{
 				id: "diagnose",
-				title: "检测",
-				hint: "检查网站连接",
+				title: "诊断",
+				hint: "检查网络并定位问题",
 				icon: Ls,
-				component: jd
+				component: rd
+			}
+		], i = {
+			id: "settings",
+			title: "设置",
+			hint: "代理、加速与高级网络设置",
+			icon: gc,
+			component: im
+		}, a = r, o = [
+			{
+				id: "acceleration",
+				title: "加速"
+			},
+			{
+				id: "proxy",
+				title: "代理与线路"
 			},
 			{
 				id: "network",
-				title: "网络",
-				hint: "接口与 DNS",
-				icon: pc,
-				component: rf
+				title: "网络与 DNS"
 			},
 			{
-				id: "traffic",
-				title: "连接",
-				hint: "应用与端口",
-				icon: Bs,
-				component: yf
+				id: "connections",
+				title: "连接"
 			},
 			{
 				id: "security",
-				title: "防护",
-				hint: "应用联网与恢复",
-				icon: mc,
-				component: Ff
+				title: "防护"
 			},
 			{
 				id: "advanced",
-				title: "更多",
-				hint: "定时检测与记录",
-				icon: gc,
-				component: ep
+				title: "高级与记录"
 			}
-		], i = r.filter((e) => [
-			"home",
-			"overview",
-			"proxy",
-			"transfer"
-		].includes(e.id));
-		function a() {
+		], s = /* @__PURE__ */ I("acceleration"), c = {
+			proxy: "proxy",
+			acceleration: "acceleration",
+			network: "network",
+			connections: "connections",
+			traffic: "connections",
+			security: "security",
+			advanced: "advanced",
+			settings: "acceleration"
+		};
+		function l() {
 			try {
-				let e = sessionStorage.getItem(_p);
-				return sessionStorage.removeItem(_p), r.some((t) => t.id === e) ? e : "home";
+				let e = sessionStorage.getItem(Sm);
+				return sessionStorage.removeItem(Sm), !e || e === "home" ? "overview" : c[e] ? (s.value = c[e], "settings") : r.some((t) => t.id === e) ? e : "overview";
 			} catch {
-				return "home";
+				return "overview";
 			}
 		}
-		let o = /* @__PURE__ */ F(a());
-		function s(e) {
+		let u = /* @__PURE__ */ I(l());
+		function d(e) {
+			return r.some((t) => t.id === e) ? { page: e } : e === "home" ? { page: "overview" } : c[e] ? {
+				page: "settings",
+				section: c[e]
+			} : { page: "overview" };
+		}
+		function f(e) {
+			let n = d(e);
+			u.value = n.page, n.section && (s.value = n.section), t.notice = "", t.error = "";
+		}
+		function p(e) {
+			u.value = "settings", e && (s.value = c[e] || e);
+		}
+		function m(e) {
 			let t = e.detail?.page;
-			if (r.some((e) => e.id === t)) {
-				l(t);
-				try {
-					sessionStorage.removeItem(_p);
-				} catch {}
-			}
+			typeof t == "string" && t && f(t);
 		}
-		Nr(() => window.addEventListener("sunday:network-plugin-page", s)), Ir(() => window.removeEventListener("sunday:network-plugin-page", s));
-		let c = Z(() => r.find((e) => e.id === o.value));
-		function l(e) {
-			o.value = e, t.notice = "", t.error = "";
+		let h = Z(() => u.value === "settings" ? i : r.find((e) => e.id === u.value) || r[0]);
+		function g(e) {
+			n.value = e, u.value = "diagnose";
 		}
-		function u(e) {
-			n.value = e, o.value = "diagnose";
-		}
-		return (e, r) => (U(), W("div", {
+		return Nr(() => window.addEventListener("sunday:network-plugin-page", m)), Ir(() => window.removeEventListener("sunday:network-plugin-page", m)), (e, r) => (U(), W("div", {
 			class: "nx-app",
-			"aria-busy": !!I(t).busy
-		}, [K("aside", np, [
-			K("div", rp, [q(I(ac), {
+			"aria-busy": !!L(t).busy
+		}, [K("aside", om, [
+			K("div", sm, [q(L(sc), {
 				size: 25,
 				"stroke-width": 1.7
-			}), r[4] ||= K("span", null, "EasyNet", -1)]),
-			K("nav", ip, [(U(!0), W(V, null, B(I(i), (e) => (U(), W("button", {
-				key: e.id,
-				class: O(["nx-nav-item", { "is-active": o.value === e.id }]),
-				"data-page": e.id,
-				"aria-current": o.value === e.id ? "page" : void 0,
-				title: e.hint,
-				onClick: (t) => l(e.id)
-			}, [(U(), G(Wr(e.icon), {
-				size: 20,
-				"stroke-width": 1.65
-			})), K("span", null, k(e.title), 1)], 10, ap))), 128))]),
-			K("div", op, [K("span", { class: O(["nx-live-dot", { "is-offline": !!I(t).connectionError || !I(t).state }]) }, null, 2), K("span", null, k(I(t).connectionError ? "离线" : I(t).state ? "监测中" : "连接中"), 1)])
-		]), K("div", sp, [
-			K("header", cp, [K("div", null, [
-				r[5] ||= K("span", { class: "nx-eyebrow" }, "NETWORK CONSOLE", -1),
-				K("h1", null, k(c.value.title), 1),
-				K("p", null, k(c.value.hint), 1)
-			]), K("div", lp, [I(t).busy ? (U(), W("span", up, "正在处理…")) : I(t).state && !I(t).connectionError ? (U(), W("span", dp, [...r[6] ||= [K("span", { class: "nx-live-dot" }, null, -1), J("实时更新", -1)]])) : Y("", !0), K("button", {
+			}), r[6] ||= K("span", null, "EasyNet", -1)]),
+			K("nav", cm, [
+				(U(!0), W(V, null, B(L(a), (e) => (U(), W("button", {
+					key: e.id,
+					class: k(["nx-nav-item", { "is-active": u.value === e.id }]),
+					"data-page": e.id,
+					"aria-current": u.value === e.id ? "page" : void 0,
+					title: e.hint,
+					onClick: (t) => f(e.id)
+				}, [(U(), G(Wr(e.icon), {
+					size: 20,
+					"stroke-width": 1.65
+				})), K("span", null, A(e.title), 1)], 10, lm))), 128)),
+				r[7] ||= K("div", { class: "nx-nav-divider" }, null, -1),
+				K("button", {
+					class: k(["nx-nav-item", { "is-active": u.value === "settings" }]),
+					"data-settings": "",
+					"aria-current": u.value === "settings" ? "page" : void 0,
+					title: i.hint,
+					onClick: r[0] ||= (e) => p()
+				}, [(U(), G(Wr(i.icon), {
+					size: 20,
+					"stroke-width": 1.65
+				})), K("span", null, A(i.title), 1)], 10, um)
+			]),
+			K("div", dm, [K("span", { class: k(["nx-live-dot", { "is-offline": !!L(t).connectionError || !L(t).state }]) }, null, 2), K("span", null, A(L(t).connectionError ? "离线" : L(t).state ? "监测中" : "连接中"), 1)])
+		]), K("div", fm, [
+			K("header", pm, [K("div", null, [
+				r[8] ||= K("span", { class: "nx-eyebrow" }, "NETWORK CONSOLE", -1),
+				K("h1", null, A(h.value.title), 1),
+				K("p", null, A(h.value.hint), 1)
+			]), K("div", mm, [L(t).busy ? (U(), W("span", hm, "正在处理…")) : L(t).state && !L(t).connectionError ? (U(), W("span", gm, [...r[9] ||= [K("span", { class: "nx-live-dot" }, null, -1), J("实时更新", -1)]])) : Y("", !0), K("button", {
 				class: "btn nx-button btn--quiet nx-icon-button",
-				disabled: !!I(t).busy,
+				disabled: !!L(t).busy,
 				"aria-label": "刷新网络状态",
-				onClick: r[0] ||= (e) => I(t).refresh()
-			}, [q(I(dc), { size: 17 })], 8, fp)])]),
-			I(t).connectionError ? (U(), W("div", pp, [r[7] ||= K("span", null, "暂时无法连接网络服务，请稍后重试。", -1), K("button", {
+				onClick: r[1] ||= (e) => L(t).refresh()
+			}, [q(L(pc), { size: 17 })], 8, _m)])]),
+			L(t).connectionError ? (U(), W("div", vm, [r[10] ||= K("span", null, "暂时无法连接网络服务，请稍后重试。", -1), K("button", {
 				class: "btn nx-button btn--quiet",
-				onClick: r[1] ||= (e) => I(t).refresh()
+				onClick: r[2] ||= (e) => L(t).refresh()
 			}, "重试")])) : Y("", !0),
-			I(t).error || I(t).notice ? (U(), W("div", {
+			L(t).error || L(t).notice ? (U(), W("div", {
 				key: 1,
-				class: O(["nx-notice", { "nx-notice--error": I(t).error }]),
-				role: I(t).error ? "alert" : "status"
-			}, [K("span", null, k(I(t).error || I(t).notice), 1), K("button", {
+				class: k(["nx-notice", { "nx-notice--error": L(t).error }]),
+				role: L(t).error ? "alert" : "status"
+			}, [K("span", null, A(L(t).error || L(t).notice), 1), K("button", {
 				class: "btn nx-button btn--quiet nx-icon-button",
 				"aria-label": "关闭提示",
-				onClick: r[2] ||= (e) => {
-					I(t).error = "", I(t).notice = "";
+				onClick: r[3] ||= (e) => {
+					L(t).error = "", L(t).notice = "";
 				}
-			}, [q(I(vc), { size: 14 })])], 10, mp)) : Y("", !0),
-			K("main", hp, [q(po, { name: "nx-page" }, {
-				default: jn(() => [I(t).state ? (U(), G(Wr(c.value.component), {
-					key: o.value,
-					session: I(t),
+			}, [q(L(xc), { size: 14 })])], 10, ym)) : Y("", !0),
+			K("main", bm, [q(po, { name: "nx-page" }, {
+				default: jn(() => [L(t).state ? (U(), G(Wr(h.value.component), {
+					key: u.value,
+					session: L(t),
 					report: n.value,
-					onNavigate: l,
-					onDiagnostic: u
-				}, null, 40, ["session", "report"])) : (U(), W("div", gp, [
-					r[8] ||= K("div", { class: "nx-skeleton nx-loading-banner" }, null, -1),
-					r[9] ||= K("div", { class: "nx-loading-grid" }, [K("div", { class: "nx-skeleton nx-loading-chart" }), K("div", { class: "nx-skeleton nx-loading-chart" })], -1),
-					r[10] ||= K("p", null, "正在读取网络状态…", -1),
-					I(t).connectionError ? (U(), W("button", {
+					section: s.value,
+					sections: o,
+					onNavigate: f,
+					onDiagnostic: g,
+					onSettings: p,
+					onSection: r[4] ||= (e) => s.value = e
+				}, null, 40, [
+					"session",
+					"report",
+					"section"
+				])) : (U(), W("div", xm, [
+					r[11] ||= K("div", { class: "nx-skeleton nx-loading-banner" }, null, -1),
+					r[12] ||= K("div", { class: "nx-loading-grid" }, [K("div", { class: "nx-skeleton nx-loading-chart" }), K("div", { class: "nx-skeleton nx-loading-chart" })], -1),
+					r[13] ||= K("p", null, "正在读取网络状态…", -1),
+					L(t).connectionError ? (U(), W("button", {
 						key: 0,
 						class: "btn nx-button btn--secondary",
-						onClick: r[3] ||= (e) => I(t).refresh()
+						onClick: r[5] ||= (e) => L(t).refresh()
 					}, " 重新连接 ")) : Y("", !0)
 				]))]),
 				_: 1
 			})])
-		])], 8, tp));
+		])], 8, am));
 	}
-}, yp = {
+}, wm = {
 	class: "nx-app nx-quick-app",
 	"aria-label": "网络快捷操作"
-}, bp = { class: "nx-pill-list" }, xp = {
+}, Tm = { class: "nx-pill-list" }, Em = {
 	class: "nx-pill-icon",
 	title: "加速"
-}, Sp = [
+}, Dm = [
 	"aria-pressed",
 	"aria-label",
 	"title",
 	"disabled"
-], Cp = {
+], Om = {
 	class: "nx-pill-icon",
 	title: "代理"
-}, wp = { class: "nx-node-wrap" }, Tp = [
+}, km = { class: "nx-node-wrap" }, Am = [
 	"aria-pressed",
 	"aria-label",
 	"title",
 	"disabled"
-], Ep = {
+], jm = {
 	class: "nx-quick-pill",
 	"data-quick": "download"
-}, Dp = {
+}, Mm = {
 	class: "nx-pill-icon",
 	title: "下载"
-}, Op = ["disabled"], kp = {
+}, Nm = ["disabled"], Pm = {
 	key: 0,
 	class: "nx-quick-error",
 	role: "alert"
-}, Ap = {
+}, Fm = {
 	key: 1,
 	class: "nx-quick-note",
 	role: "status"
-}, jp = {
+}, Im = {
 	__name: "QuickPanel",
 	props: { context: Object },
 	setup(e) {
 		let t = Object.create(e.context);
 		t.compact = !0;
-		let n = Ec(t), r = /* @__PURE__ */ F(""), i = Z(() => !!n.state?.proxy?.config_saved), a = Z(() => !!n.state?.proxy?.running), o = Z(() => Object.entries(n.proxy?.proxies || {}).filter(([e, t]) => e !== "GLOBAL" && Array.isArray(t.all) && t.type === "Selector")), s = Z(() => o.value[0] || null), c = Z(() => s.value?.[1]?.all || []), l = Z(() => s.value?.[1]?.now || ""), u = Z(() => c.value.map((e) => ({
+		let n = kc(t), r = /* @__PURE__ */ I(""), i = Z(() => !!n.state?.proxy?.config_saved), a = Z(() => !!n.state?.proxy?.running), o = Z(() => Object.entries(n.proxy?.proxies || {}).filter(([e, t]) => e !== "GLOBAL" && Array.isArray(t.all) && t.type === "Selector")), s = Z(() => o.value[0] || null), c = Z(() => s.value?.[1]?.all || []), l = Z(() => s.value?.[1]?.now || ""), u = Z(() => c.value.map((e) => ({
 			value: e,
 			label: e === "DIRECT" ? "直接连接" : e
 		}))), d = Z(() => n.systemProxyReady ? n.accelerated ? "已开启" : "未开启" : "读取中");
@@ -17296,32 +17768,32 @@ var Su = [
 			let e = r.value.trim();
 			await n.run("transfer.add", { url: e }, "已开始下载") && (r.value = "", await n.loadTasks());
 		}
-		return (e, t) => (U(), W("section", yp, [K("div", bp, [
+		return (e, t) => (U(), W("section", wm, [K("div", Tm, [
 			K("div", {
-				class: O(["nx-quick-pill", { "is-on": I(n).accelerated }]),
+				class: k(["nx-quick-pill", { "is-on": L(n).accelerated }]),
 				"data-quick": "acceleration"
 			}, [
-				K("span", xp, [q(I(yc), { size: 16 })]),
-				K("span", { class: O(["nx-pill-value", { "is-live": I(n).accelerated }]) }, k(d.value), 3),
+				K("span", Em, [q(L(Sc), { size: 16 })]),
+				K("span", { class: k(["nx-pill-value", { "is-live": L(n).accelerated }]) }, A(d.value), 3),
 				K("button", {
-					class: O(["nx-mini-action", { "is-on": I(n).accelerated }]),
-					"aria-pressed": I(n).accelerated,
-					"aria-label": I(n).accelerated ? "关闭加速" : "开启加速",
-					title: I(n).accelerated ? "关闭加速" : "开启加速",
-					disabled: !!I(n).busy || !I(n).state || !I(n).systemProxyReady,
+					class: k(["nx-mini-action", { "is-on": L(n).accelerated }]),
+					"aria-pressed": L(n).accelerated,
+					"aria-label": L(n).accelerated ? "关闭加速" : "开启加速",
+					title: L(n).accelerated ? "关闭加速" : "开启加速",
+					disabled: !!L(n).busy || !L(n).state || !L(n).systemProxyReady,
 					"data-quick-action": "acceleration",
-					onClick: t[0] ||= (e) => I(n).toggleAcceleration()
-				}, [q(I(lc), { size: 14 })], 10, Sp)
+					onClick: t[0] ||= (e) => L(n).toggleAcceleration()
+				}, [q(L(dc), { size: 14 })], 10, Dm)
 			], 2),
 			K("div", {
-				class: O(["nx-quick-pill", { "is-on": a.value }]),
+				class: k(["nx-quick-pill", { "is-on": a.value }]),
 				"data-quick": "proxy"
 			}, [
-				K("span", Cp, [q(I(tc), { size: 16 })]),
-				K("div", wp, [q(ku, {
+				K("span", Om, [q(L(nc), { size: 16 })]),
+				K("div", km, [q(vl, {
 					"model-value": l.value,
 					options: u.value,
-					disabled: !!I(n).busy || !c.value.length,
+					disabled: !!L(n).busy || !c.value.length,
 					placeholder: "无可用节点",
 					"aria-label": "更换节点",
 					"data-network-quick-node": "",
@@ -17333,16 +17805,16 @@ var Su = [
 					"disabled"
 				])]),
 				K("button", {
-					class: O(["nx-mini-action", { "is-on": a.value }]),
+					class: k(["nx-mini-action", { "is-on": a.value }]),
 					"aria-pressed": a.value,
 					"aria-label": a.value ? "关闭代理" : "开启代理",
 					title: a.value ? "关闭代理" : "开启代理",
-					disabled: !!I(n).busy || !I(n).state,
+					disabled: !!L(n).busy || !L(n).state,
 					"data-quick-action": "proxy",
 					onClick: p
-				}, [q(I(lc), { size: 14 })], 10, Tp)
+				}, [q(L(dc), { size: 14 })], 10, Am)
 			], 2),
-			K("div", Ep, [K("span", Dp, [q(I(Ys), { size: 16 })]), K("form", {
+			K("div", jm, [K("span", Mm, [q(L(Ys), { size: 16 })]), K("form", {
 				class: "nx-download-form",
 				onSubmit: bs(h, ["prevent"])
 			}, [z(K("input", {
@@ -17352,36 +17824,36 @@ var Su = [
 				placeholder: "URL",
 				required: ""
 			}, null, 512), [[Q, r.value]]), K("button", {
-				class: O(["nx-mini-action", { "is-ready": r.value.trim() }]),
-				disabled: !!I(n).busy || !r.value.trim(),
+				class: k(["nx-mini-action", { "is-ready": r.value.trim() }]),
+				disabled: !!L(n).busy || !r.value.trim(),
 				"aria-label": "开始下载",
 				title: "开始下载"
-			}, [q(I(Rs), { size: 14 })], 10, Op)], 32)])
-		]), I(n).error || I(n).connectionError ? (U(), W("p", kp, k(I(n).error || "暂时无法连接网络服务"), 1)) : I(n).notice ? (U(), W("p", Ap, k(I(n).notice), 1)) : Y("", !0)]));
+			}, [q(L(Rs), { size: 14 })], 10, Nm)], 32)])
+		]), L(n).error || L(n).connectionError ? (U(), W("p", Pm, A(L(n).error || "暂时无法连接网络服务"), 1)) : L(n).notice ? (U(), W("p", Fm, A(L(n).notice), 1)) : Y("", !0)]));
 	}
-}, Mp = ".workspace-main.nx-plugin-full{padding:0!important}.workspace-main.nx-plugin-full>.thread-header[data-full-area-header]{display:none}.workspace-main.nx-plugin-full .split-plugin-page{border-radius:0}.workspace-main.nx-plugin-full .split-content-toolbar{display:none}.workspace-main.nx-plugin-full .split-plugin-page__host{padding:0}.workspace-main.nx-plugin-full .plugin-page-instance,.workspace-main.nx-plugin-full .nx-mount{height:100%;min-height:0}.nx-host>.split-content-toolbar{display:none}.nx-host>.split-plugin-page__host{padding:0}.nx-mount{height:min(780px,76vh);min-height:420px}.nx-host .nx-mount{height:100%;min-height:360px}.nx-mount--quick{height:auto!important;min-height:0!important}.nx-app{--nx-bg:var(--theme-main-background,#111416);--nx-rail:color-mix(in srgb, var(--theme-main-background,#111416) 86%, var(--theme-main-text,#e8eeeb));--nx-panel:color-mix(in srgb, var(--theme-main-background,#111416) 92%, var(--theme-main-text,#e8eeeb));--nx-panel-hover:color-mix(in srgb, var(--theme-main-background,#111416) 84%, var(--theme-main-text,#e8eeeb));--nx-input:color-mix(in srgb, var(--theme-main-background,#111416) 78%, var(--theme-main-text,#e8eeeb));--nx-text:var(--theme-main-text,#e8eeeb);--nx-muted:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 62%, transparent);--nx-faint:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 42%, transparent);--nx-line:var(--theme-main-border,color-mix(in srgb, var(--theme-main-text,#e8eeeb) 14%, transparent));--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-error:var(--red,#ef9c9f);--nx-warning:var(--orange,var(--nx-warning));background:var(--nx-bg);width:100%;height:100%;min-height:360px;color:var(--nx-text);font-family:var(--font-sans,Inter, \"Segoe UI\", \"Microsoft YaHei\", sans-serif);text-align:left;border-radius:0;font-size:13px;line-height:1.5;display:flex;overflow:hidden;container:nx-shell/inline-size}.nx-app *{box-sizing:border-box}.nx-app button,.nx-app input,.nx-app select,.nx-app textarea{font:inherit}.nx-app button{cursor:pointer}.nx-app button:disabled{cursor:default;opacity:.42}.nx-app svg{vertical-align:middle;flex-shrink:0}.nx-app h1,.nx-app h2,.nx-app h3,.nx-app p{margin:0}.nx-app h2{letter-spacing:-.015em;font-size:14px;font-weight:600;line-height:1.5}.nx-app h3{font-size:13px;font-weight:600}.nx-app button:focus-visible,.nx-app a:focus-visible{outline:2px solid var(--nx-accent);outline-offset:3px}.nx-app input:focus-visible,.nx-app textarea:focus-visible,.nx-app select:focus-visible{outline:1px solid color-mix(in srgb, var(--nx-accent) 65%, transparent);outline-offset:1px}.nx-app ::selection{color:var(--nx-text);background:#315846}.nx-sidebar{background:var(--nx-rail);border-right:1px solid var(--nx-line);flex-direction:column;flex:0 0 88px;align-items:stretch;width:88px;padding:22px 12px 16px;display:flex}.nx-brand{color:var(--nx-accent);flex-direction:column;align-items:center;gap:7px;padding-bottom:24px;display:flex}.nx-brand span{letter-spacing:.02em;color:var(--nx-muted);font-size:10px;font-weight:550}.nx-sidebar nav{flex-direction:column;flex:1;gap:5px;min-height:0;display:flex;overflow-y:auto}.nx-nav-item{min-height:53px;color:var(--nx-muted);background:0 0;border:0;border-radius:11px;flex-direction:column;justify-content:center;align-items:center;gap:5px;transition:background .16s,color .16s;display:flex;position:relative}.nx-nav-item span{font-size:11px}.nx-nav-item:hover{background:color-mix(in srgb, var(--nx-text) 6%, transparent);color:var(--nx-text)}.nx-nav-item.is-active{background:color-mix(in srgb, var(--nx-accent) 11%, transparent);color:var(--nx-accent)}.nx-nav-item.is-active:before{content:\"\";background:var(--nx-accent);border-radius:2px;width:2px;position:absolute;top:13px;bottom:13px;left:0}.nx-nav-divider{background:var(--nx-line);height:1px;margin:14px 8px}.nx-sidebar-foot{color:var(--nx-faint);justify-content:center;align-items:center;gap:6px;margin-top:auto;padding-top:26px;font-size:10px;display:flex}.nx-live-dot{background:var(--nx-accent);border-radius:50%;flex:none;width:6px;height:6px;display:inline-block}.nx-live-dot.is-offline{background:var(--nx-faint)}.nx-workspace{flex-direction:column;flex:1;min-width:0;display:flex;overflow:hidden}.nx-header{border-bottom:1px solid var(--nx-line);flex-shrink:0;justify-content:space-between;align-items:center;gap:16px;padding:22px 30px 18px;display:flex}.nx-header h1{letter-spacing:-.035em;font-size:25px;font-weight:620;line-height:1.3}.nx-header p{color:var(--nx-faint);margin-top:5px;font-size:12px}.nx-header-actions{align-items:center;gap:15px;display:flex}.nx-live-label{color:var(--nx-muted);align-items:center;gap:7px;font-size:11px;display:flex}.nx-working{color:var(--nx-muted);font-size:12px}.nx-content{flex:1;min-height:0;padding:20px 30px 30px;overflow:auto}.nx-content>*{width:100%;min-width:0;max-width:1180px;margin-inline:auto}.nx-eyebrow{color:var(--nx-faint);letter-spacing:.18em;margin-bottom:6px;font-size:9px;font-weight:600;display:block}.nx-page-enter-active,.nx-page-leave-active{transition:opacity .18s,transform .18s}.nx-page-enter-from{opacity:0;transform:translateY(6px)}.nx-page-leave-to{opacity:0;transform:translateY(-4px)}.nx-home{flex-direction:column;gap:16px;display:flex}.nx-stat-bar{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;grid-template-columns:repeat(4,minmax(0,1fr));display:grid;overflow:hidden}.nx-stat{flex-direction:column;gap:5px;min-width:0;padding:15px 20px;display:flex}.nx-stat+.nx-stat{border-left:1px solid var(--nx-line)}.nx-stat>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:11px;display:flex}.nx-stat>strong{font-variant-numeric:tabular-nums;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap;font-size:20px;font-weight:600;overflow:hidden}.nx-stat[data-stat=download]>strong{color:var(--nx-accent)}.nx-home-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;display:grid}.nx-quick-card{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:18px;flex-direction:column;gap:15px;min-height:236px;padding:20px;transition:border-color .18s;display:flex}.nx-quick-card.is-on{border-color:color-mix(in srgb, var(--nx-accent) 34%, var(--nx-line))}.nx-quick-head{align-items:center;gap:10px;min-width:0;display:flex}.nx-quick-icon{background:var(--nx-input);width:38px;height:38px;color:var(--nx-muted);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-route-icon{background:color-mix(in srgb, var(--nx-accent) 12%, transparent);width:38px;height:38px;color:var(--nx-accent);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-quick-card.is-on .nx-quick-icon{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent)}.nx-quick-title{flex:1;min-width:0}.nx-quick-title h2{font-size:14px}.nx-quick-title p{color:var(--nx-faint);margin-top:1px;font-size:10px}.nx-quick-state{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:999px;padding:3px 8px;font-size:10px}.nx-quick-state.is-live{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent);border-color:#0000}.nx-quick-main{flex-direction:column;gap:3px;min-width:0;display:flex}.nx-quick-main>strong{letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:600;overflow:hidden}.nx-quick-main>p{color:var(--nx-muted);text-overflow:ellipsis;white-space:nowrap;font-size:11px;overflow:hidden}.nx-quick-actions{align-items:center;gap:8px;margin-top:auto;display:flex}.nx-quick-actions>.nx-button:first-child{flex:1;min-height:38px}.nx-quick-link{color:var(--nx-muted);gap:3px;padding-inline:8px;font-size:11px}.nx-quick-actions--stack{flex-direction:column;align-items:stretch;gap:6px}.nx-home-download{gap:8px;min-width:0;display:flex}.nx-home-download>.nx-input{flex:1;min-width:0;min-height:38px}.nx-home-download>.nx-button{border-radius:var(--radius-sm,6px);gap:7px;min-height:34px;padding:7px 12px;font-size:12px;font-weight:550;line-height:1.4}.nx-button svg{stroke-width:1.7px}.nx-icon-button{min-width:32px;min-height:32px;padding:6px}.nx-danger-text{color:var(--nx-error)}.nx-actions{flex-wrap:wrap;align-items:center;gap:8px;display:flex}.nx-notice{background:color-mix(in srgb, var(--nx-accent) 9%, var(--nx-panel));color:var(--nx-text);border:1px solid var(--nx-line);border-radius:10px;flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;margin:0 30px 18px;padding:10px 12px;font-size:12px;display:flex}.nx-notice--error{color:var(--nx-error);background:#2e2023;border-color:#4b3037}.nx-notice>span{overflow-wrap:anywhere;min-width:0}.nx-notice .nx-button{color:inherit;flex-shrink:0}.nx-acceleration{background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel));align-items:center;gap:17px;padding:23px 24px;display:flex}.nx-acceleration-icon{background:color-mix(in srgb, var(--nx-accent) 10%, var(--nx-panel));width:52px;height:52px;color:var(--nx-muted);border-radius:16px;flex:0 0 52px;place-items:center;display:grid}.nx-acceleration-icon.is-on{color:var(--nx-accent);background:#294d3a}.nx-acceleration-copy{flex:1;min-width:0}.nx-acceleration-copy h2{align-items:center;gap:10px;font-size:17px;font-weight:600;display:flex}.nx-acceleration-copy p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:6px;font-size:12px}.nx-badge{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:450}.nx-badge.is-on{color:var(--nx-accent);background:#233a2d;border-color:#3e5c4a}.nx-acceleration>.nx-button{min-height:39px;padding-inline:16px}.nx-node-toolbar{justify-content:space-between;align-items:center;gap:12px;margin:-2px 0 10px;display:flex}.nx-optimize{white-space:nowrap;margin-left:auto}.nx-node-head-actions{align-items:center;gap:6px;display:flex}.nx-line-groups{flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;display:flex}.nx-line-group{border:1px solid var(--nx-line);color:var(--nx-muted);background:0 0;border-radius:999px;padding:6px 12px;font-size:11px;transition:background .16s,border-color .16s,color .16s}.nx-line-group:hover{background:var(--nx-panel-hover);color:var(--nx-text)}.nx-line-group.is-active{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 10%, transparent);color:var(--nx-text)}.nx-line-groups .nx-subtle{margin-left:auto}.nx-line-list{flex-direction:column;max-height:430px;margin:0 -8px;display:flex;overflow:auto}.nx-line-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:6px;display:flex}.nx-line-row:last-child{border-bottom:0}.nx-line-choice{min-width:0;color:var(--nx-text);text-align:left;background:0 0;border:0;border-radius:10px;flex:1;align-items:center;gap:12px;padding:13px 8px;display:flex}.nx-line-choice:hover{background:var(--nx-panel-hover)}.nx-line-row.is-selected .nx-line-choice{background:color-mix(in srgb, var(--nx-accent) 7%, transparent)}.nx-line-radio{border:1px solid var(--nx-line);width:16px;height:16px;color:var(--nx-accent-ink);border-radius:50%;flex:0 0 16px;place-items:center;display:grid}.nx-line-row.is-selected .nx-line-radio{border-color:var(--nx-accent);background:var(--nx-accent)}.nx-line-name{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:13px;overflow:hidden}.nx-line-exit{text-overflow:ellipsis;white-space:nowrap;flex:0 auto;max-width:34%;font-size:11px;overflow:hidden}.nx-line-meter{background:var(--nx-line);border-radius:999px;flex:0 0 120px;width:120px;height:4px;overflow:hidden}.nx-line-meter i{border-radius:inherit;background:var(--nx-accent);height:100%;transition:width .3s;display:block}.nx-line-meter.is-mid i{background:var(--nx-warning)}.nx-line-meter.is-slow i{background:var(--nx-error)}.nx-line-meter.is-unknown i{background:var(--nx-faint)}.nx-line-ms{width:62px;color:var(--nx-muted);font-variant-numeric:tabular-nums;text-align:right;flex:0 0 62px;font-size:11px}.nx-line-refresh{opacity:.35}.nx-line-row:hover .nx-line-refresh,.nx-line-row.is-selected .nx-line-refresh{opacity:1}.nx-node-list{max-height:380px;margin-inline:-8px;overflow:auto}.nx-node-list--compact{max-height:206px}.nx-node{border-radius:9px;align-items:center;min-width:0;display:flex}.nx-node:hover{background:color-mix(in srgb, var(--nx-text) 4%, transparent)}.nx-node.is-selected{background:#25352b}.nx-node-choice{text-align:left;width:100%;min-width:0;min-height:43px;color:var(--nx-text);background:0 0;border:0;border-radius:9px;align-items:center;gap:11px;padding:10px 9px;display:flex}.nx-node-name{text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:13px;overflow:hidden}.nx-node-delay{color:var(--nx-faint);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}.is-selected .nx-node-delay{color:#91b69e}.nx-radio-mark{border:1px solid #4d5a52;border-radius:50%;flex-shrink:0;place-items:center;width:16px;height:16px;display:grid}.is-selected .nx-radio-mark{background:var(--nx-accent);border-color:var(--nx-accent);color:var(--nx-accent-ink)}.nx-node-search{margin-bottom:10px}.nx-add-profile{margin-top:13px;padding-inline:4px;font-size:11px}.nx-select-wrap{align-items:center;gap:6px;min-width:0;display:flex;position:relative}.nx-select-wrap select{appearance:none;color:var(--nx-text);outline-offset:3px;cursor:pointer;background:0 0;border:0;max-width:220px;padding:1px 20px 1px 0;font-size:12px}.nx-select-wrap svg{pointer-events:none;color:var(--nx-faint);position:absolute;right:0}.nx-select-wrap option{background:var(--nx-panel);color:var(--nx-text)}.nx-speed{flex-direction:column;padding-bottom:15px;display:flex}.nx-speed-values{flex-wrap:wrap;gap:30px;margin-top:3px;display:flex}.nx-speed-values>span{align-items:center;gap:7px;min-width:0;display:flex}.nx-speed-values strong{letter-spacing:-.025em;font-variant-numeric:tabular-nums;font-size:19px;font-weight:550}.nx-speed-values small{color:var(--nx-faint);padding-top:4px;font-size:10px}.nx-speed-values>span:first-child>svg{color:var(--nx-accent)}.nx-speed-values>span:nth-child(2)>svg{color:var(--blue,#a2b8c6)}.nx-plot{min-height:153px;color:var(--nx-accent);flex:1;margin:17px -6px 0}.nx-plot>svg{width:100%;height:100%;overflow:visible}.nx-chart-grid{stroke:var(--nx-line);stroke-width:1px;fill:none;vector-effect:non-scaling-stroke}.nx-chart-area{stroke:none}.nx-chart-download{stroke:var(--nx-accent);stroke-width:2px;stroke-linejoin:round;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}.nx-chart-upload{stroke:var(--blue,#8a9ca5);stroke-width:1.5px;stroke-dasharray:4 5;fill:none;vector-effect:non-scaling-stroke;opacity:.65}.nx-chart-axis{color:var(--nx-faint);justify-content:space-between;gap:10px;margin-top:8px;font-size:10px;display:flex}.nx-chart-wait{height:100%;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:6px;font-size:12px;display:flex}.nx-chart-wait small{color:var(--nx-faint);font-size:11px}.nx-mode-options{flex-direction:column;gap:5px;display:flex}.nx-mode{width:100%;color:var(--nx-muted);text-align:left;background:0 0;border:1px solid #0000;border-radius:10px;align-items:center;gap:11px;min-width:0;padding:10px 8px;display:flex}.nx-mode:hover:not(:disabled){background:var(--nx-line)}.nx-mode[aria-checked=true]{color:var(--nx-text);background:#28372d;border-color:#3d5143}.nx-mode>span:nth-child(2){flex:1;gap:3px;min-width:0;display:grid}.nx-mode strong{font-size:12px;font-weight:550}.nx-mode small{color:var(--nx-faint);font-size:10px;line-height:1.5}.nx-mode-dot{border:1px solid #5c6c61;border-radius:50%;flex-shrink:0;width:13px;height:13px}.nx-mode[aria-checked=true] .nx-mode-dot{border:4px solid var(--nx-accent)}.nx-modes>.nx-help{margin-top:10px;font-size:11px}.nx-local-info>strong{color:var(--nx-muted);font-size:12px;font-weight:500}.nx-address{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;letter-spacing:-.015em;margin:7px 0 10px;font-size:18px;font-weight:500}.nx-local-info>.nx-button{padding-left:0;font-size:11px}.nx-total>div:not(.nx-panel-heading){justify-content:space-between;align-items:center;gap:12px;margin-top:11px;display:flex}.nx-total>div>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:12px;display:flex}.nx-total strong{font-variant-numeric:tabular-nums;font-size:14px;font-weight:500}.nx-total>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-input{border:1px solid var(--nx-line);background:var(--nx-input);width:100%;min-width:0;min-height:38px;color:var(--nx-text);accent-color:var(--nx-accent);border-radius:9px;padding:9px 12px;font-size:12px;line-height:1.5}.nx-input::placeholder{color:#839188;opacity:1}.nx-input option{background:var(--nx-panel);color:var(--nx-text)}.nx-inline-form{align-items:center;gap:10px;min-width:0;display:flex}.nx-inline-form>.nx-shared-select{flex:1;min-width:0}.nx-inline-form>.nx-input{flex:1}.nx-inline-form>.nx-button{flex-shrink:0;min-height:38px}.nx-input-with-icon,.nx-input-with-action{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-input-with-icon>svg{color:var(--nx-faint);pointer-events:none;position:absolute;left:12px}.nx-input-with-icon>.nx-input{padding-left:38px}.nx-input-with-action>.nx-input{padding-right:42px}.nx-input-with-action>.nx-button{position:absolute;right:4px}.nx-fit-select{min-width:100px;flex:0 auto!important;width:auto!important}.nx-form{gap:15px;display:grid}.nx-form>.nx-button{justify-self:start}.nx-form-grid{grid-template-columns:1fr 1fr;gap:16px;display:grid}.nx-form-grid>:is(label,.nx-form-field){gap:7px;min-width:0;display:grid}.nx-form-grid>:is(label,.nx-form-field)>span{color:var(--nx-muted);font-size:12px}.nx-code{resize:vertical;font-family:Cascadia Code,Consolas,monospace;font-size:12px;line-height:1.7}.nx-import>.nx-help{margin-bottom:13px}.nx-import-options{flex-wrap:wrap;gap:14px;margin-top:8px;display:flex}.nx-import-options>.nx-button{padding-left:0;font-size:11px}.nx-import>.nx-form{margin-top:12px}.nx-import-running{justify-content:space-between;align-items:center;gap:12px;margin-top:14px;display:flex}.nx-import-running .nx-button{font-size:11px}.nx-import>.nx-help:last-child{margin-top:12px;margin-bottom:0}.nx-site-shortcuts{flex-wrap:wrap;align-items:center;gap:4px;margin-top:8px;display:flex}.nx-site-shortcuts>span{color:var(--nx-faint);margin-right:4px;font-size:10px}.nx-site-shortcuts .nx-button{min-height:27px;padding:4px 6px;font-size:10px}.nx-recent{padding:18px 20px}.nx-recent>.nx-section-heading{margin-bottom:9px}.nx-event{border-bottom:1px solid #252e28;align-items:center;gap:11px;padding:11px 0;font-size:12px;display:flex}.nx-event>svg{color:var(--nx-faint)}.nx-event>span{overflow-wrap:anywhere;flex:1;min-width:0}.nx-event>time{color:var(--nx-faint);white-space:nowrap;font-size:10px}.nx-event:last-child{border-bottom:0;padding-bottom:0}.nx-empty{text-align:center;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:11px;padding:52px 20px;display:flex}.nx-empty>svg{color:#83968a;margin-bottom:3px}.nx-empty>strong{color:var(--nx-text);font-size:14px;font-weight:500}.nx-empty>p{max-width:35ch;color:var(--nx-muted);font-size:12px;line-height:1.7}.nx-empty>.nx-button{margin-top:5px}.nx-empty--small{padding:27px 10px}.nx-empty--small strong{font-size:12px}.nx-empty--small p{font-size:11px}.nx-control-row{align-items:center;gap:15px;display:flex}.nx-control-row--plain{padding:0}.nx-control-icon{color:#bfd0c4;background:#28322b;border-radius:11px;flex:0 0 40px;place-items:center;width:40px;height:40px;display:grid}.nx-control-copy{flex:1;min-width:0}.nx-control-copy strong{font-size:13px;font-weight:550}.nx-control-copy p{color:var(--nx-muted);margin-top:4px;font-size:11px;line-height:1.6}.nx-settings-fold{padding-top:3px}.nx-settings-fold>.nx-panel{margin-top:12px}.nx-detail-list{max-width:650px;margin:12px 0}.nx-detail-list>div{border-bottom:1px solid var(--nx-line);color:var(--nx-muted);justify-content:space-between;gap:15px;padding:10px 0;font-size:12px;display:flex}.nx-detail-list>div>span:last-child{align-items:center;gap:5px;display:flex}.nx-detail-list code{color:var(--nx-text);font-size:11px}.nx-download-composer>.nx-inline-form{margin-bottom:5px}.nx-download-stats{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:14px;grid-template-columns:repeat(3,minmax(0,1fr));display:grid;overflow:hidden}.nx-download-stats>div{justify-content:space-between;align-items:baseline;gap:10px;padding:12px 18px;display:flex}.nx-download-stats>div+div{border-left:1px solid var(--nx-line)}.nx-download-stats span{color:var(--nx-muted);font-size:11px}.nx-download-stats strong{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600}.nx-download-composer.is-dragging{border-color:color-mix(in srgb, var(--nx-accent) 55%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel))}.nx-download-options{flex-wrap:wrap;gap:8px 18px;margin:9px 0 4px;display:flex}.nx-download-options>:is(label,.nx-download-option){color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-download-options select{border:1px solid var(--nx-line);background:var(--nx-input);min-height:30px;color:var(--nx-text);border-radius:8px;padding:4px 8px;font-size:11px}.nx-options-button{padding-left:0;font-size:11px}.nx-download-composer>.nx-form-grid{padding-top:13px}.nx-checkbox{align-self:end;align-items:center;min-height:38px;gap:8px!important;display:flex!important}.nx-checkbox>input{accent-color:var(--nx-accent)}.nx-list-toolbar{justify-content:space-between;align-items:center;gap:12px;display:flex}.nx-filter-tabs{align-items:center;gap:5px;display:flex}.nx-filter-tabs>button{min-height:32px;color:var(--nx-muted);background:0 0;border:0;border-radius:8px;align-items:center;gap:7px;padding:6px 10px;font-size:12px;display:flex}.nx-filter-tabs>button.active{color:var(--nx-text);background:#29332c}.nx-filter-tabs>button:hover{background:#242e27}.nx-filter-tabs>button>span{color:var(--nx-faint);font-size:10px}.nx-task-list{padding:0 20px}.nx-download-row{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr) auto;align-items:center;column-gap:15px;padding:23px 0;display:grid}.nx-download-row:last-child{border-bottom:0}.nx-file-icon{color:#b3d5bd;background:#29352c;border-radius:10px;place-items:center;width:40px;height:45px;display:grid}.nx-download-body{min-width:0}.nx-task-title{justify-content:space-between;align-items:baseline;gap:12px;min-width:0;display:flex}.nx-task-title>strong{text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;overflow:hidden}.nx-task-title>span{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-progress-track{background:#313b34;border-radius:99px;height:4px;margin:10px 0 8px;overflow:hidden}.nx-progress-track>span{background:var(--nx-accent);border-radius:inherit;height:100%;transition:width .25s;display:block}.nx-task-meta{color:var(--nx-faint);font-variant-numeric:tabular-nums;flex-wrap:wrap;justify-content:space-between;gap:10px;font-size:10px;display:flex}.nx-meta-divider{color:var(--nx-faint);margin-inline:6px}.nx-task-controls{align-items:center;gap:5px;display:flex}.nx-task-details{grid-column:2/-1;gap:13px;padding:17px 0 0;display:grid}.nx-task-details>.nx-subtle{overflow-wrap:anywhere;font-size:11px}.nx-small-select{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-small-select select{background:var(--nx-input);border:1px solid var(--nx-line);min-height:30px;color:var(--nx-text);border-radius:7px;padding:4px 7px}.nx-state-error{color:var(--nx-error)!important}.nx-diagnose-start{text-align:center;padding:30px 28px 23px}.nx-diagnose-symbol{width:49px;height:49px;color:var(--nx-accent);background:#2a3d30;border-radius:15px;place-items:center;margin:0 auto 15px;display:grid}.nx-diagnose-start>h2{letter-spacing:-.025em;font-size:19px;font-weight:550}.nx-diagnose-start>p{color:var(--nx-muted);margin-top:7px;font-size:12px}.nx-diagnose-start>.nx-inline-form{max-width:580px;margin:22px auto 0}.nx-diagnose-options{color:var(--nx-muted);flex-wrap:wrap;justify-content:center;align-items:center;gap:20px;margin-top:17px;font-size:11px;display:flex}.nx-diagnose-options>label{cursor:pointer;align-items:center;gap:5px;display:flex}.nx-diagnose-options input{accent-color:var(--nx-accent);width:12px;height:12px;margin:0}.nx-report-heading{align-items:center;gap:14px;margin-bottom:20px;display:flex}.nx-result-icon{width:44px;height:44px;color:var(--nx-accent);background:#273f2f;border-radius:13px;place-items:center;display:grid}.nx-result-icon.is-failure{color:var(--nx-warning);background:#3c3324}.nx-report-heading h2{font-size:16px}.nx-report-heading p{color:var(--nx-muted);margin-top:4px;font-size:11px}.nx-check-list{gap:0;display:grid}.nx-check-row{border-bottom:1px solid var(--nx-line);grid-template-columns:20px minmax(0,1fr) auto 66px;align-items:center;gap:11px;min-height:47px;display:grid}.nx-check-row:last-child{border-bottom:0}.nx-check-status{width:18px;height:18px;color:var(--nx-accent);border:1px solid #3f5b49;border-radius:50%;place-items:center;display:grid}.nx-check-status.is-failure{color:var(--nx-error);border-color:#70504d}.nx-check-row strong{font-size:12px;font-weight:450}.nx-check-row>span:not(.nx-check-status){color:var(--nx-muted);font-size:11px}.nx-check-row time{color:var(--nx-faint);text-align:right;font-variant-numeric:tabular-nums;font-size:11px}.nx-report-advice{color:var(--nx-muted);font-size:12px;line-height:1.8;margin-top:17px!important}.nx-report-detail-button{margin-top:10px;padding-left:0;font-size:11px}.nx-check-evidence{gap:14px;margin-top:10px;display:grid}.nx-check-evidence>div{background:var(--nx-input);border-radius:9px;min-width:0;padding:12px}.nx-check-evidence strong{color:var(--nx-muted);font-size:11px;font-weight:500}.nx-check-evidence p{overflow-wrap:anywhere;white-space:pre-wrap;color:var(--nx-faint);margin-top:6px;font-size:11px;line-height:1.7}.nx-history>.nx-section-heading{padding-bottom:10px}.nx-history-row{border:0;border-bottom:1px solid var(--nx-line);text-align:left;width:100%;color:var(--nx-text);background:0 0;align-items:center;gap:12px;padding:13px 2px;display:flex}.nx-history-row:hover{background:color-mix(in srgb, var(--nx-text) 3%, transparent)}.nx-history-row>strong{text-overflow:ellipsis;flex:1;min-width:0;font-size:12px;font-weight:500;overflow:hidden}.nx-history-row>span:not(.nx-history-result),.nx-history-row>time{color:var(--nx-faint);font-size:10px}.nx-history-result{color:var(--nx-accent)}.nx-history-result.is-failure{color:var(--nx-warning)}.nx-diagnose-empty{padding-block:28px;font-size:12px}.nx-diagnose-pending>p{color:var(--nx-muted);margin-block:15px;font-size:12px}.nx-skeleton{background:linear-gradient(100deg, var(--nx-line) 20%, #303b33 45%, var(--nx-line) 70%);background-size:220% 100%;border-radius:8px;animation:1.6s infinite nx-loading-sheen}.nx-skeleton-title{width:180px;height:15px}.nx-skeleton-row{width:100%;height:35px;margin-block:10px}.nx-loading-banner{height:100px}.nx-loading-grid{grid-template-columns:1.7fr 1fr;gap:20px;margin-top:20px;display:grid}.nx-loading-chart{height:250px}.nx-loading>p{color:var(--nx-muted);margin-top:18px;font-size:12px}.nx-loading>.nx-button{margin-top:14px}.nx-interface-list{padding-block:0}.nx-interface{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr);gap:16px;padding:22px 0;display:grid}.nx-interface:last-child{border:0}.nx-interface strong{font-size:13px;font-weight:500}.nx-interface dl{gap:7px;margin:10px 0 0;display:grid}.nx-interface dl>div{gap:18px;min-width:0;font-size:11px;display:flex}.nx-interface dt{min-width:52px;color:var(--nx-faint)}.nx-interface dd{color:var(--nx-muted);overflow-wrap:anywhere;margin:0}.nx-query-result{border-top:1px solid var(--nx-line);padding-top:14px}.nx-query-address{font-variant-numeric:tabular-nums;margin-top:8px;font-size:13px}.nx-rule-row{grid-template-columns:minmax(0,1fr) minmax(100px,.65fr) 30px;gap:8px;display:grid}.nx-table-panel{padding:0;overflow:hidden}.nx-table-scroll{max-width:100%;overflow:auto}.nx-table{border-collapse:collapse;white-space:nowrap;text-align:left;width:100%;font-size:12px}.nx-table th{color:var(--nx-faint);border-bottom:1px solid var(--nx-line);padding:13px 17px;font-size:10px;font-weight:450}.nx-table td{color:var(--nx-muted);border-bottom:1px solid #29312c;padding:14px 17px}.nx-table tr:last-child td{border-bottom:0}.nx-table td strong{color:var(--nx-text);text-overflow:ellipsis;max-width:180px;font-size:12px;font-weight:500;display:block;overflow:hidden}.nx-table td small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-table tbody tr:hover{background:#202822}.nx-table .nx-data-cell{font-variant-numeric:tabular-nums;font-size:11px}.nx-protocol{color:var(--nx-faint);border:1px solid #39433c;border-radius:4px;padding:2px 5px;font-size:10px}.nx-connection-state{color:var(--nx-faint);font-size:11px}.nx-connection-state.is-live{color:#9bc9ac}.nx-table-loading{padding:10px 18px}.nx-load-more{border-top:1px solid var(--nx-line);border-radius:0;width:100%;min-height:39px;font-size:11px}.nx-application-actions{grid-template-columns:1fr 1fr;gap:24px;padding-block:8px;display:grid}.nx-application-actions p{color:var(--nx-muted);margin:6px 0 13px;font-size:11px}.nx-transaction-list>.nx-panel-heading{margin-bottom:5px}.nx-transaction{border-bottom:1px solid var(--nx-line);align-items:center;gap:13px;padding:16px 0;display:flex}.nx-transaction:last-child{border-bottom:0}.nx-transaction-icon{color:var(--nx-faint)}.nx-transaction>div{overflow-wrap:anywhere;flex:1;min-width:0}.nx-transaction strong{font-size:12px;font-weight:500}.nx-transaction p,.nx-transaction small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-status-text{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-status-text.is-warning{color:var(--nx-warning)}.nx-schedule-form{margin-top:15px}.nx-schedule-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:12px;padding:15px 0;display:flex}.nx-schedule-row:last-child{border-bottom:0}.nx-schedule-row>div{flex:1;min-width:0}.nx-schedule-row strong{overflow-wrap:anywhere;font-size:12px;font-weight:500}.nx-schedule-row small{color:var(--nx-faint);margin-top:4px;font-size:10px;display:block}.nx-settings-rows{padding-block:0}.nx-settings-rows>div{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:24px;padding:20px 0;display:flex}.nx-settings-rows>div:last-child{border:0}.nx-settings-rows strong{font-size:12px;font-weight:500;display:block}.nx-settings-rows small{color:var(--nx-muted);margin-top:5px;font-size:11px;display:block}.nx-host .plugin-page-instance{height:100%}.nx-quick-app{--nx-text:var(--theme-backdrop-text,var(--theme-main-text,#e8eeeb));--nx-muted:color-mix(in srgb, var(--nx-text) 60%, transparent);--nx-faint:color-mix(in srgb, var(--nx-text) 40%, transparent);--nx-line:color-mix(in srgb, var(--nx-text) 11%, transparent);--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-panel:transparent;--nx-panel-hover:color-mix(in srgb, var(--nx-text) 7%, transparent);--nx-input:color-mix(in srgb, var(--nx-text) 5%, transparent);background:0 0;border:0;border-radius:0;width:100%;max-width:100%;height:auto;min-height:0;padding:0;display:block;overflow:visible}.nx-pill-list{flex-direction:column;gap:8px;display:flex}.nx-quick-pill{border:1px solid color-mix(in srgb, var(--nx-text) 9%, transparent);background:color-mix(in srgb, var(--nx-text) 4%, transparent);width:100%;min-height:46px;box-shadow:inset 0 1px 0 color-mix(in srgb, var(--nx-text) 5%, transparent);color:var(--nx-text);border-radius:999px;align-items:center;gap:8px;padding:6px 8px 6px 10px;transition:border-color .16s,background .16s;display:flex}.nx-quick-pill:focus-within{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line))}.nx-quick-pill.is-on{border-color:color-mix(in srgb, var(--nx-accent) 30%, transparent);background:color-mix(in srgb, var(--nx-accent) 6%, transparent)}.nx-pill-icon{background:color-mix(in srgb, var(--nx-text) 6%, transparent);width:30px;height:30px;color:var(--nx-muted);border-radius:50%;flex:0 0 30px;place-items:center;display:grid}.nx-quick-pill.is-on .nx-pill-icon{background:color-mix(in srgb, var(--nx-accent) 13%, transparent);color:var(--nx-accent)}.nx-pill-value{min-width:0;color:var(--nx-muted);font-variant-numeric:tabular-nums;letter-spacing:-.01em;flex:1;font-size:11px}.nx-pill-value.is-live{color:var(--nx-accent)}.nx-mini-action{border:1px solid var(--nx-line);width:32px;height:32px;color:var(--nx-muted);background:0 0;border-radius:50%;flex:0 0 32px;place-items:center;padding:0;transition:border-color .16s,background .16s,color .16s;display:grid}.nx-mini-action:hover:not(:disabled){border-color:color-mix(in srgb, var(--nx-accent) 36%, var(--nx-line));color:var(--nx-text)}.nx-mini-action.is-on,.nx-mini-action.is-ready{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:#0000}.nx-mini-action:disabled{opacity:.38}.nx-node-wrap{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-quick-app .nx-node-wrap .ui-select{width:100%}.nx-quick-app .nx-node-wrap .ui-select-trigger{min-height:32px;color:var(--nx-text);background:0 0;border:0;padding-left:2px;font-size:11px}.nx-download-form{flex:1;align-items:center;gap:6px;min-width:0;display:flex}.nx-download-form>input{min-width:0;height:32px;color:var(--nx-text);background:0 0;border:0;outline:none;flex:1;padding:0 2px;font-size:11px}.nx-download-form>input::placeholder{color:var(--nx-faint)}.nx-quick-error,.nx-quick-note{overflow-wrap:anywhere;font-size:10px;line-height:1.5;margin:8px 4px 0!important}.nx-quick-error{color:var(--nx-error)}.nx-quick-note{color:var(--nx-accent)}@keyframes nx-loading-sheen{to{background-position:-220% 0}}@container nx-shell (width<=850px){.nx-sidebar{flex-basis:76px;width:76px;padding-inline:9px}.nx-header{padding:23px 22px 20px}.nx-content{padding:0 22px 24px}.nx-notice{margin-inline:22px}.nx-panel{padding:17px}.nx-dashboard-grid{grid-template-columns:minmax(0,1.65fr) minmax(205px,1fr);gap:16px}.nx-dashboard-hero{grid-template-columns:minmax(0,1.5fr) minmax(210px,1fr)}.nx-dashboard-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-dashboard-lower{grid-template-columns:minmax(0,1fr)}.nx-stat-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-stat:nth-child(3){border-top:1px solid var(--nx-line);border-left:0}.nx-stat:nth-child(4){border-top:1px solid var(--nx-line)}.nx-home-grid{grid-template-columns:minmax(0,1fr)}.nx-quick-card{min-height:0}.nx-proxy-top{grid-template-columns:minmax(0,1fr)}.nx-accel-control{grid-template-columns:auto minmax(0,1fr)}.nx-accel-control>.nx-button{grid-column:1/-1;width:100%}.nx-accel-grid,.nx-accel-lower{grid-template-columns:minmax(0,1fr)}.nx-dashboard-main,.nx-dashboard-side{gap:16px}.nx-acceleration{gap:13px;padding:19px 20px}.nx-acceleration-copy h2{font-size:16px}.nx-acceleration-icon{border-radius:13px;flex-basis:44px;width:44px;height:44px}.nx-speed-values{gap:19px}.nx-speed-values strong{font-size:17px}.nx-speed-values small{display:none}.nx-two-columns{grid-template-columns:minmax(0,1.4fr) minmax(205px,1fr);gap:16px}.nx-task-list{padding-block:0}.nx-task-meta{font-size:10px}.nx-total strong{font-size:13px}}@container nx-shell (width<=680px){.nx-dashboard-grid,.nx-two-columns{grid-template-columns:minmax(0,1fr)}.nx-line-meter{display:none}.nx-download-stats{grid-template-columns:minmax(0,1fr)}.nx-download-stats>div+div{border-top:1px solid var(--nx-line);border-left:0}.nx-dashboard-side{grid-template-columns:1fr 1fr;display:grid}.nx-dashboard-side>.nx-modes{grid-column:1/-1}.nx-dashboard-side .nx-mode-options{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;display:grid}.nx-dashboard-side .nx-mode{align-items:flex-start;gap:7px;padding:10px 8px}.nx-dashboard-side .nx-mode>svg{display:none}.nx-dashboard-side .nx-mode-dot{width:12px;height:12px;margin-top:2px}.nx-mode small{font-size:10px}.nx-acceleration-copy p{font-size:11px}.nx-acceleration>.nx-button{padding-inline:12px;font-size:11px}.nx-section-heading{gap:10px}.nx-section-heading p{font-size:11px}.nx-form-grid{grid-template-columns:1fr}.nx-application-actions{grid-template-columns:1fr;gap:22px}.nx-plot{height:160px}.nx-node-list--compact{max-height:190px}}@container nx-shell (width<=520px){.nx-sidebar{flex-basis:59px;width:59px;padding:18px 6px 12px}.nx-brand{padding-bottom:18px}.nx-brand span{display:none}.nx-nav-item{border-radius:9px;gap:4px;min-height:47px}.nx-nav-item span{font-size:10px}.nx-nav-item svg{width:18px;height:18px}.nx-nav-divider{margin-block:11px}.nx-sidebar-foot>span:last-child{display:none}.nx-header{padding:20px 16px 18px}.nx-header h1{font-size:23px}.nx-header p{font-size:11px}.nx-content{padding:0 16px 22px}.nx-notice{margin:0 16px 14px}.nx-header-actions{gap:5px}.nx-live-label{font-size:10px}.nx-live-label>.nx-live-dot{display:none}.nx-acceleration{flex-wrap:wrap;gap:12px;padding:17px}.nx-acceleration-copy{min-width:130px}.nx-acceleration-copy h2{gap:7px}.nx-acceleration>.nx-button{min-height:34px;margin-left:56px}.nx-acceleration-icon{flex-basis:42px;width:42px;height:42px}.nx-panel{padding:16px}.nx-dashboard,.nx-view-stack{gap:16px}.nx-dashboard-side{grid-template-columns:minmax(0,1fr)}.nx-dashboard-side>.nx-modes{grid-column:auto}.nx-dashboard-side .nx-mode-options{display:flex}.nx-dashboard-side .nx-mode>svg{display:block}.nx-dashboard-side .nx-mode{align-items:center}.nx-plot{height:140px}.nx-speed-values{gap:23px}.nx-speed-values strong{font-size:16px}.nx-inline-form{gap:8px}.nx-inline-form>.nx-button{padding-inline:10px;font-size:11px}.nx-inline-form .nx-fit-select{min-width:82px;font-size:11px}.nx-site-shortcuts{gap:1px}.nx-site-shortcuts>span{width:100%;margin-bottom:3px}.nx-download-row{grid-template-columns:28px minmax(0,1fr) auto;gap:10px;padding-block:19px}.nx-file-icon{border-radius:8px;width:28px;height:35px}.nx-file-icon>svg{width:17px}.nx-task-title{flex-direction:column;align-items:flex-start;gap:3px}.nx-task-title>strong{max-width:100%;font-size:12px}.nx-task-title>span{font-size:9px}.nx-task-controls{gap:1px}.nx-task-controls>.nx-icon-button{min-width:27px;padding:4px}.nx-task-meta{gap:4px;font-size:9px}.nx-task-meta>span{width:100%}.nx-task-details{grid-column:1/-1;padding-top:14px}.nx-filter-tabs>button{padding-inline:8px;font-size:11px}.nx-task-list{padding-block:0}.nx-diagnose-start{padding:24px 16px 18px}.nx-diagnose-start>h2{font-size:17px}.nx-diagnose-start>.nx-inline-form{margin-top:18px}.nx-diagnose-options{gap:12px;font-size:10px}.nx-check-row{grid-template-columns:18px minmax(0,1fr) auto 47px;gap:8px}.nx-check-row strong{font-size:11px}.nx-check-row time{font-size:10px}.nx-history-row{gap:9px}.nx-history-row>span:not(.nx-history-result){display:none}.nx-history-row>time{font-size:9px}.nx-section-heading>div{min-width:0}.nx-section-heading h2{font-size:13px}.nx-section-heading>.nx-button{padding-inline:9px;font-size:11px}.nx-schedule-form{flex-wrap:wrap}.nx-schedule-form>.nx-input:first-child{flex-basis:100%}.nx-schedule-row{gap:8px}.nx-schedule-row>.nx-button:not(.nx-icon-button){padding-inline:5px;font-size:10px}.nx-schedule-row strong{font-size:11px}.nx-settings-rows>div{gap:12px}.nx-settings-rows small{font-size:10px}.nx-event{gap:8px;font-size:11px}.nx-event>time{font-size:9px}.nx-rule-row{grid-template-columns:minmax(0,1fr) 96px 24px;gap:5px}.nx-rule-row .nx-input{padding-inline:8px;font-size:11px}.nx-loading-grid{grid-template-columns:1fr}.nx-loading-grid>.nx-skeleton:last-child{display:none}}@media (prefers-reduced-motion:reduce){.nx-app *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}", Np = ".btn{justify-content:center;align-items:center;gap:var(--space-1);font:inherit;white-space:nowrap;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);border:1px solid #0000;display:inline-flex}.btn:disabled{opacity:.45;cursor:default}.btn:not(:disabled):active{transform:translateY(1px)}.btn--secondary,.btn--primary,.btn--quiet{border-radius:12px;min-height:32px;padding:8px 11px;font-size:13px}.btn--primary{background:var(--settings-control-solid,var(--theme-control-solid,#fbf7f0));color:var(--settings-control-text,var(--theme-control-text,#2e3138))}.btn--primary.btn--material{background:var(--settings-control-background,var(--theme-control-background,var(--theme-control-solid,#fbf7f0)));background-image:var(--theme-control-image,none);background-size:var(--theme-control-image-size,auto);background-repeat:var(--theme-control-image-repeat,no-repeat);-webkit-backdrop-filter:var(--theme-control-glass-filter,none);backdrop-filter:var(--theme-control-glass-filter,none);background-position:50%}.btn--primary:hover:not(:disabled){filter:brightness(.94)}.btn--secondary{background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent);color:var(--settings-main-text,var(--theme-main-text,#f2efeb))}.btn--secondary:hover:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-active), transparent)}.btn--secondary:active:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-press), transparent)}:is(.btn--quiet,.btn--ghost){color:var(--settings-main-text,var(--theme-main-text,#f2efeb));background:0 0}:is(.btn--quiet,.btn--ghost):hover:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent)}:is(.btn--quiet,.btn--ghost):active:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-active), transparent)}.btn--ghost{border-radius:var(--radius-sm);min-height:32px;padding:0 7px;font-size:12px}.btn--danger{color:color-mix(in srgb, var(--red) 55%, var(--settings-main-text,var(--theme-main-text,#f2efeb)))}.btn--danger:hover:not(:disabled){color:color-mix(in srgb, var(--red) 55%, var(--settings-main-text,var(--theme-main-text,#f2efeb)));background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent)}.btn.btn--sm{border-radius:var(--radius-sm);min-height:30px;padding:0 14px;font-size:12px}@media (prefers-reduced-motion:reduce){.btn{transition:none}.btn:not(:disabled):active{transform:none}}", Pp = ".sunday-switch{--sunday-signal:var(--settings-control-solid,var(--theme-control-solid,var(--theme-control-background,#fbf7f0)));--sunday-signal-ink:var(--settings-control-text,var(--theme-control-text,#2e3138));--sunday-area-text:var(--settings-main-text,var(--theme-main-text,#f2efeb));--sunday-w:40px;--sunday-h:24px;--sunday-pad:3px;--sunday-thumb:16px;--sunday-travel:calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb));cursor:pointer;flex:none;align-items:center;display:inline-flex;position:relative}.sunday-switch--sm{--sunday-w:34px;--sunday-h:20px;--sunday-pad:2px;--sunday-thumb:14px;--sunday-travel:calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb))}.sunday-switch__input{z-index:2;opacity:0;cursor:pointer;width:100%;height:100%;margin:0;position:absolute;inset:0}.sunday-switch__input:disabled{cursor:not-allowed}.sunday-switch__track{width:var(--sunday-w);height:var(--sunday-h);border:1px solid color-mix(in srgb, var(--sunday-area-text) 18%, transparent);border-radius:var(--radius-sm);background:color-mix(in srgb, var(--sunday-area-text) 6%, transparent);transition:background-color var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);flex:none;position:relative}.sunday-switch__thumb{top:var(--sunday-pad);left:var(--sunday-pad);width:var(--sunday-thumb);height:var(--sunday-thumb);border-radius:calc(var(--radius-sm) / 2);background:color-mix(in srgb, var(--sunday-area-text) 46%, transparent);transition:transform var(--dur-slow) var(--ease-out), background-color var(--dur-base) var(--ease-out);position:absolute}.sunday-switch:hover .sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 32%, transparent)}.sunday-switch:hover .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 62%, transparent)}.sunday-switch__input:checked+.sunday-switch__track{border-color:var(--sunday-signal);background:var(--sunday-signal)}.sunday-switch__input:checked+.sunday-switch__track .sunday-switch__thumb{background:var(--sunday-signal-ink);transform:translateX(var(--sunday-travel))}.sunday-switch:hover .sunday-switch__input:checked+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink));background:color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink))}.sunday-switch__input:focus-visible+.sunday-switch__track{outline:2px solid var(--blue);outline-offset:2px}.sunday-switch:has(.sunday-switch__input:disabled){cursor:not-allowed}.sunday-switch__input:disabled+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 10%, transparent);background:color-mix(in srgb, var(--sunday-area-text) 4%, transparent)}.sunday-switch__input:disabled+.sunday-switch__track .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 24%, transparent)}.sunday-switch__input:disabled:checked+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 12%, transparent);background:color-mix(in srgb, var(--sunday-area-text) 12%, transparent)}.sunday-switch__input:disabled:checked+.sunday-switch__track .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 44%, transparent);transform:translateX(var(--sunday-travel))}.sunday-switch__label{color:inherit;font-size:inherit;white-space:nowrap;margin-inline-start:var(--space-2);line-height:1.3}@media (prefers-reduced-motion:reduce){.sunday-switch__track,.sunday-switch__thumb{transition:none}}", Fp = ".ui-select{--ui-select-arrow-inset:11px;--ui-select-arrow-size:7px;--ui-select-arrow-gap:var(--space-1);min-width:0;position:relative}.ui-select-trigger{border:1px solid color-mix(in srgb, var(--settings-control-text,var(--theme-control-text,#f4f1ec)) 12%, transparent);border-radius:var(--radius-sm);background:color-mix(in srgb, var(--settings-control-solid,var(--theme-control-solid,#242424)) 70%, transparent);width:100%;min-height:32px;color:var(--settings-control-text,var(--theme-control-text,#f4f1ec));padding:0 calc(var(--ui-select-arrow-inset) + var(--ui-select-arrow-size) + var(--ui-select-arrow-gap)) 0 var(--space-2);text-align:left;align-items:center;font-size:13px;display:inline-flex}.ui-select-trigger:disabled{opacity:.45;cursor:default}.ui-select-trigger span:first-child{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.ui-select-arrow{right:var(--ui-select-arrow-inset);width:var(--ui-select-arrow-size);height:var(--ui-select-arrow-size);opacity:.7;transition:transform var(--dur-fast) var(--ease-out);border-bottom:1.5px solid;border-right:1.5px solid;position:absolute;top:50%;transform:translateY(-65%)rotate(45deg)}.ui-select.open .ui-select-arrow{transform:translateY(-35%)rotate(225deg)}.ui-select-menu{z-index:var(--ui-select-layer,var(--z-popover,60));border:1px solid color-mix(in srgb, currentColor 12%, transparent);border-radius:var(--radius);background:var(--settings-control-solid,var(--theme-control-background,#242424));max-height:320px;color:var(--settings-control-text,var(--theme-control-text,#f4f1ec));box-shadow:var(--shadow-md);transform-origin:top;gap:4px;padding:6px;display:grid;position:fixed;top:0;left:0;overflow:auto}.ui-select-menu--up{transform-origin:bottom}.ui-select-group{gap:2px;display:grid}.ui-select-group+.ui-select-group{border-top:1px solid color-mix(in srgb, currentColor 12%, transparent);margin-top:6px;padding-top:6px}.ui-select-group-label{color:color-mix(in srgb, currentColor 72%, transparent);white-space:nowrap;text-overflow:ellipsis;padding:4px 9px 3px;font-size:12px;font-weight:700;line-height:1.35;overflow:hidden}.ui-select-option{min-height:30px;color:inherit;text-align:left;white-space:nowrap;text-overflow:ellipsis;background:0 0;border:0;border-radius:0;padding:5px 9px;font-size:13px;line-height:1.35;display:block;position:relative;overflow:hidden}.ui-select-option:before{content:\"\";pointer-events:none;-webkit-mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);-webkit-mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);background:0 0;border-radius:0;position:absolute;inset:0}.ui-select-option:hover:before,.ui-select-option:focus-visible:before{background:color-mix(in srgb, currentColor var(--alpha-hover), transparent)}.ui-select-option:focus-visible{outline:none}.ui-select-option.active:before{background:color-mix(in srgb, currentColor var(--alpha-active), transparent)}.ui-select-option.active.active-accent{color:var(--green,#32d17d);background:0 0}.ui-select-option.separator-before{margin-top:7px;position:relative}.ui-select-option.separator-before:after{content:\"\";background:color-mix(in srgb, currentColor 16%, transparent);height:1px;position:absolute;top:-4px;left:9px;right:9px}.ui-select-option.disabled{opacity:.45;cursor:default}@media (prefers-reduced-motion:reduce){.ui-select-arrow{transition:none}}";
+}, Lm = ".workspace-main.nx-plugin-full{padding:0!important}.workspace-main.nx-plugin-full>.thread-header[data-full-area-header]{display:none}.workspace-main.nx-plugin-full .split-plugin-page{border-radius:0}.workspace-main.nx-plugin-full .split-content-toolbar{display:none}.workspace-main.nx-plugin-full .split-plugin-page__host{padding:0}.workspace-main.nx-plugin-full .plugin-page-instance,.workspace-main.nx-plugin-full .nx-mount{height:100%;min-height:0}.nx-host>.split-content-toolbar{display:none}.nx-host>.split-plugin-page__host{padding:0}.nx-mount{height:min(780px,76vh);min-height:420px}.nx-host .nx-mount{height:100%;min-height:360px}.nx-mount--quick{height:auto!important;min-height:0!important}.nx-app{--nx-bg:var(--theme-main-background,#111416);--nx-rail:color-mix(in srgb, var(--theme-main-background,#111416) 86%, var(--theme-main-text,#e8eeeb));--nx-panel:color-mix(in srgb, var(--theme-main-background,#111416) 92%, var(--theme-main-text,#e8eeeb));--nx-panel-hover:color-mix(in srgb, var(--theme-main-background,#111416) 84%, var(--theme-main-text,#e8eeeb));--nx-input:color-mix(in srgb, var(--theme-main-background,#111416) 78%, var(--theme-main-text,#e8eeeb));--nx-text:var(--theme-main-text,#e8eeeb);--nx-muted:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 62%, transparent);--nx-faint:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 42%, transparent);--nx-line:var(--theme-main-border,color-mix(in srgb, var(--theme-main-text,#e8eeeb) 14%, transparent));--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-error:var(--red,#ef9c9f);--nx-warning:var(--orange,var(--nx-warning));background:var(--nx-bg);width:100%;height:100%;min-height:360px;color:var(--nx-text);font-family:var(--font-sans,Inter, \"Segoe UI\", \"Microsoft YaHei\", sans-serif);text-align:left;border-radius:0;font-size:13px;line-height:1.5;display:flex;overflow:hidden;container:nx-shell/inline-size}.nx-app *{box-sizing:border-box}.nx-app button,.nx-app input,.nx-app select,.nx-app textarea{font:inherit}.nx-app button{cursor:pointer}.nx-app button:disabled{cursor:default;opacity:.42}.nx-app svg{vertical-align:middle;flex-shrink:0}.nx-app h1,.nx-app h2,.nx-app h3,.nx-app p{margin:0}.nx-app h2{letter-spacing:-.015em;font-size:14px;font-weight:600;line-height:1.5}.nx-app h3{font-size:13px;font-weight:600}.nx-app button:focus-visible,.nx-app a:focus-visible{outline:2px solid var(--nx-accent);outline-offset:3px}.nx-app input:focus-visible,.nx-app textarea:focus-visible,.nx-app select:focus-visible{outline:1px solid color-mix(in srgb, var(--nx-accent) 65%, transparent);outline-offset:1px}.nx-app ::selection{color:var(--nx-text);background:#315846}.nx-sidebar{background:var(--nx-rail);border-right:1px solid var(--nx-line);flex-direction:column;flex:0 0 88px;align-items:stretch;width:88px;padding:22px 12px 16px;display:flex}.nx-brand{color:var(--nx-accent);flex-direction:column;align-items:center;gap:7px;padding-bottom:24px;display:flex}.nx-brand span{letter-spacing:.02em;color:var(--nx-muted);font-size:10px;font-weight:550}.nx-sidebar nav{flex-direction:column;flex:1;gap:5px;min-height:0;display:flex;overflow-y:auto}.nx-nav-item{min-height:53px;color:var(--nx-muted);background:0 0;border:0;border-radius:11px;flex-direction:column;justify-content:center;align-items:center;gap:5px;transition:background .16s,color .16s;display:flex;position:relative}.nx-nav-item span{font-size:11px}.nx-nav-item:hover{background:color-mix(in srgb, var(--nx-text) 6%, transparent);color:var(--nx-text)}.nx-nav-item.is-active{background:color-mix(in srgb, var(--nx-accent) 11%, transparent);color:var(--nx-accent)}.nx-nav-item.is-active:before{content:\"\";background:var(--nx-accent);border-radius:2px;width:2px;position:absolute;top:13px;bottom:13px;left:0}.nx-nav-divider{background:var(--nx-line);height:1px;margin:14px 8px}.nx-sidebar-foot{color:var(--nx-faint);justify-content:center;align-items:center;gap:6px;margin-top:auto;padding-top:26px;font-size:10px;display:flex}.nx-live-dot{background:var(--nx-accent);border-radius:50%;flex:none;width:6px;height:6px;display:inline-block}.nx-live-dot.is-offline{background:var(--nx-faint)}.nx-workspace{flex-direction:column;flex:1;min-width:0;display:flex;overflow:hidden}.nx-header{border-bottom:1px solid var(--nx-line);flex-shrink:0;justify-content:space-between;align-items:center;gap:16px;padding:22px 30px 18px;display:flex}.nx-header h1{letter-spacing:-.035em;font-size:25px;font-weight:620;line-height:1.3}.nx-header p{color:var(--nx-faint);margin-top:5px;font-size:12px}.nx-header-actions{align-items:center;gap:15px;display:flex}.nx-live-label{color:var(--nx-muted);align-items:center;gap:7px;font-size:11px;display:flex}.nx-working{color:var(--nx-muted);font-size:12px}.nx-content{flex:1;min-height:0;padding:20px 30px 30px;overflow:auto}.nx-content>*{width:100%;min-width:0;max-width:1180px;margin-inline:auto}.nx-eyebrow{color:var(--nx-faint);letter-spacing:.18em;margin-bottom:6px;font-size:9px;font-weight:600;display:block}.nx-page-enter-active,.nx-page-leave-active{transition:opacity .18s,transform .18s}.nx-page-enter-from{opacity:0;transform:translateY(6px)}.nx-page-leave-to{opacity:0;transform:translateY(-4px)}.nx-home{flex-direction:column;gap:16px;display:flex}.nx-stat-bar{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;grid-template-columns:repeat(4,minmax(0,1fr));display:grid;overflow:hidden}.nx-stat{flex-direction:column;gap:5px;min-width:0;padding:15px 20px;display:flex}.nx-stat+.nx-stat{border-left:1px solid var(--nx-line)}.nx-stat>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:11px;display:flex}.nx-stat>strong{font-variant-numeric:tabular-nums;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap;font-size:20px;font-weight:600;overflow:hidden}.nx-stat[data-stat=download]>strong{color:var(--nx-accent)}.nx-home-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;display:grid}.nx-quick-card{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:18px;flex-direction:column;gap:15px;min-height:236px;padding:20px;transition:border-color .18s;display:flex}.nx-quick-card.is-on{border-color:color-mix(in srgb, var(--nx-accent) 34%, var(--nx-line))}.nx-quick-head{align-items:center;gap:10px;min-width:0;display:flex}.nx-quick-icon{background:var(--nx-input);width:38px;height:38px;color:var(--nx-muted);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-route-icon{background:color-mix(in srgb, var(--nx-accent) 12%, transparent);width:38px;height:38px;color:var(--nx-accent);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-quick-card.is-on .nx-quick-icon{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent)}.nx-quick-title{flex:1;min-width:0}.nx-quick-title h2{font-size:14px}.nx-quick-title p{color:var(--nx-faint);margin-top:1px;font-size:10px}.nx-quick-state{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:999px;padding:3px 8px;font-size:10px}.nx-quick-state.is-live{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent);border-color:#0000}.nx-quick-main{flex-direction:column;gap:3px;min-width:0;display:flex}.nx-quick-main>strong{letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:600;overflow:hidden}.nx-quick-main>p{color:var(--nx-muted);text-overflow:ellipsis;white-space:nowrap;font-size:11px;overflow:hidden}.nx-quick-actions{align-items:center;gap:8px;margin-top:auto;display:flex}.nx-quick-actions>.nx-button:first-child{flex:1;min-height:38px}.nx-quick-link{color:var(--nx-muted);gap:3px;padding-inline:8px;font-size:11px}.nx-quick-actions--stack{flex-direction:column;align-items:stretch;gap:6px}.nx-home-download{gap:8px;min-width:0;display:flex}.nx-home-download>.nx-input{flex:1;min-width:0;min-height:38px}.nx-home-download>.nx-button{border-radius:var(--radius-sm,6px);gap:7px;min-height:34px;padding:7px 12px;font-size:12px;font-weight:550;line-height:1.4}.nx-button svg{stroke-width:1.7px}.nx-icon-button{min-width:32px;min-height:32px;padding:6px}.nx-danger-text{color:var(--nx-error)}.nx-actions{flex-wrap:wrap;align-items:center;gap:8px;display:flex}.nx-notice{background:color-mix(in srgb, var(--nx-accent) 9%, var(--nx-panel));color:var(--nx-text);border:1px solid var(--nx-line);border-radius:10px;flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;margin:0 30px 18px;padding:10px 12px;font-size:12px;display:flex}.nx-notice--error{color:var(--nx-error);background:#2e2023;border-color:#4b3037}.nx-notice>span{overflow-wrap:anywhere;min-width:0}.nx-notice .nx-button{color:inherit;flex-shrink:0}.nx-acceleration{background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel));align-items:center;gap:17px;padding:23px 24px;display:flex}.nx-acceleration-icon{background:color-mix(in srgb, var(--nx-accent) 10%, var(--nx-panel));width:52px;height:52px;color:var(--nx-muted);border-radius:16px;flex:0 0 52px;place-items:center;display:grid}.nx-acceleration-icon.is-on{color:var(--nx-accent);background:#294d3a}.nx-acceleration-copy{flex:1;min-width:0}.nx-acceleration-copy h2{align-items:center;gap:10px;font-size:17px;font-weight:600;display:flex}.nx-acceleration-copy p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:6px;font-size:12px}.nx-badge{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:450}.nx-badge.is-on{color:var(--nx-accent);background:#233a2d;border-color:#3e5c4a}.nx-acceleration>.nx-button{min-height:39px;padding-inline:16px}.nx-node-toolbar{justify-content:space-between;align-items:center;gap:12px;margin:-2px 0 10px;display:flex}.nx-optimize{white-space:nowrap;margin-left:auto}.nx-node-head-actions{align-items:center;gap:6px;display:flex}.nx-line-groups{flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;display:flex}.nx-line-group{border:1px solid var(--nx-line);color:var(--nx-muted);background:0 0;border-radius:999px;padding:6px 12px;font-size:11px;transition:background .16s,border-color .16s,color .16s}.nx-line-group:hover{background:var(--nx-panel-hover);color:var(--nx-text)}.nx-line-group.is-active{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 10%, transparent);color:var(--nx-text)}.nx-line-groups .nx-subtle{margin-left:auto}.nx-line-list{flex-direction:column;max-height:430px;margin:0 -8px;display:flex;overflow:auto}.nx-line-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:6px;display:flex}.nx-line-row:last-child{border-bottom:0}.nx-line-choice{min-width:0;color:var(--nx-text);text-align:left;background:0 0;border:0;border-radius:10px;flex:1;align-items:center;gap:12px;padding:13px 8px;display:flex}.nx-line-choice:hover{background:var(--nx-panel-hover)}.nx-line-row.is-selected .nx-line-choice{background:color-mix(in srgb, var(--nx-accent) 7%, transparent)}.nx-line-radio{border:1px solid var(--nx-line);width:16px;height:16px;color:var(--nx-accent-ink);border-radius:50%;flex:0 0 16px;place-items:center;display:grid}.nx-line-row.is-selected .nx-line-radio{border-color:var(--nx-accent);background:var(--nx-accent)}.nx-line-name{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:13px;overflow:hidden}.nx-line-exit{text-overflow:ellipsis;white-space:nowrap;flex:0 auto;max-width:34%;font-size:11px;overflow:hidden}.nx-line-meter{background:var(--nx-line);border-radius:999px;flex:0 0 120px;width:120px;height:4px;overflow:hidden}.nx-line-meter i{border-radius:inherit;background:var(--nx-accent);height:100%;transition:width .3s;display:block}.nx-line-meter.is-mid i{background:var(--nx-warning)}.nx-line-meter.is-slow i{background:var(--nx-error)}.nx-line-meter.is-unknown i{background:var(--nx-faint)}.nx-line-ms{width:62px;color:var(--nx-muted);font-variant-numeric:tabular-nums;text-align:right;flex:0 0 62px;font-size:11px}.nx-line-refresh{opacity:.35}.nx-line-row:hover .nx-line-refresh,.nx-line-row.is-selected .nx-line-refresh{opacity:1}.nx-node-list{max-height:380px;margin-inline:-8px;overflow:auto}.nx-node-list--compact{max-height:206px}.nx-node{border-radius:9px;align-items:center;min-width:0;display:flex}.nx-node:hover{background:color-mix(in srgb, var(--nx-text) 4%, transparent)}.nx-node.is-selected{background:#25352b}.nx-node-choice{text-align:left;width:100%;min-width:0;min-height:43px;color:var(--nx-text);background:0 0;border:0;border-radius:9px;align-items:center;gap:11px;padding:10px 9px;display:flex}.nx-node-name{text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:13px;overflow:hidden}.nx-node-delay{color:var(--nx-faint);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}.is-selected .nx-node-delay{color:#91b69e}.nx-radio-mark{border:1px solid #4d5a52;border-radius:50%;flex-shrink:0;place-items:center;width:16px;height:16px;display:grid}.is-selected .nx-radio-mark{background:var(--nx-accent);border-color:var(--nx-accent);color:var(--nx-accent-ink)}.nx-node-search{margin-bottom:10px}.nx-add-profile{margin-top:13px;padding-inline:4px;font-size:11px}.nx-select-wrap{align-items:center;gap:6px;min-width:0;display:flex;position:relative}.nx-select-wrap select{appearance:none;color:var(--nx-text);outline-offset:3px;cursor:pointer;background:0 0;border:0;max-width:220px;padding:1px 20px 1px 0;font-size:12px}.nx-select-wrap svg{pointer-events:none;color:var(--nx-faint);position:absolute;right:0}.nx-select-wrap option{background:var(--nx-panel);color:var(--nx-text)}.nx-speed{flex-direction:column;padding-bottom:15px;display:flex}.nx-speed-values{flex-wrap:wrap;gap:30px;margin-top:3px;display:flex}.nx-speed-values>span{align-items:center;gap:7px;min-width:0;display:flex}.nx-speed-values strong{letter-spacing:-.025em;font-variant-numeric:tabular-nums;font-size:19px;font-weight:550}.nx-speed-values small{color:var(--nx-faint);padding-top:4px;font-size:10px}.nx-speed-values>span:first-child>svg{color:var(--nx-accent)}.nx-speed-values>span:nth-child(2)>svg{color:var(--blue,#a2b8c6)}.nx-plot{min-height:153px;color:var(--nx-accent);flex:1;margin:17px -6px 0}.nx-plot>svg{width:100%;height:100%;overflow:visible}.nx-chart-grid{stroke:var(--nx-line);stroke-width:1px;fill:none;vector-effect:non-scaling-stroke}.nx-chart-area{stroke:none}.nx-chart-download{stroke:var(--nx-accent);stroke-width:2px;stroke-linejoin:round;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}.nx-chart-upload{stroke:var(--blue,#8a9ca5);stroke-width:1.5px;stroke-dasharray:4 5;fill:none;vector-effect:non-scaling-stroke;opacity:.65}.nx-chart-axis{color:var(--nx-faint);justify-content:space-between;gap:10px;margin-top:8px;font-size:10px;display:flex}.nx-chart-wait{height:100%;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:6px;font-size:12px;display:flex}.nx-chart-wait small{color:var(--nx-faint);font-size:11px}.nx-mode-options{flex-direction:column;gap:5px;display:flex}.nx-mode{width:100%;color:var(--nx-muted);text-align:left;background:0 0;border:1px solid #0000;border-radius:10px;align-items:center;gap:11px;min-width:0;padding:10px 8px;display:flex}.nx-mode:hover:not(:disabled){background:var(--nx-line)}.nx-mode[aria-checked=true]{color:var(--nx-text);background:#28372d;border-color:#3d5143}.nx-mode>span:nth-child(2){flex:1;gap:3px;min-width:0;display:grid}.nx-mode strong{font-size:12px;font-weight:550}.nx-mode small{color:var(--nx-faint);font-size:10px;line-height:1.5}.nx-mode-dot{border:1px solid #5c6c61;border-radius:50%;flex-shrink:0;width:13px;height:13px}.nx-mode[aria-checked=true] .nx-mode-dot{border:4px solid var(--nx-accent)}.nx-modes>.nx-help{margin-top:10px;font-size:11px}.nx-local-info>strong{color:var(--nx-muted);font-size:12px;font-weight:500}.nx-address{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;letter-spacing:-.015em;margin:7px 0 10px;font-size:18px;font-weight:500}.nx-local-info>.nx-button{padding-left:0;font-size:11px}.nx-total>div:not(.nx-panel-heading){justify-content:space-between;align-items:center;gap:12px;margin-top:11px;display:flex}.nx-total>div>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:12px;display:flex}.nx-total strong{font-variant-numeric:tabular-nums;font-size:14px;font-weight:500}.nx-total>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-input{border:1px solid var(--nx-line);background:var(--nx-input);width:100%;min-width:0;min-height:38px;color:var(--nx-text);accent-color:var(--nx-accent);border-radius:9px;padding:9px 12px;font-size:12px;line-height:1.5}.nx-input::placeholder{color:#839188;opacity:1}.nx-input option{background:var(--nx-panel);color:var(--nx-text)}.nx-inline-form{align-items:center;gap:10px;min-width:0;display:flex}.nx-inline-form>.nx-shared-select{flex:1;min-width:0}.nx-inline-form>.nx-input{flex:1}.nx-inline-form>.nx-button{flex-shrink:0;min-height:38px}.nx-input-with-icon,.nx-input-with-action{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-input-with-icon>svg{color:var(--nx-faint);pointer-events:none;position:absolute;left:12px}.nx-input-with-icon>.nx-input{padding-left:38px}.nx-input-with-action>.nx-input{padding-right:42px}.nx-input-with-action>.nx-button{position:absolute;right:4px}.nx-fit-select{min-width:100px;flex:0 auto!important;width:auto!important}.nx-form{gap:15px;display:grid}.nx-form>.nx-button{justify-self:start}.nx-form-grid{grid-template-columns:1fr 1fr;gap:16px;display:grid}.nx-form-grid>:is(label,.nx-form-field){gap:7px;min-width:0;display:grid}.nx-form-grid>:is(label,.nx-form-field)>span{color:var(--nx-muted);font-size:12px}.nx-code{resize:vertical;font-family:Cascadia Code,Consolas,monospace;font-size:12px;line-height:1.7}.nx-import>.nx-help{margin-bottom:13px}.nx-import-options{flex-wrap:wrap;gap:14px;margin-top:8px;display:flex}.nx-import-options>.nx-button{padding-left:0;font-size:11px}.nx-import>.nx-form{margin-top:12px}.nx-import-running{justify-content:space-between;align-items:center;gap:12px;margin-top:14px;display:flex}.nx-import-running .nx-button{font-size:11px}.nx-import>.nx-help:last-child{margin-top:12px;margin-bottom:0}.nx-site-shortcuts{flex-wrap:wrap;align-items:center;gap:4px;margin-top:8px;display:flex}.nx-site-shortcuts>span{color:var(--nx-faint);margin-right:4px;font-size:10px}.nx-site-shortcuts .nx-button{min-height:27px;padding:4px 6px;font-size:10px}.nx-recent{padding:18px 20px}.nx-recent>.nx-section-heading{margin-bottom:9px}.nx-event{border-bottom:1px solid #252e28;align-items:center;gap:11px;padding:11px 0;font-size:12px;display:flex}.nx-event>svg{color:var(--nx-faint)}.nx-event>span{overflow-wrap:anywhere;flex:1;min-width:0}.nx-event>time{color:var(--nx-faint);white-space:nowrap;font-size:10px}.nx-event:last-child{border-bottom:0;padding-bottom:0}.nx-empty{text-align:center;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:11px;padding:52px 20px;display:flex}.nx-empty>svg{color:#83968a;margin-bottom:3px}.nx-empty>strong{color:var(--nx-text);font-size:14px;font-weight:500}.nx-empty>p{max-width:35ch;color:var(--nx-muted);font-size:12px;line-height:1.7}.nx-empty>.nx-button{margin-top:5px}.nx-empty--small{padding:27px 10px}.nx-empty--small strong{font-size:12px}.nx-empty--small p{font-size:11px}.nx-control-row{align-items:center;gap:15px;display:flex}.nx-control-row--plain{padding:0}.nx-control-icon{color:#bfd0c4;background:#28322b;border-radius:11px;flex:0 0 40px;place-items:center;width:40px;height:40px;display:grid}.nx-control-copy{flex:1;min-width:0}.nx-control-copy strong{font-size:13px;font-weight:550}.nx-control-copy p{color:var(--nx-muted);margin-top:4px;font-size:11px;line-height:1.6}.nx-settings-fold{padding-top:3px}.nx-settings-fold>.nx-panel{margin-top:12px}.nx-detail-list{max-width:650px;margin:12px 0}.nx-detail-list>div{border-bottom:1px solid var(--nx-line);color:var(--nx-muted);justify-content:space-between;gap:15px;padding:10px 0;font-size:12px;display:flex}.nx-detail-list>div>span:last-child{align-items:center;gap:5px;display:flex}.nx-detail-list code{color:var(--nx-text);font-size:11px}.nx-download-composer>.nx-inline-form{margin-bottom:5px}.nx-download-stats{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:14px;grid-template-columns:repeat(3,minmax(0,1fr));display:grid;overflow:hidden}.nx-download-stats>div{justify-content:space-between;align-items:baseline;gap:10px;padding:12px 18px;display:flex}.nx-download-stats>div+div{border-left:1px solid var(--nx-line)}.nx-download-stats span{color:var(--nx-muted);font-size:11px}.nx-download-stats strong{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600}.nx-download-composer.is-dragging{border-color:color-mix(in srgb, var(--nx-accent) 55%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel))}.nx-download-options{flex-wrap:wrap;gap:8px 18px;margin:9px 0 4px;display:flex}.nx-download-options>:is(label,.nx-download-option){color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-download-options select{border:1px solid var(--nx-line);background:var(--nx-input);min-height:30px;color:var(--nx-text);border-radius:8px;padding:4px 8px;font-size:11px}.nx-options-button{padding-left:0;font-size:11px}.nx-download-composer>.nx-form-grid{padding-top:13px}.nx-checkbox{align-self:end;align-items:center;min-height:38px;gap:8px!important;display:flex!important}.nx-checkbox>input{accent-color:var(--nx-accent)}.nx-list-toolbar{justify-content:space-between;align-items:center;gap:12px;display:flex}.nx-filter-tabs{align-items:center;gap:5px;display:flex}.nx-filter-tabs>button{min-height:32px;color:var(--nx-muted);background:0 0;border:0;border-radius:8px;align-items:center;gap:7px;padding:6px 10px;font-size:12px;display:flex}.nx-filter-tabs>button.active{color:var(--nx-text);background:#29332c}.nx-filter-tabs>button:hover{background:#242e27}.nx-filter-tabs>button>span{color:var(--nx-faint);font-size:10px}.nx-task-list{padding:0 20px}.nx-download-row{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr) auto;align-items:center;column-gap:15px;padding:23px 0;display:grid}.nx-download-row:last-child{border-bottom:0}.nx-file-icon{color:#b3d5bd;background:#29352c;border-radius:10px;place-items:center;width:40px;height:45px;display:grid}.nx-download-body{min-width:0}.nx-task-title{justify-content:space-between;align-items:baseline;gap:12px;min-width:0;display:flex}.nx-task-title>strong{text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;overflow:hidden}.nx-task-title>span{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-progress-track{background:#313b34;border-radius:99px;height:4px;margin:10px 0 8px;overflow:hidden}.nx-progress-track>span{background:var(--nx-accent);border-radius:inherit;height:100%;transition:width .25s;display:block}.nx-task-meta{color:var(--nx-faint);font-variant-numeric:tabular-nums;flex-wrap:wrap;justify-content:space-between;gap:10px;font-size:10px;display:flex}.nx-meta-divider{color:var(--nx-faint);margin-inline:6px}.nx-task-controls{align-items:center;gap:5px;display:flex}.nx-task-details{grid-column:2/-1;gap:13px;padding:17px 0 0;display:grid}.nx-task-details>.nx-subtle{overflow-wrap:anywhere;font-size:11px}.nx-small-select{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-small-select select{background:var(--nx-input);border:1px solid var(--nx-line);min-height:30px;color:var(--nx-text);border-radius:7px;padding:4px 7px}.nx-state-error{color:var(--nx-error)!important}.nx-diagnose-start{text-align:center;padding:30px 28px 23px}.nx-diagnose-symbol{width:49px;height:49px;color:var(--nx-accent);background:#2a3d30;border-radius:15px;place-items:center;margin:0 auto 15px;display:grid}.nx-diagnose-start>h2{letter-spacing:-.025em;font-size:19px;font-weight:550}.nx-diagnose-start>p{color:var(--nx-muted);margin-top:7px;font-size:12px}.nx-diagnose-start>.nx-inline-form{max-width:580px;margin:22px auto 0}.nx-diagnose-options{color:var(--nx-muted);flex-wrap:wrap;justify-content:center;align-items:center;gap:20px;margin-top:17px;font-size:11px;display:flex}.nx-diagnose-options>label{cursor:pointer;align-items:center;gap:5px;display:flex}.nx-diagnose-options input{accent-color:var(--nx-accent);width:12px;height:12px;margin:0}.nx-report-heading{align-items:center;gap:14px;margin-bottom:20px;display:flex}.nx-result-icon{width:44px;height:44px;color:var(--nx-accent);background:#273f2f;border-radius:13px;place-items:center;display:grid}.nx-result-icon.is-failure{color:var(--nx-warning);background:#3c3324}.nx-report-heading h2{font-size:16px}.nx-report-heading p{color:var(--nx-muted);margin-top:4px;font-size:11px}.nx-check-list{gap:0;display:grid}.nx-check-row{border-bottom:1px solid var(--nx-line);grid-template-columns:20px minmax(0,1fr) auto 66px;align-items:center;gap:11px;min-height:47px;display:grid}.nx-check-row:last-child{border-bottom:0}.nx-check-status{width:18px;height:18px;color:var(--nx-accent);border:1px solid #3f5b49;border-radius:50%;place-items:center;display:grid}.nx-check-status.is-failure{color:var(--nx-error);border-color:#70504d}.nx-check-row strong{font-size:12px;font-weight:450}.nx-check-row>span:not(.nx-check-status){color:var(--nx-muted);font-size:11px}.nx-check-row time{color:var(--nx-faint);text-align:right;font-variant-numeric:tabular-nums;font-size:11px}.nx-report-advice{color:var(--nx-muted);font-size:12px;line-height:1.8;margin-top:17px!important}.nx-report-detail-button{margin-top:10px;padding-left:0;font-size:11px}.nx-check-evidence{gap:14px;margin-top:10px;display:grid}.nx-check-evidence>div{background:var(--nx-input);border-radius:9px;min-width:0;padding:12px}.nx-check-evidence strong{color:var(--nx-muted);font-size:11px;font-weight:500}.nx-check-evidence p{overflow-wrap:anywhere;white-space:pre-wrap;color:var(--nx-faint);margin-top:6px;font-size:11px;line-height:1.7}.nx-history>.nx-section-heading{padding-bottom:10px}.nx-history-row{border:0;border-bottom:1px solid var(--nx-line);text-align:left;width:100%;color:var(--nx-text);background:0 0;align-items:center;gap:12px;padding:13px 2px;display:flex}.nx-history-row:hover{background:color-mix(in srgb, var(--nx-text) 3%, transparent)}.nx-history-row>strong{text-overflow:ellipsis;flex:1;min-width:0;font-size:12px;font-weight:500;overflow:hidden}.nx-history-row>span:not(.nx-history-result),.nx-history-row>time{color:var(--nx-faint);font-size:10px}.nx-history-result{color:var(--nx-accent)}.nx-history-result.is-failure{color:var(--nx-warning)}.nx-diagnose-empty{padding-block:28px;font-size:12px}.nx-diagnose-pending>p{color:var(--nx-muted);margin-block:15px;font-size:12px}.nx-skeleton{background:linear-gradient(100deg, var(--nx-line) 20%, #303b33 45%, var(--nx-line) 70%);background-size:220% 100%;border-radius:8px;animation:1.6s infinite nx-loading-sheen}.nx-skeleton-title{width:180px;height:15px}.nx-skeleton-row{width:100%;height:35px;margin-block:10px}.nx-loading-banner{height:100px}.nx-loading-grid{grid-template-columns:1.7fr 1fr;gap:20px;margin-top:20px;display:grid}.nx-loading-chart{height:250px}.nx-loading>p{color:var(--nx-muted);margin-top:18px;font-size:12px}.nx-loading>.nx-button{margin-top:14px}.nx-interface-list{padding-block:0}.nx-interface{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr);gap:16px;padding:22px 0;display:grid}.nx-interface:last-child{border:0}.nx-interface strong{font-size:13px;font-weight:500}.nx-interface dl{gap:7px;margin:10px 0 0;display:grid}.nx-interface dl>div{gap:18px;min-width:0;font-size:11px;display:flex}.nx-interface dt{min-width:52px;color:var(--nx-faint)}.nx-interface dd{color:var(--nx-muted);overflow-wrap:anywhere;margin:0}.nx-query-result{border-top:1px solid var(--nx-line);padding-top:14px}.nx-query-address{font-variant-numeric:tabular-nums;margin-top:8px;font-size:13px}.nx-rule-row{grid-template-columns:minmax(0,1fr) minmax(100px,.65fr) 30px;gap:8px;display:grid}.nx-table-panel{padding:0;overflow:hidden}.nx-table-scroll{max-width:100%;overflow:auto}.nx-table{border-collapse:collapse;white-space:nowrap;text-align:left;width:100%;font-size:12px}.nx-table th{color:var(--nx-faint);border-bottom:1px solid var(--nx-line);padding:13px 17px;font-size:10px;font-weight:450}.nx-table td{color:var(--nx-muted);border-bottom:1px solid #29312c;padding:14px 17px}.nx-table tr:last-child td{border-bottom:0}.nx-table td strong{color:var(--nx-text);text-overflow:ellipsis;max-width:180px;font-size:12px;font-weight:500;display:block;overflow:hidden}.nx-table td small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-table tbody tr:hover{background:#202822}.nx-table .nx-data-cell{font-variant-numeric:tabular-nums;font-size:11px}.nx-protocol{color:var(--nx-faint);border:1px solid #39433c;border-radius:4px;padding:2px 5px;font-size:10px}.nx-connection-state{color:var(--nx-faint);font-size:11px}.nx-connection-state.is-live{color:#9bc9ac}.nx-table-loading{padding:10px 18px}.nx-load-more{border-top:1px solid var(--nx-line);border-radius:0;width:100%;min-height:39px;font-size:11px}.nx-application-actions{grid-template-columns:1fr 1fr;gap:24px;padding-block:8px;display:grid}.nx-application-actions p{color:var(--nx-muted);margin:6px 0 13px;font-size:11px}.nx-transaction-list>.nx-panel-heading{margin-bottom:5px}.nx-transaction{border-bottom:1px solid var(--nx-line);align-items:center;gap:13px;padding:16px 0;display:flex}.nx-transaction:last-child{border-bottom:0}.nx-transaction-icon{color:var(--nx-faint)}.nx-transaction>div{overflow-wrap:anywhere;flex:1;min-width:0}.nx-transaction strong{font-size:12px;font-weight:500}.nx-transaction p,.nx-transaction small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-status-text{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-status-text.is-warning{color:var(--nx-warning)}.nx-schedule-form{margin-top:15px}.nx-schedule-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:12px;padding:15px 0;display:flex}.nx-schedule-row:last-child{border-bottom:0}.nx-schedule-row>div{flex:1;min-width:0}.nx-schedule-row strong{overflow-wrap:anywhere;font-size:12px;font-weight:500}.nx-schedule-row small{color:var(--nx-faint);margin-top:4px;font-size:10px;display:block}.nx-settings-rows{padding-block:0}.nx-settings-rows>div{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:24px;padding:20px 0;display:flex}.nx-settings-rows>div:last-child{border:0}.nx-settings-rows strong{font-size:12px;font-weight:500;display:block}.nx-settings-rows small{color:var(--nx-muted);margin-top:5px;font-size:11px;display:block}.nx-host .plugin-page-instance{height:100%}.nx-quick-app{--nx-text:var(--theme-backdrop-text,var(--theme-main-text,#e8eeeb));--nx-muted:color-mix(in srgb, var(--nx-text) 60%, transparent);--nx-faint:color-mix(in srgb, var(--nx-text) 40%, transparent);--nx-line:color-mix(in srgb, var(--nx-text) 11%, transparent);--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-panel:transparent;--nx-panel-hover:color-mix(in srgb, var(--nx-text) 7%, transparent);--nx-input:color-mix(in srgb, var(--nx-text) 5%, transparent);background:0 0;border:0;border-radius:0;width:100%;max-width:100%;height:auto;min-height:0;padding:0;display:block;overflow:visible}.nx-pill-list{flex-direction:column;gap:8px;display:flex}.nx-quick-pill{border:1px solid color-mix(in srgb, var(--nx-text) 9%, transparent);background:color-mix(in srgb, var(--nx-text) 4%, transparent);width:100%;min-height:46px;box-shadow:inset 0 1px 0 color-mix(in srgb, var(--nx-text) 5%, transparent);color:var(--nx-text);border-radius:999px;align-items:center;gap:8px;padding:6px 8px 6px 10px;transition:border-color .16s,background .16s;display:flex}.nx-quick-pill:focus-within{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line))}.nx-quick-pill.is-on{border-color:color-mix(in srgb, var(--nx-accent) 30%, transparent);background:color-mix(in srgb, var(--nx-accent) 6%, transparent)}.nx-pill-icon{background:color-mix(in srgb, var(--nx-text) 6%, transparent);width:30px;height:30px;color:var(--nx-muted);border-radius:50%;flex:0 0 30px;place-items:center;display:grid}.nx-quick-pill.is-on .nx-pill-icon{background:color-mix(in srgb, var(--nx-accent) 13%, transparent);color:var(--nx-accent)}.nx-pill-value{min-width:0;color:var(--nx-muted);font-variant-numeric:tabular-nums;letter-spacing:-.01em;flex:1;font-size:11px}.nx-pill-value.is-live{color:var(--nx-accent)}.nx-mini-action{border:1px solid var(--nx-line);width:32px;height:32px;color:var(--nx-muted);background:0 0;border-radius:50%;flex:0 0 32px;place-items:center;padding:0;transition:border-color .16s,background .16s,color .16s;display:grid}.nx-mini-action:hover:not(:disabled){border-color:color-mix(in srgb, var(--nx-accent) 36%, var(--nx-line));color:var(--nx-text)}.nx-mini-action.is-on,.nx-mini-action.is-ready{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:#0000}.nx-mini-action:disabled{opacity:.38}.nx-node-wrap{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-quick-app .nx-node-wrap .ui-select{width:100%}.nx-quick-app .nx-node-wrap .ui-select-trigger{min-height:32px;color:var(--nx-text);background:0 0;border:0;padding-left:2px;font-size:11px}.nx-download-form{flex:1;align-items:center;gap:6px;min-width:0;display:flex}.nx-download-form>input{min-width:0;height:32px;color:var(--nx-text);background:0 0;border:0;outline:none;flex:1;padding:0 2px;font-size:11px}.nx-download-form>input::placeholder{color:var(--nx-faint)}.nx-quick-error,.nx-quick-note{overflow-wrap:anywhere;font-size:10px;line-height:1.5;margin:8px 4px 0!important}.nx-quick-error{color:var(--nx-error)}.nx-quick-note{color:var(--nx-accent)}@keyframes nx-loading-sheen{to{background-position:-220% 0}}@container nx-shell (width<=850px){.nx-sidebar{flex-basis:76px;width:76px;padding-inline:9px}.nx-header{padding:23px 22px 20px}.nx-content{padding:0 22px 24px}.nx-notice{margin-inline:22px}.nx-panel{padding:17px}.nx-dashboard-grid{grid-template-columns:minmax(0,1.65fr) minmax(205px,1fr);gap:16px}.nx-dashboard-hero{grid-template-columns:minmax(0,1.5fr) minmax(210px,1fr)}.nx-dashboard-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-dashboard-lower{grid-template-columns:minmax(0,1fr)}.nx-stat-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-stat:nth-child(3){border-top:1px solid var(--nx-line);border-left:0}.nx-stat:nth-child(4){border-top:1px solid var(--nx-line)}.nx-home-grid{grid-template-columns:minmax(0,1fr)}.nx-quick-card{min-height:0}.nx-proxy-top{grid-template-columns:minmax(0,1fr)}.nx-accel-control{grid-template-columns:auto minmax(0,1fr)}.nx-accel-control>.nx-button{grid-column:1/-1;width:100%}.nx-accel-grid,.nx-accel-lower{grid-template-columns:minmax(0,1fr)}.nx-dashboard-main,.nx-dashboard-side{gap:16px}.nx-acceleration{gap:13px;padding:19px 20px}.nx-acceleration-copy h2{font-size:16px}.nx-acceleration-icon{border-radius:13px;flex-basis:44px;width:44px;height:44px}.nx-speed-values{gap:19px}.nx-speed-values strong{font-size:17px}.nx-speed-values small{display:none}.nx-two-columns{grid-template-columns:minmax(0,1.4fr) minmax(205px,1fr);gap:16px}.nx-task-list{padding-block:0}.nx-task-meta{font-size:10px}.nx-total strong{font-size:13px}}@container nx-shell (width<=680px){.nx-dashboard-grid,.nx-two-columns{grid-template-columns:minmax(0,1fr)}.nx-line-meter{display:none}.nx-download-stats{grid-template-columns:minmax(0,1fr)}.nx-download-stats>div+div{border-top:1px solid var(--nx-line);border-left:0}.nx-dashboard-side{grid-template-columns:1fr 1fr;display:grid}.nx-dashboard-side>.nx-modes{grid-column:1/-1}.nx-dashboard-side .nx-mode-options{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;display:grid}.nx-dashboard-side .nx-mode{align-items:flex-start;gap:7px;padding:10px 8px}.nx-dashboard-side .nx-mode>svg{display:none}.nx-dashboard-side .nx-mode-dot{width:12px;height:12px;margin-top:2px}.nx-mode small{font-size:10px}.nx-acceleration-copy p{font-size:11px}.nx-acceleration>.nx-button{padding-inline:12px;font-size:11px}.nx-section-heading{gap:10px}.nx-section-heading p{font-size:11px}.nx-form-grid{grid-template-columns:1fr}.nx-application-actions{grid-template-columns:1fr;gap:22px}.nx-plot{height:160px}.nx-node-list--compact{max-height:190px}}@container nx-shell (width<=520px){.nx-sidebar{flex-basis:59px;width:59px;padding:18px 6px 12px}.nx-brand{padding-bottom:18px}.nx-brand span{display:none}.nx-nav-item{border-radius:9px;gap:4px;min-height:47px}.nx-nav-item span{font-size:10px}.nx-nav-item svg{width:18px;height:18px}.nx-nav-divider{margin-block:11px}.nx-sidebar-foot>span:last-child{display:none}.nx-header{padding:20px 16px 18px}.nx-header h1{font-size:23px}.nx-header p{font-size:11px}.nx-content{padding:0 16px 22px}.nx-notice{margin:0 16px 14px}.nx-header-actions{gap:5px}.nx-live-label{font-size:10px}.nx-live-label>.nx-live-dot{display:none}.nx-acceleration{flex-wrap:wrap;gap:12px;padding:17px}.nx-acceleration-copy{min-width:130px}.nx-acceleration-copy h2{gap:7px}.nx-acceleration>.nx-button{min-height:34px;margin-left:56px}.nx-acceleration-icon{flex-basis:42px;width:42px;height:42px}.nx-panel{padding:16px}.nx-dashboard,.nx-view-stack{gap:16px}.nx-dashboard-side{grid-template-columns:minmax(0,1fr)}.nx-dashboard-side>.nx-modes{grid-column:auto}.nx-dashboard-side .nx-mode-options{display:flex}.nx-dashboard-side .nx-mode>svg{display:block}.nx-dashboard-side .nx-mode{align-items:center}.nx-plot{height:140px}.nx-speed-values{gap:23px}.nx-speed-values strong{font-size:16px}.nx-inline-form{gap:8px}.nx-inline-form>.nx-button{padding-inline:10px;font-size:11px}.nx-inline-form .nx-fit-select{min-width:82px;font-size:11px}.nx-site-shortcuts{gap:1px}.nx-site-shortcuts>span{width:100%;margin-bottom:3px}.nx-download-row{grid-template-columns:28px minmax(0,1fr) auto;gap:10px;padding-block:19px}.nx-file-icon{border-radius:8px;width:28px;height:35px}.nx-file-icon>svg{width:17px}.nx-task-title{flex-direction:column;align-items:flex-start;gap:3px}.nx-task-title>strong{max-width:100%;font-size:12px}.nx-task-title>span{font-size:9px}.nx-task-controls{gap:1px}.nx-task-controls>.nx-icon-button{min-width:27px;padding:4px}.nx-task-meta{gap:4px;font-size:9px}.nx-task-meta>span{width:100%}.nx-task-details{grid-column:1/-1;padding-top:14px}.nx-filter-tabs>button{padding-inline:8px;font-size:11px}.nx-task-list{padding-block:0}.nx-diagnose-start{padding:24px 16px 18px}.nx-diagnose-start>h2{font-size:17px}.nx-diagnose-start>.nx-inline-form{margin-top:18px}.nx-diagnose-options{gap:12px;font-size:10px}.nx-check-row{grid-template-columns:18px minmax(0,1fr) auto 47px;gap:8px}.nx-check-row strong{font-size:11px}.nx-check-row time{font-size:10px}.nx-history-row{gap:9px}.nx-history-row>span:not(.nx-history-result){display:none}.nx-history-row>time{font-size:9px}.nx-section-heading>div{min-width:0}.nx-section-heading h2{font-size:13px}.nx-section-heading>.nx-button{padding-inline:9px;font-size:11px}.nx-schedule-form{flex-wrap:wrap}.nx-schedule-form>.nx-input:first-child{flex-basis:100%}.nx-schedule-row{gap:8px}.nx-schedule-row>.nx-button:not(.nx-icon-button){padding-inline:5px;font-size:10px}.nx-schedule-row strong{font-size:11px}.nx-settings-rows>div{gap:12px}.nx-settings-rows small{font-size:10px}.nx-event{gap:8px;font-size:11px}.nx-event>time{font-size:9px}.nx-rule-row{grid-template-columns:minmax(0,1fr) 96px 24px;gap:5px}.nx-rule-row .nx-input{padding-inline:8px;font-size:11px}.nx-loading-grid{grid-template-columns:1fr}.nx-loading-grid>.nx-skeleton:last-child{display:none}}@media (prefers-reduced-motion:reduce){.nx-app *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}.nx-status-strip{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;grid-template-columns:repeat(3,minmax(0,1fr)) auto;align-items:center;gap:16px;padding:16px 20px;display:grid}.nx-status-cell{flex-direction:column;gap:3px;min-width:0;display:flex}.nx-status-cell>span{color:var(--nx-muted);font-size:11px}.nx-status-cell>strong{text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;overflow:hidden}.nx-status-cell>em{color:var(--nx-faint);text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-style:normal;overflow:hidden}.nx-status-cell>em.is-ok{color:var(--nx-accent)}.nx-status-cell>em.is-warn{color:var(--nx-warning)}.nx-status-action{white-space:nowrap}.nx-home-link{border:1px solid var(--nx-line);background:var(--nx-panel);width:100%;color:inherit;text-align:left;border-radius:16px;align-items:center;gap:12px;padding:14px 18px;display:flex}.nx-home-link:hover{border-color:color-mix(in srgb, var(--nx-accent) 30%, var(--nx-line))}.nx-home-link-copy{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.nx-home-link-copy>strong{font-size:13px}.nx-home-link-copy>em{color:var(--nx-muted);font-size:11px;font-style:normal}.nx-settings{grid-template-columns:168px minmax(0,1fr);align-items:start;gap:18px;display:grid}.nx-settings-tabs{flex-direction:column;gap:4px;display:flex;position:sticky;top:0}.nx-settings-tab{color:var(--nx-muted);text-align:left;background:0 0;border:1px solid #0000;border-radius:10px;align-items:center;gap:8px;padding:9px 11px;font-size:12px;display:flex}.nx-settings-tab:hover{background:color-mix(in srgb, var(--nx-text) 6%, transparent);color:var(--nx-text)}.nx-settings-tab.is-active{border-color:color-mix(in srgb, var(--nx-accent) 26%, transparent);background:color-mix(in srgb, var(--nx-accent) 11%, transparent);color:var(--nx-accent)}.nx-settings-body{min-width:0}@media (width<=860px){.nx-settings{grid-template-columns:1fr}.nx-settings-tabs{flex-flow:wrap;position:static}}.nx-interconnect-hero{align-items:center;gap:14px;display:flex}.nx-interconnect-hero .nx-control-copy{flex:1;min-width:0}.nx-interconnect-hero h2{font-size:15px}.nx-interconnect-hero p{color:var(--nx-muted);margin-top:3px;font-size:12px}.nx-interconnect-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;display:grid}@media (width<=860px){.nx-interconnect-grid{grid-template-columns:1fr}}.nx-fact-list{flex-direction:column;gap:6px;margin:10px 0;display:flex}.nx-fact{justify-content:space-between;gap:12px;font-size:12px;display:flex}.nx-fact>span{color:var(--nx-muted)}.nx-network-result{border-top:1px solid var(--nx-line);flex-direction:column;gap:8px;margin-top:14px;padding-top:14px;display:flex}.nx-network-result>strong{font-size:14px}.nx-download-settings{padding:0}.nx-settings-toggle{width:100%;color:inherit;text-align:left;background:0 0;border:0;align-items:center;gap:10px;padding:13px 18px;display:flex}.nx-settings-toggle>span:first-of-type{font-size:13px;font-weight:600}.nx-settings-toggle>.nx-subtle{flex:1}.nx-download-settings .nx-form-grid{padding:0 18px 18px}.nx-subscribe-actions{flex-wrap:wrap;gap:8px;display:flex}.nx-subscribe-list{flex-direction:column;gap:8px;display:flex}.nx-subscribe-row{border:1px solid var(--nx-line);border-radius:10px;align-items:center;gap:10px;padding:8px 10px;display:flex}.nx-subscribe-host{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:13px;overflow:hidden}.nx-form-field--wide{grid-column:span 2}.nx-form-field--wide>small{font-size:11px}", Rm = ".btn{justify-content:center;align-items:center;gap:var(--space-1);font:inherit;white-space:nowrap;cursor:pointer;transition:background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);border:1px solid #0000;display:inline-flex}.btn:disabled{opacity:.45;cursor:default}.btn:not(:disabled):active{transform:translateY(1px)}.btn--secondary,.btn--primary,.btn--quiet{border-radius:12px;min-height:32px;padding:8px 11px;font-size:13px}.btn--primary{background:var(--settings-control-solid,var(--theme-control-solid,#fbf7f0));color:var(--settings-control-text,var(--theme-control-text,#2e3138))}.btn--primary.btn--material{background:var(--settings-control-background,var(--theme-control-background,var(--theme-control-solid,#fbf7f0)));background-image:var(--theme-control-image,none);background-size:var(--theme-control-image-size,auto);background-repeat:var(--theme-control-image-repeat,no-repeat);-webkit-backdrop-filter:var(--theme-control-glass-filter,none);backdrop-filter:var(--theme-control-glass-filter,none);background-position:50%}.btn--primary:hover:not(:disabled){filter:brightness(.94)}.btn--secondary{background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent);color:var(--settings-main-text,var(--theme-main-text,#f2efeb))}.btn--secondary:hover:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-active), transparent)}.btn--secondary:active:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-press), transparent)}:is(.btn--quiet,.btn--ghost){color:var(--settings-main-text,var(--theme-main-text,#f2efeb));background:0 0}:is(.btn--quiet,.btn--ghost):hover:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent)}:is(.btn--quiet,.btn--ghost):active:not(:disabled){background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-active), transparent)}.btn--ghost{border-radius:var(--radius-sm);min-height:32px;padding:0 7px;font-size:12px}.btn--danger{color:color-mix(in srgb, var(--red) 55%, var(--settings-main-text,var(--theme-main-text,#f2efeb)))}.btn--danger:hover:not(:disabled){color:color-mix(in srgb, var(--red) 55%, var(--settings-main-text,var(--theme-main-text,#f2efeb)));background:color-mix(in srgb, var(--settings-main-text,var(--theme-main-text,#f2efeb)) var(--alpha-hover), transparent)}.btn.btn--sm{border-radius:var(--radius-sm);min-height:30px;padding:0 14px;font-size:12px}@media (prefers-reduced-motion:reduce){.btn{transition:none}.btn:not(:disabled):active{transform:none}}", zm = ".sunday-switch{--sunday-signal:var(--settings-control-solid,var(--theme-control-solid,var(--theme-control-background,#fbf7f0)));--sunday-signal-ink:var(--settings-control-text,var(--theme-control-text,#2e3138));--sunday-area-text:var(--settings-main-text,var(--theme-main-text,#f2efeb));--sunday-w:40px;--sunday-h:24px;--sunday-pad:3px;--sunday-thumb:16px;--sunday-travel:calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb));cursor:pointer;flex:none;align-items:center;display:inline-flex;position:relative}.sunday-switch--sm{--sunday-w:34px;--sunday-h:20px;--sunday-pad:2px;--sunday-thumb:14px;--sunday-travel:calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb))}.sunday-switch__input{z-index:2;opacity:0;cursor:pointer;width:100%;height:100%;margin:0;position:absolute;inset:0}.sunday-switch__input:disabled{cursor:not-allowed}.sunday-switch__track{width:var(--sunday-w);height:var(--sunday-h);border:1px solid color-mix(in srgb, var(--sunday-area-text) 18%, transparent);border-radius:var(--radius-sm);background:color-mix(in srgb, var(--sunday-area-text) 6%, transparent);transition:background-color var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);flex:none;position:relative}.sunday-switch__thumb{top:var(--sunday-pad);left:var(--sunday-pad);width:var(--sunday-thumb);height:var(--sunday-thumb);border-radius:calc(var(--radius-sm) / 2);background:color-mix(in srgb, var(--sunday-area-text) 46%, transparent);transition:transform var(--dur-slow) var(--ease-out), background-color var(--dur-base) var(--ease-out);position:absolute}.sunday-switch:hover .sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 32%, transparent)}.sunday-switch:hover .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 62%, transparent)}.sunday-switch__input:checked+.sunday-switch__track{border-color:var(--sunday-signal);background:var(--sunday-signal)}.sunday-switch__input:checked+.sunday-switch__track .sunday-switch__thumb{background:var(--sunday-signal-ink);transform:translateX(var(--sunday-travel))}.sunday-switch:hover .sunday-switch__input:checked+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink));background:color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink))}.sunday-switch__input:focus-visible+.sunday-switch__track{outline:2px solid var(--blue);outline-offset:2px}.sunday-switch:has(.sunday-switch__input:disabled){cursor:not-allowed}.sunday-switch__input:disabled+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 10%, transparent);background:color-mix(in srgb, var(--sunday-area-text) 4%, transparent)}.sunday-switch__input:disabled+.sunday-switch__track .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 24%, transparent)}.sunday-switch__input:disabled:checked+.sunday-switch__track{border-color:color-mix(in srgb, var(--sunday-area-text) 12%, transparent);background:color-mix(in srgb, var(--sunday-area-text) 12%, transparent)}.sunday-switch__input:disabled:checked+.sunday-switch__track .sunday-switch__thumb{background:color-mix(in srgb, var(--sunday-area-text) 44%, transparent);transform:translateX(var(--sunday-travel))}.sunday-switch__label{color:inherit;font-size:inherit;white-space:nowrap;margin-inline-start:var(--space-2);line-height:1.3}@media (prefers-reduced-motion:reduce){.sunday-switch__track,.sunday-switch__thumb{transition:none}}", Bm = ".ui-select{--ui-select-arrow-inset:11px;--ui-select-arrow-size:7px;--ui-select-arrow-gap:var(--space-1);min-width:0;position:relative}.ui-select-trigger{border:1px solid color-mix(in srgb, var(--settings-control-text,var(--theme-control-text,#f4f1ec)) 12%, transparent);border-radius:var(--radius-sm);background:color-mix(in srgb, var(--settings-control-solid,var(--theme-control-solid,#242424)) 70%, transparent);width:100%;min-height:32px;color:var(--settings-control-text,var(--theme-control-text,#f4f1ec));padding:0 calc(var(--ui-select-arrow-inset) + var(--ui-select-arrow-size) + var(--ui-select-arrow-gap)) 0 var(--space-2);text-align:left;align-items:center;font-size:13px;display:inline-flex}.ui-select-trigger:disabled{opacity:.45;cursor:default}.ui-select-trigger span:first-child{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.ui-select-arrow{right:var(--ui-select-arrow-inset);width:var(--ui-select-arrow-size);height:var(--ui-select-arrow-size);opacity:.7;transition:transform var(--dur-fast) var(--ease-out);border-bottom:1.5px solid;border-right:1.5px solid;position:absolute;top:50%;transform:translateY(-65%)rotate(45deg)}.ui-select.open .ui-select-arrow{transform:translateY(-35%)rotate(225deg)}.ui-select-menu{z-index:var(--ui-select-layer,var(--z-popover,60));border:1px solid color-mix(in srgb, currentColor 12%, transparent);border-radius:var(--radius);background:var(--settings-control-solid,var(--theme-control-background,#242424));max-height:320px;color:var(--settings-control-text,var(--theme-control-text,#f4f1ec));box-shadow:var(--shadow-md);transform-origin:top;gap:4px;padding:6px;display:grid;position:fixed;top:0;left:0;overflow:auto}.ui-select-menu--up{transform-origin:bottom}.ui-select-group{gap:2px;display:grid}.ui-select-group+.ui-select-group{border-top:1px solid color-mix(in srgb, currentColor 12%, transparent);margin-top:6px;padding-top:6px}.ui-select-group-label{color:color-mix(in srgb, currentColor 72%, transparent);white-space:nowrap;text-overflow:ellipsis;padding:4px 9px 3px;font-size:12px;font-weight:700;line-height:1.35;overflow:hidden}.ui-select-option{min-height:30px;color:inherit;text-align:left;white-space:nowrap;text-overflow:ellipsis;background:0 0;border:0;border-radius:0;padding:5px 9px;font-size:13px;line-height:1.35;display:block;position:relative;overflow:hidden}.ui-select-option:before{content:\"\";pointer-events:none;-webkit-mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);-webkit-mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);mask-image:linear-gradient(to right, #0003 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), #0003 100%);background:0 0;border-radius:0;position:absolute;inset:0}.ui-select-option:hover:before,.ui-select-option:focus-visible:before{background:color-mix(in srgb, currentColor var(--alpha-hover), transparent)}.ui-select-option:focus-visible{outline:none}.ui-select-option.active:before{background:color-mix(in srgb, currentColor var(--alpha-active), transparent)}.ui-select-option.active.active-accent{color:var(--green,#32d17d);background:0 0}.ui-select-option.separator-before{margin-top:7px;position:relative}.ui-select-option.separator-before:after{content:\"\";background:color-mix(in srgb, currentColor 16%, transparent);height:1px;position:absolute;top:-4px;left:9px;right:9px}.ui-select-option.disabled{opacity:.45;cursor:default}@media (prefers-reduced-motion:reduce){.ui-select-arrow{transition:none}}";
 //#endregion
 //#region ../src/lamtools_core/plugins/bundled/network-exploration/ui/src/page.mjs
-function Ip(e, t) {
-	if (t.addStyle) return t.addStyle(`${Np}\n${Mp}\n${Pp}\n${Fp}`);
+function Vm(e, t) {
+	if (t.addStyle) return t.addStyle(`${Rm}\n${Lm}\n${zm}\n${Bm}`);
 	let n = e.ownerDocument, r = n.createElement("style");
-	return r.nonce = n.querySelector("style[nonce]")?.nonce || "", r.dataset.networkPluginStyle = "true", r.textContent = `${Np}\n${Mp}\n${Pp}\n${Fp}`, n.head.append(r), () => r.remove();
+	return r.nonce = n.querySelector("style[nonce]")?.nonce || "", r.dataset.networkPluginStyle = "true", r.textContent = `${Rm}\n${Lm}\n${zm}\n${Bm}`, n.head.append(r), () => r.remove();
 }
-function Lp(e, t) {
-	return zp(e, t, vp);
+function Hm(e, t) {
+	return Wm(e, t, Cm);
 }
-function Rp(e, t) {
-	return zp(e, t, jp);
+function Um(e, t) {
+	return Wm(e, t, Im);
 }
-function zp(e, t, n) {
-	let r = Ip(e, t), i = !1, a = document.createElement("div");
-	a.className = n === jp ? "nx-mount nx-mount--quick" : "nx-mount", e.append(a), Bp++;
+function Wm(e, t, n) {
+	let r = Vm(e, t), i = !1, a = document.createElement("div");
+	a.className = n === Im ? "nx-mount nx-mount--quick" : "nx-mount", e.append(a), Gm++;
 	let o = e.closest(".split-plugin-page");
 	o?.classList.add("nx-host");
 	let s = e.closest(".workspace-main");
 	s?.classList.add("nx-plugin-full");
 	let c = Es(n, { context: t });
-	c.config.idPrefix = `network-${Bp}`;
+	c.config.idPrefix = `network-${Gm}`;
 	let l = () => {
 		i || (i = !0, t.signal?.removeEventListener("abort", l), c.unmount(), r(), a.remove(), o?.classList.remove("nx-host"), s?.classList.remove("nx-plugin-full"));
 	};
@@ -17392,6 +17864,6 @@ function zp(e, t, n) {
 	}
 	return t.signal?.addEventListener("abort", l, { once: !0 }), l;
 }
-var Bp = 0;
+var Gm = 0;
 //#endregion
-export { Lp as mount, Rp as mountQuick };
+export { Hm as mount, Um as mountQuick };

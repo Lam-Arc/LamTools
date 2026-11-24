@@ -1,12 +1,22 @@
 import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
 import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '@/transport/index.ts'
 import { TransportRequestTimeoutError, TransportRpcError } from '@/transport/index.ts'
+import { TransportDisconnectedError } from '@/transport/types.ts'
+import { isPendingWriteMethod, matchesWriteReceipt, readWriteReceipt, writeReceiptResponse, type PendingWriteMethod } from '@/appServer/pendingWrites.ts'
+import { isCoreSessionBusyError } from '@/appServer/workbenchActions.ts'
 
 export class CoreRequestAcceptanceUnknownError extends Error {
   readonly code = 'ACCEPTANCE_UNKNOWN'
   constructor(readonly clientMessageId: string, readonly cause: unknown) {
-    super('Message acceptance could not be confirmed. Retry the same submission to check its status.')
+    super('这条消息暂未确认送达，重新连接后会查询原请求的回执。')
     this.name = 'CoreRequestAcceptanceUnknownError'
+  }
+}
+
+export class CoreHistoryEditConflictError extends Error {
+  constructor() {
+    super('会话历史已更新，请重新打开原消息编辑。')
+    this.name = 'CoreHistoryEditConflictError'
   }
 }
 
@@ -91,7 +101,7 @@ export class CoreAppServerClient {
   private removeStateListener: (() => void) | null = null
   private readonly serverRequestIds = new Map<string, number | string>()
   private readonly acceptanceWaiters = new Set<{
-    method: string; threadId: string; clientId: string
+    method: PendingWriteMethod; threadId: string; clientId: string
     resolve(value: Record<string, unknown>): void
   }>()
   private closed = false
@@ -188,7 +198,8 @@ export class CoreAppServerClient {
 
   private async performRequest(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
     const clientId = String(params.client_message_id || '')
-    if (!clientId || (method !== 'turn/start' && method !== 'turn/resume')) {
+    const threadId = String(params.thread_id || '')
+    if (!clientId || !threadId || !isPendingWriteMethod(method)) {
       return await this.requestRaw(method, params, timeoutMs)
     }
     // A committed, correlated acceptance event is as authoritative as the RPC
@@ -196,18 +207,28 @@ export class CoreAppServerClient {
     const abort = new AbortController()
     let resolve!: (value: Record<string, unknown>) => void
     const accepted = new Promise<Record<string, unknown>>((done) => { resolve = done })
-    const waiter = { method, threadId: String(params.thread_id || ''), clientId, resolve }
+    const waiter = { method, threadId, clientId, resolve }
     this.acceptanceWaiters.add(waiter)
     const acknowledgement = this.requestRaw(method, params, timeoutMs, abort.signal).catch(async (error) => {
-      if (!(error instanceof TransportRequestTimeoutError)) throw error
-      // Reconcile once using the SAME idempotency key, not a new submission.
-      // Keep the original deadline; this separate bounded lookup can recover
-      // a lost reply after durable acceptance. No execution wait or timeout bump.
-      try {
-        return await this.requestRaw(method, params, 5_000, abort.signal)
-      } catch (recoveryError) {
-        throw new CoreRequestAcceptanceUnknownError(clientId, recoveryError)
+      // user:“全修”+(请求超时只读回执，直接断线则交给重连处理，均不自动重发)。
+      if (error instanceof TransportRequestTimeoutError) {
+        try {
+          const response = await this.requestRaw('thread/writeReceipts', {
+            thread_id: threadId, client_message_ids: [clientId],
+          }, 5_000, abort.signal)
+          const receipt = readWriteReceipt(response, method, threadId, clientId)
+          if (receipt) return writeReceiptResponse(method, receipt)
+        } catch (recoveryError) {
+          throw new CoreRequestAcceptanceUnknownError(clientId, recoveryError)
+        }
+        throw new CoreRequestAcceptanceUnknownError(clientId, error)
       }
+      const untypedTransportFailure = error instanceof TransportRpcError && error.code === undefined
+        && !isCoreSessionBusyError(error) && !error.message.includes('Revision conflict; refresh the session')
+      if (error instanceof TransportDisconnectedError || untypedTransportFailure) {
+        throw new CoreRequestAcceptanceUnknownError(clientId, error)
+      }
+      throw error
     })
     try {
       return await Promise.race([acknowledgement, accepted])
@@ -295,10 +316,9 @@ export class CoreAppServerClient {
       }
       const event = asEventEnvelope(message.method, params)
       for (const waiter of this.acceptanceWaiters) {
-        const expected = waiter.method === 'turn/start' ? 'turn/accepted' : 'turn/started'
-        if (event.method === expected && event.thread_id === waiter.threadId
+        if (matchesWriteReceipt(waiter.method, event) && event.thread_id === waiter.threadId
             && event.client_message_id === waiter.clientId) {
-          waiter.resolve({ events: [event], ...(waiter.method === 'turn/resume' ? { turn_id: event.turn_id } : {}) })
+          waiter.resolve(writeReceiptResponse(waiter.method, event))
         }
       }
       this.options.onEvent?.(event)

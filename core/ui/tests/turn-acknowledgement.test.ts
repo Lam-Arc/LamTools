@@ -70,6 +70,7 @@ describe('committed turn acceptance', () => {
       createClient: () => ({
         connect: async () => {}, close: () => {}, respondServerRequest: () => false,
         request: async (method, input = {}) => {
+          if (method === 'thread/writeReceipts') return { events: [] }
           if (method === 'turn/resume') {
             ids.push(input.client_message_id)
             if (ids.length === 1) throw new CoreRequestAcceptanceUnknownError(String(ids[0]), new Error('lost'))
@@ -100,19 +101,17 @@ describe('committed turn acceptance', () => {
     client.close()
   })
 
-  it('recovers acceptance at 60.5s after timeout with the same key, not a second input', async () => {
+  it('recovers acceptance after timeout by reading the receipt without retransmitting', async () => {
     vi.useFakeTimers()
     const { socket, client } = await fixture()
     const result = client.request('turn/start', params, 60_000)
     await vi.advanceTimersByTimeAsync(60_000)
     const sends = socket.sent.filter(x => x.method === 'turn/start')
-    expect(sends).toHaveLength(2)
-    expect(sends[1].params).toEqual(sends[0].params)
+    expect(sends).toHaveLength(1)
+    const lookup = socket.sent.find(x => x.method === 'thread/writeReceipts')!
+    expect(lookup.params).toEqual({ thread_id: params.thread_id, client_message_ids: [params.client_message_id] })
     await vi.advanceTimersByTimeAsync(500)
-    // The original reply is late and no longer owns an RPC waiter. The
-    // durable event still settles the submission and cancels reconciliation.
-    socket.emit({ id: sends[0].id, result: { events: [event] } })
-    socket.emit({ method: 'turn/accepted', params: event })
+    socket.emit({ id: lookup.id, result: { events: [event] } })
     expect(await result).toEqual({ events: [event] })
     client.close()
   })

@@ -9,8 +9,6 @@ use crate::browser::tabs::label_for;
 #[cfg(not(windows))]
 use crate::browser::url_policy::allowed_navigation;
 use crate::browser::BrowserError;
-#[cfg(not(windows))]
-use crate::browser::EVENT_PENDING_TAB;
 
 /// user:“网页跑到分屏外面”+(坐标空间约定，写死在 browser 模块：
 /// **前端一律传「物理像素」= CSS px × `window.devicePixelRatio`（在 native.ts 的 boundsArgs
@@ -154,7 +152,7 @@ fn create_legacy(
                 // 用户发起的弹窗才算；页面脚本自动弹的也先拦下来，由前端决定是否打开。
                 user_initiated: false,
             };
-            let _ = popup_app.emit_to("main", EVENT_PENDING_TAB, payload);
+            super::emit_pending_tab(&popup_app, payload);
             tauri::webview::NewWindowResponse::Deny
         });
     // user:“临时会话/自定义目录先留接缝”+(profile 只能在创建 controller 之前生效；创建之后的 controller 无法回填)。
@@ -174,6 +172,7 @@ fn create_legacy(
     let builder = builder.on_download(move |_webview, event| {
         match event {
             tauri::webview::DownloadEvent::Requested { url, destination } => {
+                // user:“修”+(这个事件只有 URL，保留浏览器原请求的方法、表单数据和登录状态)。
                 let Some(dir) = crate::browser::download_dir(&download_app) else {
                     return false;
                 };

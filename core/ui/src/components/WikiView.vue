@@ -61,7 +61,7 @@
             </li>
           </ul>
         </section>
-        <p v-if="!visibleGroups.length" class="wiki-rail-empty">{{ t('没有匹配的文档') }}</p>
+        <p v-if="!visibleGroups.length" class="wiki-rail-empty">{{ railEmptyText }}</p>
       </nav>
     </aside>
 
@@ -105,8 +105,21 @@
       <div ref="scrollEl" class="wiki-scroll" data-wiki-scroll @scroll.passive="onScroll">
         <article ref="articleEl" class="wiki-article" data-wiki-article @click.capture="onArticleClick">
           <MarkdownRenderer v-if="content" :content="content" :file-references="false" />
-          <p v-else-if="errorText" class="wiki-error" data-wiki-error>{{ errorText }}</p>
-          <p v-else-if="listLoaded" class="wiki-loading">{{ t('没有可用的文档') }}</p>
+          <!-- user:“去找四个库中用户体验最差的点，处理掉”+(读取失败与“没有文档”分开说：
+               失败给重试，空文档说明它随安装包分发，不再是一句没有出口的提示)。 -->
+          <div v-else-if="navError" class="wiki-recover" data-wiki-error>
+            <p class="wiki-error">{{ navError }}</p>
+            <button class="library-button" type="button" data-wiki-retry @click="reload">{{ t('重试') }}</button>
+          </div>
+          <div v-else-if="errorText" class="wiki-recover" data-wiki-error>
+            <p class="wiki-error">{{ errorText }}</p>
+            <button class="library-button" type="button" data-wiki-retry @click="retryArticle">{{ t('重试') }}</button>
+          </div>
+          <div v-else-if="listLoaded && !articles.length" class="wiki-recover" data-wiki-empty>
+            <p class="wiki-loading">{{ t('这个版本没有随包文档。') }}</p>
+            <p class="wiki-loading">{{ t('Wiki 是随安装包分发的只读文档；重装或更新后再看。') }}</p>
+            <button class="library-button" type="button" data-wiki-retry @click="reload">{{ t('重试') }}</button>
+          </div>
           <p v-else class="wiki-loading">{{ t('读取中…') }}</p>
         </article>
       </div>
@@ -195,6 +208,7 @@ const activeTitle = ref('')
 const activeSummary = ref('')
 const content = ref('')
 const errorText = ref('')
+const navError = ref('')
 const listLoaded = ref(false)
 const headings = ref<WikiHeadingEntry[]>([])
 const activeHeading = ref('')
@@ -396,6 +410,11 @@ async function open(
   const group = navigation.value.groups.find(item => item.articles.includes(slug))
   if (group && !expanded.value.has(group.id)) expanded.value = new Set([...expanded.value, group.id])
 
+  await loadArticle(slug, hash)
+}
+
+/** 读一篇正文：清空上一页的目录与进度；失败只改 errorText，不把整个列表一起拖垮。 */
+async function loadArticle(slug: string, hash = ''): Promise<void> {
   content.value = ''
   errorText.value = ''
   pendingHash.value = hash
@@ -459,6 +478,7 @@ function onArticleClick(event: MouseEvent): void {
 /* ── 装载 ── */
 
 async function loadNavigation(): Promise<void> {
+  navError.value = ''
   try {
     const payload = await props.requestRpc('library.wiki.list', {})
     articles.value = Array.isArray(payload.articles) ? payload.articles as WikiArticleMeta[] : []
@@ -466,12 +486,34 @@ async function loadNavigation(): Promise<void> {
   } catch {
     articles.value = []
     navigation.value = { index: '', groups: [] }
+    navError.value = t('文档列表读取失败')
   } finally {
     listLoaded.value = true
   }
   const first = navigation.value.groups[0]
   if (!expanded.value.size && first) expanded.value = new Set([first.id])
 }
+
+/** 列表读取失败或安装包缺文档时的出口：重新拉列表并打开第一篇。 */
+async function reload(): Promise<void> {
+  listLoaded.value = false
+  navError.value = ''
+  await loadNavigation()
+  const start = navigation.value.index || articles.value[0]?.slug || ''
+  if (start) await open(start, { push: false })
+}
+
+/** 正文读取失败后的重试：同一篇再读一次（open 对同 slug 会直接返回，不能复用它）。 */
+function retryArticle(): void {
+  if (activeSlug.value) void loadArticle(activeSlug.value)
+}
+
+/** 左栏空态要分清“筛没命中”“列表读失败”“安装包没带文档”。 */
+const railEmptyText = computed(() => {
+  if (navError.value) return t('文档列表读取失败')
+  if (listLoaded.value && !articles.value.length) return t('没有随包文档')
+  return t('没有匹配的文档')
+})
 
 watch([activeTitle, activeSummary], () => {
   emit('heading', { title: activeTitle.value || t('Wiki'), subtitle: activeSummary.value })
@@ -695,6 +737,8 @@ defineExpose({ handleBack: (): boolean => back() })
 .wiki-loading,
 .wiki-error { margin: 0; font-size: 13px; color: color-mix(in srgb, var(--text) 52%, transparent); }
 .wiki-error { color: var(--red); }
+.wiki-recover { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.wiki-recover .library-button { min-height: 30px; }
 
 /* ── 右栏：悬浮目录与进度 ── */
 .wiki-toc {

@@ -2558,3 +2558,237 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* user:“概览、下载、互联、诊断四个视图，代理和高级设置收进设置页”+(四视图导航、设置分区、互联入口与一键诊断的样式)。 */
+.nx-status-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 20px;
+  border: 1px solid var(--nx-line);
+  border-radius: 16px;
+  background: var(--nx-panel);
+}
+.nx-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.nx-status-cell > span {
+  color: var(--nx-muted);
+  font-size: 11px;
+}
+.nx-status-cell > strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-status-cell > em {
+  overflow: hidden;
+  color: var(--nx-faint);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-status-cell > em.is-ok {
+  color: var(--nx-accent);
+}
+.nx-status-cell > em.is-warn {
+  color: var(--nx-warning);
+}
+.nx-status-action {
+  white-space: nowrap;
+}
+.nx-home-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 18px;
+  border: 1px solid var(--nx-line);
+  border-radius: 16px;
+  background: var(--nx-panel);
+  color: inherit;
+  text-align: left;
+}
+.nx-home-link:hover {
+  border-color: color-mix(in srgb, var(--nx-accent) 30%, var(--nx-line));
+}
+.nx-home-link-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.nx-home-link-copy > strong {
+  font-size: 13px;
+}
+.nx-home-link-copy > em {
+  color: var(--nx-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+.nx-settings {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.nx-settings-tabs {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nx-settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nx-muted);
+  font-size: 12px;
+  text-align: left;
+}
+.nx-settings-tab:hover {
+  background: color-mix(in srgb, var(--nx-text) 6%, transparent);
+  color: var(--nx-text);
+}
+.nx-settings-tab.is-active {
+  border-color: color-mix(in srgb, var(--nx-accent) 26%, transparent);
+  background: color-mix(in srgb, var(--nx-accent) 11%, transparent);
+  color: var(--nx-accent);
+}
+.nx-settings-body {
+  min-width: 0;
+}
+@media (max-width: 860px) {
+  .nx-settings {
+    grid-template-columns: 1fr;
+  }
+  .nx-settings-tabs {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+.nx-interconnect-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.nx-interconnect-hero .nx-control-copy {
+  flex: 1;
+  min-width: 0;
+}
+.nx-interconnect-hero h2 {
+  font-size: 15px;
+}
+.nx-interconnect-hero p {
+  margin-top: 3px;
+  color: var(--nx-muted);
+  font-size: 12px;
+}
+.nx-interconnect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 860px) {
+  .nx-interconnect-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.nx-fact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+.nx-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.nx-fact > span {
+  color: var(--nx-muted);
+}
+.nx-network-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--nx-line);
+}
+.nx-network-result > strong {
+  font-size: 14px;
+}
+.nx-download-settings {
+  padding: 0;
+}
+.nx-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.nx-settings-toggle > span:first-of-type {
+  font-size: 13px;
+  font-weight: 600;
+}
+.nx-settings-toggle > .nx-subtle {
+  flex: 1;
+}
+.nx-download-settings .nx-form-grid {
+  padding: 0 18px 18px;
+}
+
+/* user:“怎么切换订阅”+(订阅列表只占一行一组，不抢上面的主卡片)。 */
+.nx-subscribe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nx-subscribe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nx-subscribe-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--nx-line);
+  border-radius: 10px;
+}
+.nx-subscribe-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-form-field--wide {
+  grid-column: span 2;
+}
+.nx-form-field--wide > small {
+  font-size: 11px;
+}

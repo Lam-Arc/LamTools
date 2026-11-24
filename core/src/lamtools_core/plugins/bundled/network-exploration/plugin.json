@@ -3,7 +3,7 @@
     "./skills"
   ],
   "name": "easynet",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "EasyNet · 订阅、线路与下载，一个开关就能用",
   "config": {
     "panel": "./config/panel.js",

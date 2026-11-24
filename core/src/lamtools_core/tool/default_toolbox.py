@@ -1108,6 +1108,16 @@ def _core_spec_for(name: str) -> ToolSpec:
     )
 
 
+def windows_desktop_available() -> bool:
+    """Whether this host can drive a Windows desktop at all.
+
+    user:“运行失败 module 'ctypes' has no attribute 'WINFUNCTYPE'”+(安卓手机里的核心
+    跑在 Linux 容器内；桌面操作依赖 user32，导入期就会炸。按平台判断，别让一个平台
+    专属能力拖垮整轮工具装配)。
+    """
+    return sys.platform == "win32"
+
+
 def default_core_tool_specs() -> list[ToolSpec]:
     names = [
         name
@@ -1118,6 +1128,11 @@ def default_core_tool_specs() -> list[ToolSpec]:
     # 注册了也只会是一个点了没反应的按钮)。
     if not android_control_available():
         names = [name for name in names if name != "android_use"]
+    # user:“运行失败 module 'ctypes' has no attribute 'WINFUNCTYPE'”+(手机的核心跑在
+    # Linux 容器里，Win32 桌面操作这套一导入就抛异常，整轮装配直接失败。桌面操作只在
+    # Windows 宿主存在，其它平台连工具都不暴露——和 android_use 同样的处理方式。)
+    if not windows_desktop_available():
+        names = [name for name in names if name != "computer_use"]
     return [_core_spec_for(name) for name in names]
 
 
@@ -2867,7 +2882,12 @@ class CoreToolbox:
 
         # user:“启动有变的异常之久了”+(PIL/截屏栈只在真正装配桌面操作工具时导入，
         # 不再让每次启动都付这份导入成本。)
-        from lamtools_core.computer_use import make_computer_use_handler
+        # user:“运行失败 module 'ctypes' has no attribute 'WINFUNCTYPE'”+(还要按平台：
+        # Linux 容器里没有 user32，导入这个包本身就会抛异常，于是整轮装配失败)。
+        if windows_desktop_available():
+            from lamtools_core.computer_use import make_computer_use_handler
+        else:
+            make_computer_use_handler = None
 
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
@@ -2908,7 +2928,13 @@ class CoreToolbox:
             "mcp": inspect_mcp,
             # user:“查一下 computer use 功能怎么做”+(桌面操作工具装配到默认工具箱，
             # work_root 用来落截图证据)。
-            "computer_use": make_computer_use_handler(self.work_root),
+            # user:“运行失败 module 'ctypes' has no attribute 'WINFUNCTYPE'”+(只在能
+            # 真正操作 Windows 桌面的宿主上装配；手机容器里这个工具不存在)。
+            **(
+                {"computer_use": make_computer_use_handler(self.work_root)}
+                if make_computer_use_handler is not None
+                else {}
+            ),
             # user:“加，安卓控制”+(只在安卓上装配；其它平台连通道都不存在)。
             **(
                 {"android_use": make_android_use_handler()}

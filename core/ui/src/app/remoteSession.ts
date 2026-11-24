@@ -209,5 +209,51 @@ export function activateDevice(id: string | null): void {
     return
   }
   const device = readDevices().find((item) => item.id === id)
-  if (device) saveTicket(device.ticket)
+  if (device) {
+    saveTicket(device.ticket)
+    // user:“已授权设备后续能自动重连，不要求每次重新扫”+(设备清单里存的是 sunday1 地址票；
+    // 切设备时两份都要换，否则 `ensureRemote` 会先读到上一台的 resume 票，连回错误的电脑)。
+    saveResumeTicket(device.ticket)
+  }
+}
+
+/**
+ * 连接成功后决定“以后用哪张票”。
+ *
+ * user:“配对成功后建立持久设备信任，下次自动连接”+(`sunday2:` 配对票只有 5 分钟，
+ * 不能当长期凭据；宿主把 `sunday1:` 地址票带回来时，当前票、重连票和设备清单都换成它。
+ * 老宿主不返回 resume 时退回用户刚输入的票，至少这一次仍能用)。
+ */
+export function saveConnectedDevice(ticket: string, resume: string, name: string): string {
+  const durable = (resume || '').trim() || (ticket || '').trim()
+  if (!durable) return ''
+  saveTicket(durable)
+  if ((resume || '').trim()) saveResumeTicket(resume.trim())
+  rememberDevice(durable, name)
+  return durable
+}
+
+
+/**
+ * 后台保持连接：默认开，只有用户明确关掉才写 '0'。
+ *
+ * user:“简单可靠易用”+(开关只表达一件事：手机进后台时要不要用一条低优先级通知
+ * 把连接留在前台服务里；连接协议与身份都不受影响)。
+ */
+const KEEP_ALIVE_KEY = 'sunday.p2p.keepAlive'
+
+export function readKeepAlivePref(): boolean {
+  try {
+    return localStorage.getItem(KEEP_ALIVE_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+export function saveKeepAlivePref(value: boolean): void {
+  try {
+    localStorage.setItem(KEEP_ALIVE_KEY, value ? '1' : '0')
+  } catch {
+    // 存储不可用只影响下一次启动的默认值，这一次仍然生效。
+  }
 }

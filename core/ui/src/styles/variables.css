@@ -77,6 +77,10 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* user:“底部导航的文字被系统手势条压住”+(安全区是整屏共用的：定义在根上，
+     壳内的输入栏和壳外的底部导航、底部面板都能读到；宿主上报优先，桌面退回 env)。 */
+  --safe-area-bottom: max(var(--native-safe-area-bottom, 0px), env(safe-area-inset-bottom, 0px));
+
   /* —— 阴影分级（替代各组件 bespoke 阴影；--shadow 旧别名指向 --shadow-lg 向后兼容）—— */
   --shadow-xs: 0 1px 4px rgba(0,0,0,.06);
   --shadow-sm: 0 2px 8px rgba(0,0,0,.12);

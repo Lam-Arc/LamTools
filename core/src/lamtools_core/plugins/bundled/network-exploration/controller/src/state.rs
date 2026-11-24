@@ -26,6 +26,11 @@ pub struct Saved {
     pub automations: Vec<Value>,
     #[serde(default)]
     pub events: VecDeque<Value>,
+    /// user:“怎么切换订阅”+(记住导入过的订阅来源，随时切回去；URL 加密保存，列表只回 host)。
+    #[serde(default)]
+    pub subscriptions: Vec<Value>,
+    #[serde(default)]
+    pub active_subscription: String,
 }
 pub struct Controller {
     pub data: PathBuf,
@@ -85,6 +90,129 @@ impl Controller {
         }
         std::fs::rename(temporary, destination).map_err(|e| e.to_string())
     }
+    /// 实际生效的默认下载目录：设置里优先，否则插件私有 downloads。
+    pub fn default_download_directory(&self) -> String {
+        let configured = self.saved.settings["download"]["directory"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        configured
+            .map(str::to_string)
+            .unwrap_or_else(|| self.data.join("downloads").to_string_lossy().to_string())
+    }
+    fn subscription_list(&self) -> Value {
+        // 只回 host、时间与是否当前，不回原始 URL。
+        json!(self
+            .saved
+            .subscriptions
+            .iter()
+            .map(|row| json!({
+                "id": row["id"],
+                "host": row["host"],
+                "saved_at": row["saved_at"],
+                "active": row["id"].as_str() == Some(self.saved.active_subscription.as_str()),
+            }))
+            .collect::<Vec<_>>())
+    }
+    async fn remember_subscription(&mut self, p: &Value) -> Result<(), String> {
+        // user:“怎么切换订阅”+(从订阅链接导入时记住来源；手动粘贴配置则标记为本地配置)。
+        let source = p["subscription"].as_str().map(str::trim).unwrap_or("");
+        if source.is_empty() {
+            self.saved.active_subscription.clear();
+            self.persist()?;
+            return Ok(());
+        }
+        let parsed = crate::observe::http_url(source)?;
+        let host = parsed.host_str().unwrap_or("").to_string();
+        let cipher = crate::engines::protect(source).await?;
+        let id = {
+            use sha2::{Digest, Sha256};
+            let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+            digest[..12].to_string()
+        };
+        let saved_at = chrono::Utc::now().to_rfc3339();
+        if let Some(row) = self
+            .saved
+            .subscriptions
+            .iter_mut()
+            .find(|row| row["id"].as_str() == Some(id.as_str()))
+        {
+            row["host"] = json!(host);
+            row["saved_at"] = json!(saved_at);
+            row["protected_url"] = json!(cipher);
+        } else {
+            self.saved.subscriptions.push(json!({
+                "id": id, "host": host, "saved_at": saved_at, "protected_url": cipher,
+            }));
+            while self.saved.subscriptions.len() > 10 {
+                self.saved.subscriptions.remove(0);
+            }
+        }
+        self.saved.active_subscription = id;
+        self.persist()
+    }
+    async fn subscription_action(&mut self, p: Value) -> Reply {
+        match p["action"].as_str() {
+            Some("list") => Ok(json!({"subscriptions":self.subscription_list()})),
+            Some("activate") => {
+                let id = p["id"].as_str().ok_or("缺少订阅 ID")?.to_string();
+                let row = self
+                    .saved
+                    .subscriptions
+                    .iter()
+                    .find(|row| row["id"].as_str() == Some(id.as_str()))
+                    .cloned()
+                    .ok_or("这条订阅已经不在列表里")?;
+                let url = crate::engines::unprotect(
+                    row["protected_url"].as_str().ok_or("订阅记录损坏")?,
+                )
+                .await?;
+                let was_running = self.engines.proxy.is_some();
+                if was_running {
+                    // 切换前先把系统代理还原，避免把系统指向一个即将停掉的端口。
+                    let _ = self.rollback_kind("proxy").await;
+                    let _ = self.engines.stop_proxy().await;
+                }
+                let result = self.engines.proxy_config(json!({"subscription":url})).await;
+                match result {
+                    Ok(value) => {
+                        self.saved.active_subscription = id;
+                        if was_running {
+                            let _ = self.engines.start_proxy(json!({})).await;
+                        }
+                        self.persist()?;
+                        Ok(json!({"active":self.subscription_list(),"restarted":was_running,"result":value}))
+                    }
+                    Err(error) => {
+                        if was_running {
+                            let _ = self.engines.start_proxy(json!({})).await;
+                        }
+                        Err(error)
+                    }
+                }
+            }
+            Some("remove") => {
+                let id = p["id"].as_str().ok_or("缺少订阅 ID")?.to_string();
+                self.saved
+                    .subscriptions
+                    .retain(|row| row["id"].as_str() != Some(id.as_str()));
+                if self.saved.active_subscription == id {
+                    self.saved.active_subscription.clear();
+                }
+                self.persist()?;
+                Ok(json!({"subscriptions":self.subscription_list()}))
+            }
+            _ => Err("订阅操作只能是 list、activate 或 remove".into()),
+        }
+    }
+    pub fn apply_download_settings(&mut self) {
+        let download = &self.saved.settings["download"];
+        self.engines.download = (
+            download["concurrency"].as_u64().unwrap_or(3).clamp(1, 8),
+            download["max_tries"].as_u64().unwrap_or(5).clamp(1, 20),
+            download["bytes_per_second"].as_u64().unwrap_or(0),
+        );
+    }
     pub fn event(&mut self, kind: &str, message: &str) {
         self.saved.events.push_back(
             json!({"time":chrono::Utc::now().to_rfc3339(),"kind":kind,"message":message}),
@@ -96,7 +224,7 @@ impl Controller {
     pub async fn call(&mut self, method: &str, p: Value) -> Reply {
         match method {
             "status" => self.status().await,
-            "settings.update" => self.update_settings(p),
+            "settings.update" => self.update_settings(p).await,
             "connections" => crate::observe::connections(p).await,
             "interfaces" => crate::observe::interfaces().await,
             "dns.query" => crate::observe::dns_query(p).await,
@@ -124,7 +252,14 @@ impl Controller {
             "proxy.delay" => self.engines.proxy_delay(p).await,
             "proxy.optimize" => self.engines.proxy_optimize(p).await,
             "proxy.mode" => self.engines.proxy_mode(p).await,
-            "proxy.config" => self.engines.proxy_config(p).await,
+            "proxy.config" => {
+                let result = self.engines.proxy_config(p.clone()).await;
+                if result.is_ok() {
+                    self.remember_subscription(&p).await?;
+                }
+                result
+            }
+            "proxy.subscriptions" => self.subscription_action(p).await,
             // user:“本机加速层 你学习一下呗…它该抄就抄”+(本地 CONNECT 加速，代理内核只作为非命中域名的兜底)。
             "accelerator.start" => {
                 let fallback = self.proxy_expected.then_some(17890);
@@ -168,10 +303,11 @@ impl Controller {
             "accelerator":self.accelerator.status(),
             "traffic":self.history.back(),"history":self.history,"rules":self.saved.rules,"reports":self.saved.reports,
             "transactions":transactions,"events":self.saved.events,"downloads":downloads,
+            "download_default":self.default_download_directory(),"subscriptions":self.subscription_list(),
             "automations":self.saved.automations}),
         )
     }
-    fn update_settings(&mut self, p: Value) -> Reply {
+    async fn update_settings(&mut self, p: Value) -> Reply {
         if p["revision"].as_u64() != Some(self.saved.revision) {
             return Err("设置已在其他面板更新，请刷新后重试".into());
         }
@@ -186,10 +322,46 @@ impl Controller {
                 return Err("无效的运行模式".into());
             }
         }
+        // user:“并发数量、限速、重试策略可设置”+(下载设置在这里校验，未知字段整批拒绝)。
+        if let Some(download) = value.get("download") {
+            let map = download.as_object().ok_or("download 必须是对象")?;
+            for key in map.keys() {
+                if !matches!(key.as_str(), "concurrency" | "max_tries" | "bytes_per_second" | "directory") {
+                    return Err(format!("未知下载设置 {key}"));
+                }
+            }
+            if let Some(rows) = map.get("concurrency") {
+                if !matches!(rows.as_u64(), Some(1..=8)) {
+                    return Err("同时下载数应为 1–8".into());
+                }
+            }
+            if let Some(rows) = map.get("max_tries") {
+                if !matches!(rows.as_u64(), Some(1..=20)) {
+                    return Err("失败重试次数应为 1–20".into());
+                }
+            }
+            if let Some(rows) = map.get("bytes_per_second") {
+                if rows.as_u64().is_none() {
+                    return Err("全局限速应为非负整数".into());
+                }
+            }
+            // user:“知不知道怎么修改下载默认位置”+(只接受绝对路径；空字符串表示恢复默认)。
+            if let Some(rows) = map.get("directory") {
+                let text = rows.as_str().ok_or("默认下载目录必须是字符串")?.trim();
+                if !text.is_empty() {
+                    if !std::path::Path::new(text).is_absolute() {
+                        return Err("默认下载目录必须是绝对路径".into());
+                    }
+                    if text.contains(['\0', '<', '>', '|', '?', '*']) {
+                        return Err("默认下载目录包含非法字符".into());
+                    }
+                }
+            }
+        }
         let old = self.saved.settings.clone();
         let revision = self.saved.revision;
         for key in value.keys() {
-            if !matches!(key.as_str(), "sample_seconds" | "mode") {
+            if !matches!(key.as_str(), "sample_seconds" | "mode" | "download") {
                 return Err(format!("未知设置 {key}"));
             }
         }
@@ -201,6 +373,15 @@ impl Controller {
             self.saved.settings = old;
             self.saved.revision = revision;
             return Err(error);
+        }
+        // 并发与全局限速可以就地生效；重试次数在下次启动下载内核时生效。
+        if self.engines.aria.is_some() && value.contains_key("download") {
+            let download = &self.saved.settings["download"];
+            let options = json!({
+                "max-concurrent-downloads": download["concurrency"].as_u64().unwrap_or(3).to_string(),
+                "max-overall-download-limit": download["bytes_per_second"].as_u64().unwrap_or(0).to_string(),
+            });
+            let _ = self.engines.aria_rpc("changeGlobalOption", vec![options]).await;
         }
         Ok(json!({"revision":self.saved.revision,"settings":self.saved.settings}))
     }
@@ -308,17 +489,65 @@ mod tests {
         )
         .unwrap()
     }
-    #[test]
-    fn settings_reject_stale_revision_and_survive_restart() {
+    #[tokio::test]
+    async fn settings_reject_stale_revision_and_survive_restart() {
         let mut c = controller();
         c.update_settings(json!({"revision":0,"settings":{"sample_seconds":3}}))
+            .await
             .unwrap();
         assert!(c
             .update_settings(json!({"revision":0,"settings":{"sample_seconds":8}}))
+            .await
             .is_err());
         let other = Controller::new(c.data.clone()).unwrap();
         assert_eq!(other.saved.settings["sample_seconds"], 3);
         std::fs::remove_dir_all(c.data).unwrap();
+    }
+    #[tokio::test]
+    async fn download_settings_are_validated_and_saved() {
+        // user:“并发数量、限速、重试策略可设置”+(合法值保存，越界与未知字段整批拒绝)。
+        let dir = std::env::temp_dir().join(format!("download-settings-{}", uuid::Uuid::new_v4()));
+        let mut controller = Controller::new(dir.clone()).unwrap();
+        let revision = controller.saved.revision;
+        let saved = controller
+            .call(
+                "settings.update",
+                json!({"revision":revision,"settings":{"download":{"concurrency":4,"max_tries":10,"bytes_per_second":1048576}}}),
+            )
+            .await;
+        assert!(saved.is_ok(), "{saved:?}");
+        assert_eq!(controller.saved.settings["download"]["concurrency"], 4);
+        let too_many = controller
+            .call(
+                "settings.update",
+                json!({"revision":controller.saved.revision,"settings":{"download":{"concurrency":99}}}),
+            )
+            .await;
+        assert!(too_many.is_err());
+        let unknown = controller
+            .call(
+                "settings.update",
+                json!({"revision":controller.saved.revision,"settings":{"download":{"bogus":1}}}),
+            )
+            .await;
+        assert!(unknown.is_err());
+        // user:“知不知道怎么修改下载默认位置”+(只接受绝对路径；空的表示回到插件默认目录)。
+        let relative = controller
+            .call(
+                "settings.update",
+                json!({"revision":controller.saved.revision,"settings":{"download":{"directory":"downloads"}}}),
+            )
+            .await;
+        assert!(relative.is_err());
+        let absolute = controller
+            .call(
+                "settings.update",
+                json!({"revision":controller.saved.revision,"settings":{"download":{"directory":"D:/EasyNet"}}}),
+            )
+            .await;
+        assert!(absolute.is_ok(), "{absolute:?}");
+        assert_eq!(controller.default_download_directory(), "D:/EasyNet");
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn conflicting_rules_are_not_committed() {

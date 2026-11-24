@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..event_store import AppEventInput
 from ..live_member import PreparedLiveInput
 from ..queue_state import (
+    effective_thread_status,
     input_items_text,
     next_dispatchable_queue_item,
     queue_delete_payload,
@@ -59,6 +60,7 @@ async def _dispatch_next_queue_item(
     work_root: str,
     completed_turn_id: str,
     active_goal: dict[str, Any] | None = None,
+    only_after_completion: bool = False,
 ) -> None:
     from .events import _app_event_input, _append_app_event
     from .runtime_tasks import _mirror_turn_started, _start_runtime_task
@@ -68,12 +70,16 @@ async def _dispatch_next_queue_item(
         params={"thread_id": thread_id},
     )
     live_permission_snapshot = live_permissions["runtime_snapshot"]
-    context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
+    if completed_turn_id:
+        context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
     claimed_turn_id = ""
 
     async def write(db: AsyncSession):
         nonlocal claimed_turn_id
-        snapshot = await context.persistence.load(db, thread_id)
+        # user:“及优化速度/逻辑”+(派发只读回合与队列元数据，长对话无需扫描完整消息记录)。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
+        if only_after_completion and effective_thread_status(snapshot) != "completed":
+            return [], None
         # user:“界面上的引导队列里面，还是有一条”+(自动目标提醒不占用户队列，旧提醒一并作废)。
         cleanup_events = []
         for item in snapshot.get("queue") or []:
@@ -87,7 +93,7 @@ async def _dispatch_next_queue_item(
                         ),
                     ))
         if cleanup_events:
-            snapshot = await context.persistence.load(db, thread_id)
+            snapshot = await context.persistence.load_metadata(db, thread_id)
         current_goal = active_goal
         manager = context.host.goal_manager
         if manager is not None and isinstance(current_goal, dict):

@@ -10,7 +10,7 @@ import {
   type Component,
 } from 'vue'
 import type { CoreAppEvent } from '@/appServer/index.ts'
-import type { CoreMessage, CoreSessionListItem, ProjectGroup } from '@/types.ts'
+import type { CoreMessage, CoreMessageEditBasis, CoreSessionListItem, ProjectGroup } from '@/types.ts'
 import type { CoreProject } from '@/projects/types.ts'
 import type { CoreProjectClient } from '@/projects/client.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
@@ -76,6 +76,7 @@ export interface CorePluginChatContext {
   activeTurnRunning: ComputedRef<boolean>
   /** 位于最后一次上下文压缩之前、不再提供编辑/分叉/回退的消息 id。 */
   lockedMessageIds: ComputedRef<Set<string>>
+  readEditBasis?: () => CoreMessageEditBasis | undefined
   onDecisionSelect: (payload: unknown) => void | Promise<void>
   onForkMessage: (payload: unknown) => void | Promise<void>
   onRollbackMessage: (payload: unknown) => void | Promise<void>

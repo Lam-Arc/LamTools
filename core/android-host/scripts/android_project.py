@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -227,6 +228,7 @@ MANIFEST = PROJECT / "app/src/main/AndroidManifest.xml"
 # user:"Manifest 与 XML 不会被拷进去，重新 init 会丢。所以权限与 service 声明必须写成脚本里的
 # 幂等注入函数"+(标记即「已经注入过」，重复 sync 不会重复加；verify 再确认它真的进了包)。
 OVERLAY_MARKER = "<!-- >>> Sunday overlay -->"
+CONNECTION_MARKER = "<!-- >>> Sunday connection -->"
 
 OVERLAY_PERMISSIONS = (
     # Drawing over other apps. Not requestable at runtime: it is a special app access.
@@ -253,6 +255,7 @@ def sync_manifest() -> int:
     text = inject_permissions(text, nl)
     text = inject_small_window_flag(text, nl)
     text = inject_overlay_service(text, nl)
+    text = inject_connection_service(text, nl)
     text = inject_accessibility_service(text, nl)
     text = inject_notification_listener(text, nl)
     text = inject_qr_scanner(text, nl)
@@ -459,6 +462,35 @@ def inject_small_window_flag(text: str, nl: str) -> str:
     cut = closing - 1 if text[closing - 1] == "/" else closing
     attribute = 'android:supportsPictureInPicture="true"'
     return text[:cut] + nl + "            " + attribute + text[cut:]
+
+
+def inject_connection_service(text: str, nl: str) -> str:
+    """Declares the background-connection foreground service, once.
+
+    user:“优先保证连接的稳定，减少无故断连”+(Android 会冻结后台进程；服务只负责把
+    进程留在前台，不建立第二条连接）。
+    """
+    if CONNECTION_MARKER in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    block = nl.join(
+        [
+            "        " + CONNECTION_MARKER,
+            "        <service",
+            '            android:name=".SundayConnectionService"',
+            '            android:exported="false"',
+            '            android:foregroundServiceType="specialUse">',
+            "            <property",
+            '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
+            '                android:value="device connection" />',
+            "        </service>",
+            "        <!-- <<< Sunday connection -->",
+            "",
+        ]
+    )
+    return text.replace(anchor, block + anchor, 1)
 
 
 def inject_overlay_service(text: str, nl: str) -> str:
@@ -678,8 +710,67 @@ def apk_path(debug: bool) -> Path:
     return apk_candidates(debug)[0]
 
 
+RUNTIME_OUT = APP_DIR.parent / "android-runtime/tools/out"
+
+
+def runtime_abi(target: str, env: dict[str, str]) -> str:
+    abi = env.get("SUNDAY_RT_ABI") or target
+    return "aarch64" if abi in {"aarch64", "arm64-v8a"} else "x86_64"
+
+
+def runtime_assets_dir(target: str, env: dict[str, str]) -> Path:
+    override = env.get("SUNDAY_RT_ASSETS")
+    if override:
+        return Path(override)
+    return RUNTIME_OUT / runtime_abi(target, env) / "assets"
+
+
+def checkout_core_version() -> str:
+    pyproject = APP_DIR.parent / "pyproject.toml"
+    for line in pyproject.read_text(encoding="utf-8").splitlines():
+        if line.startswith("version = "):
+            return line.split('"')[1]
+    return ""
+
+
+def check_runtime_matches_core(env: dict[str, str], target: str) -> int:
+    """Refuse to package a Linux runtime whose core is not this checkout's core.
+
+    user:“在我们之前的设计中，移动端是一个 Linux 容器的桌面端……桌面端如果更新，
+    手机端应该能够做到无需独立维护自动同步升级”+(手机里的后端与这里的前端必须同版本：
+    运行时带着旧核心、界面却按新协议发参数，用户看到的是“完全访问还是被要求审批”
+    这种莫名其妙的报错。所以构建时直接比对，不一致就停，并给出重建命令)。
+    """
+    abi = runtime_abi(target, env)
+    assets = runtime_assets_dir(target, env)
+    manifest = assets / "runtime/manifest.json"
+    if not manifest.exists():
+        return fail(
+            EXIT_ENV,
+            f"no Linux runtime for {abi} at {assets}\n"
+            f"  build it first: core/android-runtime/tools/build-runtime.sh {abi}",
+        )
+    shipped = str(json.loads(manifest.read_text(encoding="utf-8")).get("coreVersion") or "")
+    current = checkout_core_version()
+    if not current:
+        return fail(EXIT_ENV, "cannot read the core version from core/pyproject.toml")
+    if shipped != current:
+        return fail(
+            EXIT_ENV,
+            f"the packaged runtime carries core {shipped or '<unknown>'} but this checkout is {current}\n"
+            "  the phone would run an older backend than its own interface\n"
+            f"  rebuild it: core/android-runtime/tools/build-runtime.sh {abi}",
+        )
+    return EXIT_OK
+
+
 def build(env: dict[str, str], debug: bool, target: str, timeout: int) -> int:
     fix_generated_node_path()
+    # user:“桌面端如果更新，手机端应该能够做到无需独立维护自动同步升级”+(先比对
+    # 运行时里的核心版本，把“界面新、后端旧”挡在打包之前)。
+    guarded = check_runtime_matches_core(env, target)
+    if guarded != EXIT_OK:
+        return guarded
     cli = tauri_cli()
     assert cli is not None
     command = cli + ["android", "build", "--apk", "--target", target]

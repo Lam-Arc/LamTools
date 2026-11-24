@@ -1,7 +1,7 @@
 <script setup>
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(下载从任务行暂停和继续，不要求用户填写任务 ID)。
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(下载设置复用共享下拉，保留数值、线路禁用与单任务限速)。
 import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import {
@@ -15,6 +15,8 @@ import {
   ShieldCheck,
   RefreshCw,
   ArrowUp,
+  FolderOpen,
+  SlidersHorizontal,
 } from "lucide-vue-next";
 import { bytes, rate, taskLabel } from "./session.mjs";
 const props = defineProps({ session: Object });
@@ -34,6 +36,68 @@ const speedOptions = [{ value: '0', label: '不限速' }, { value: '1048576', la
 const routeOptions = computed(() => [{ value: 'auto', label: '自动（跟随加速）' }, { value: 'direct', label: '直接连接' }, { value: 'proxy', label: '当前代理', disabled: !props.session.state?.proxy?.running }]);
 const taskLimits = reactive({});
 const pendingLimits = reactive({});
+// user:“并发数量、限速、重试策略可设置”+(全局下载设置一次保存，不必为每个任务重复填；内核启动时生效)。
+const globalConcurrency = ref("3"),
+  globalRetries = ref("5"),
+  globalLimit = ref("0"),
+  defaultDirectory = ref(""),
+  settingsOpen = ref(false),
+  savingSettings = ref(false);
+const concurrencyOptions = [1, 2, 3, 4, 6, 8].map((value) => ({
+  value: String(value),
+  label: `${value} 个`,
+}));
+const retryOptions = [1, 3, 5, 10, 20].map((value) => ({
+  value: String(value),
+  label: `${value} 次`,
+}));
+watch(
+  () => props.session.state?.settings?.download,
+  (value) => {
+    if (!value) return;
+    globalConcurrency.value = String(value.concurrency ?? 3);
+    globalRetries.value = String(value.max_tries ?? 5);
+    globalLimit.value = String(value.bytes_per_second ?? 0);
+    // user:“知不知道怎么修改下载默认位置”+(留空表示用插件默认目录，实际路径由后台给出)。
+    defaultDirectory.value = String(value.directory || "");
+  },
+  { immediate: true, deep: true },
+);
+async function saveSettings() {
+  if (savingSettings.value) return;
+  savingSettings.value = true;
+  try {
+    const result = await props.session.run(
+      "settings.update",
+      {
+        revision: props.session.state?.revision,
+        settings: {
+          download: {
+            concurrency: Number(globalConcurrency.value),
+            max_tries: Number(globalRetries.value),
+            bytes_per_second: Number(globalLimit.value),
+            directory: defaultDirectory.value.trim(),
+          },
+        },
+      },
+      "下载设置已保存",
+    );
+    if (result) await props.session.refresh();
+  } finally {
+    savingSettings.value = false;
+  }
+}
+// user:“支持下载完成通知、校验、快速打开文件”+(完成的任务直接用系统程序打开，路径来自后台快照)。
+function openFile(task) {
+  const path =
+    task.path ||
+    [task.directory, task.filename].filter(Boolean).join("\\");
+  if (!path) {
+    props.session.error = "还没有文件路径，稍后刷新一次";
+    return;
+  }
+  props.session.openFile(path);
+}
 const totalSpeed = computed(() =>
   props.session.tasks.reduce(
     (sum, task) => sum + (Number(task.downloadSpeed) || 0),
@@ -238,6 +302,75 @@ async function verify(task) {
         ><div class="nx-form-field"><span>下载线路</span><UiSelect v-model="route" :options="routeOptions" aria-label="下载线路" data-transfer-route :menu-min-width="180" /></div>
       </div>
     </form>
+    <section class="nx-panel nx-download-settings" data-download-settings>
+      <button
+        class="nx-settings-toggle"
+        type="button"
+        :aria-expanded="settingsOpen"
+        @click="settingsOpen = !settingsOpen"
+      >
+        <SlidersHorizontal :size="16" /><span>下载设置</span>
+        <span class="nx-subtle"
+          >同时 {{ globalConcurrency }} 个 · 失败重试 {{ globalRetries }} 次</span
+        >
+        <component :is="settingsOpen ? ChevronUp : ChevronDown" :size="14" />
+      </button>
+      <div v-if="settingsOpen" class="nx-form-grid">
+        <div class="nx-form-field">
+          <span>同时下载</span
+          ><UiSelect
+            v-model="globalConcurrency"
+            :options="concurrencyOptions"
+            aria-label="同时下载数量"
+            data-download-concurrency
+            :menu-min-width="110"
+          />
+        </div>
+        <div class="nx-form-field">
+          <span>失败重试</span
+          ><UiSelect
+            v-model="globalRetries"
+            :options="retryOptions"
+            aria-label="失败重试次数"
+            data-download-retries
+            :menu-min-width="110"
+          />
+        </div>
+        <div class="nx-form-field">
+          <span>全局限速</span
+          ><UiSelect
+            v-model="globalLimit"
+            :options="speedOptions"
+            aria-label="全局下载限速"
+            data-download-limit
+            :menu-min-width="120"
+          />
+        </div>
+        <div class="nx-form-field nx-form-field--wide">
+          <span>默认保存位置</span
+          ><input
+            v-model="defaultDirectory"
+            class="nx-input"
+            data-download-directory
+            placeholder="留空使用默认目录"
+            aria-label="下载默认保存位置"
+          />
+          <small class="nx-subtle" data-download-default
+            >当前：{{ session.state?.download_default || "读取中" }}</small
+          >
+        </div>
+        <div class="nx-form-field">
+          <span>&nbsp;</span
+          ><button
+            class="btn nx-button btn--secondary"
+            :disabled="savingSettings"
+            @click="saveSettings"
+          >
+            保存设置
+          </button>
+        </div>
+      </div>
+    </section>
     <div class="nx-list-toolbar">
       <div class="nx-filter-tabs">
         <button :class="{ active: tab === 'active' }" @click="tab = 'active'">
@@ -265,6 +398,8 @@ async function verify(task) {
         :key="task.gid"
         class="nx-download-row"
         :data-task="task.gid"
+        :title="task.status === 'complete' ? '双击打开文件' : ''"
+        @dblclick="task.status === 'complete' && openFile(task)"
       >
         <div class="nx-file-icon">
           <FileDown :size="22" :stroke-width="1.5" />
@@ -296,8 +431,8 @@ async function verify(task) {
               }}<span class="nx-meta-divider">·</span
               >{{ remaining(task) }}</span
             ><span v-else-if="task.status === 'complete'">已保存到本地</span
-            ><span v-else-if="task.status === 'error'"
-              >链接可能失效，或下载源暂时不可用</span
+            ><span v-else-if="task.status === 'error'" data-task-error
+              >{{ task.errorText || "下载失败，请检查链接或稍后重试" }}</span
             >
           </div>
         </div>
@@ -352,6 +487,13 @@ async function verify(task) {
               @click="verify(task)"
             >
               <ShieldCheck :size="13" />校验文件</button
+            ><button
+              v-if="task.status === 'complete'"
+              class="btn nx-button btn--quiet"
+              data-task-open
+              @click="openFile(task)"
+            >
+              <FolderOpen :size="13" />打开文件</button
             ><button
               v-if="!['complete', 'removed'].includes(task.status)"
               class="btn nx-button btn--quiet nx-danger-text"

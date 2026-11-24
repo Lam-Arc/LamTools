@@ -584,3 +584,20 @@ fn every_browser_command_is_registered_and_reachable_through_the_bridge() {
         );
     }
 }
+
+#[test]
+fn browser_download_event_without_method_keeps_original_request() {
+    let source = include_str!("../../src-tauri/src/browser/webview.rs");
+    let requested = source
+        .split("DownloadEvent::Requested")
+        .nth(1)
+        .unwrap()
+        .split("DownloadEvent::Finished")
+        .next()
+        .unwrap();
+    assert!(requested.contains("record_download_started"));
+    assert!(
+        !requested.contains("emit_download_request") && !requested.contains("takeover_enabled"),
+        "the URL-only callback must preserve the original browser request"
+    );
+}

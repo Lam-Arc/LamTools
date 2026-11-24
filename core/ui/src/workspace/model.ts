@@ -207,14 +207,13 @@ export function normalizeWorkspace(model: WorkspaceModel): WorkspaceModel {
     tree = { kind: 'leaf', area: { id: 'main', tabs: [], active: null, role: 'main', axis: 'vertical' } }
   }
 
-  // 恰好一个 main：多余降为 aux，没有就提升第一个。
+  // user:“调查 UI/布局”+(所有辅助分屏都沿顶部排列标签，打开子代理时保留标签和分屏操作)。
   const areas = areasOf({ ...model, tree })
-  let promoted = false
+  const main = areas.find(area => area.role === 'main') ?? areas[0]
   for (const area of areas) {
-    if (area.role === 'main' && !promoted) { promoted = true; continue }
-    area.role = 'aux'
+    area.role = area === main ? 'main' : 'aux'
+    if (area.role === 'aux') area.axis = 'horizontal'
   }
-  if (!promoted && areas.length) areas[0].role = 'main'
 
   const floats: FloatBox[] = []
   const floatSeen = new Set<SurfaceId>()

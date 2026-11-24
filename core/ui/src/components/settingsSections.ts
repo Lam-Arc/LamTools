@@ -88,6 +88,9 @@ export const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
   // 通用 sits second on purpose: the settings page still opens on 模型与供应商,
   // and this pane is a rarely-touched system surface rather than the landing view.
   { id: 'general', get label() { return t("通用") }, icon: 'settings' },
+  // user:“手机端保证简单可靠易用”+(设备连接不能只藏在桌面竖栏；手机设置里给一个
+  // 明确入口，才能看到配对、连接状态和后台保活开关)。
+  { id: 'account', get label() { return t("设备连接") }, icon: 'smartphone' },
   // user:“桌宠设置：在设置里单独放一份，并持久化”+(桌宠不再只能从覆盖层/右键进入)
   { id: 'pet', get label() { return t("桌宠") }, icon: 'bot' },
   { id: 'appearance', get label() { return t("界面") }, icon: 'palette' },

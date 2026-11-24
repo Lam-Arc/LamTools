@@ -21,11 +21,13 @@ use serde_json::{json, Value};
 use tauri::{Manager, State};
 
 mod android_jni;
+mod browser_host;
 mod client;
 mod device_control;
 mod p2p_bridge;
 mod picker;
 mod runtime;
+mod runtime_database;
 
 use client::CoreLink;
 use runtime::Runtime;
@@ -40,13 +42,13 @@ static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 /// is the room the status bar and any cutout take, which an edge-to-edge window never
 /// reports on its own.
 #[cfg(target_os = "android")]
-fn publish_insets(keyboard: i64, top: i64) {
+fn publish_insets(keyboard: i64, top: i64, bottom: i64) {
     use tauri::Emitter;
     if let Ok(mut entry) = LAST_INSETS.lock() {
-        *entry = (keyboard, top);
+        *entry = (keyboard, top, bottom);
     }
     if let Some(app) = APP.get() {
-        app.emit("insets", serde_json::json!({ "keyboard": keyboard, "top": top }))
+        app.emit("insets", serde_json::json!({ "keyboard": keyboard, "top": top, "bottom": bottom }))
             .ok();
     }
 }
@@ -56,15 +58,15 @@ fn publish_insets(keyboard: i64, top: i64) {
 /// The host publishes them from `MainActivity.onCreate`, which runs before the webview
 /// has a listener, so the first event is normally lost. The interface asks for this once
 /// its listener is attached.
-static LAST_INSETS: std::sync::Mutex<(i64, i64)> = std::sync::Mutex::new((0, 0));
+static LAST_INSETS: std::sync::Mutex<(i64, i64, i64)> = std::sync::Mutex::new((0, 0, 0));
 
 #[tauri::command]
 fn window_insets() -> Value {
-    let (keyboard, top) = LAST_INSETS
+    let (keyboard, top, bottom) = LAST_INSETS
         .lock()
         .map(|entry| *entry)
-        .unwrap_or((0, 0));
-    json!({ "keyboard": keyboard, "top": top })
+        .unwrap_or((0, 0, 0));
+    json!({ "keyboard": keyboard, "top": top, "bottom": bottom })
 }
 
 /// Sector actions from the floating ring, waiting for the interface to take them.
@@ -354,6 +356,23 @@ fn app_background() {
     }
 }
 
+/// 后台保持连接：只开关前台服务，不建立第二条连接。
+///
+/// user:“优先保证连接的稳定，减少无故断连或者无连接反馈的情况”+(用户关掉就停止，
+/// 下一次启动也不会自己回来；通知是低优先级，不打扰)。
+#[tauri::command]
+fn connection_service_set(enabled: bool) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        android_jni::connection_call_unit(if enabled { "start" } else { "stop" })?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = enabled;
+    }
+    Ok(json!({ "enabled": enabled }))
+}
+
 /// The system document picker, answering in-guest paths.
 ///
 /// user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(共享 UI 拿到路径后走它本来
@@ -496,9 +515,8 @@ pub fn run() {
             let _ = APP.set(handle.clone());
             // user:“P2P 作为独立、可复用的传输组件”+(宿主只保存身份与当前连接，
             // 协议本身在 core/p2p)。
-            app.manage(std::sync::Arc::new(p2p_bridge::P2pState::new(
-                data_dir.join("p2p"),
-            )));
+            let p2p_state = Arc::new(p2p_bridge::P2pState::new(data_dir.join("p2p")));
+            app.manage(Arc::clone(&p2p_state));
             let link = CoreLink::new(handle.clone());
             let runtime = Runtime::new(handle.clone());
             // user:“加，安卓控制，上模拟器里把它跑通”+(工具在 guest 里，连不到 Tauri；
@@ -516,6 +534,9 @@ pub fn run() {
                 }),
             });
             handle.emit_core_info();
+            // user:“减少无故断连或者无连接反馈的情况”+(连接状态由宿主主动推，界面不再
+            // 等下一次操作才发现 Core 挂了)。
+            p2p_bridge::start_emitter(handle.clone(), p2p_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -525,8 +546,18 @@ pub fn run() {
             core_info,
             core_rpc,
             core_http,
+            browser_host::browser_open,
+            browser_host::browser_bounds,
+            browser_host::browser_nav,
+            browser_host::browser_hide,
+            browser_host::browser_release,
+            browser_host::browser_activate,
+            browser_host::browser_close,
+            browser_host::browser_state,
+            browser_host::browser_html,
             pick_paths,
             app_background,
+            connection_service_set,
             p2p_bridge::p2p_ticket,
             p2p_bridge::p2p_connect,
             p2p_bridge::p2p_call,

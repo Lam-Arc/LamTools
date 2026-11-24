@@ -62,6 +62,13 @@ pub struct DownloadRecord {
     pub finished_at: Option<String>,
 }
 
+// user:“接管开关默认关闭，只有前端确认 EasyNet 就绪才打开”+(插件不可用时浏览器必须完全退回原生下载)。
+/// 显式直链命令只接受 HTTP(S)；浏览器下载事件保留原请求。
+pub fn handoff_candidate(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://")) && !lower.starts_with("blob:")
+}
+
 /// 把任意建议名收敛成安全的文件名：去路径、去非法字符、避开保留名与空名。
 pub fn safe_filename(raw: &str) -> String {
     // 只保留最后一段，`..`、绝对路径、`C:\x` 这类都在这里被切掉。
@@ -375,6 +382,15 @@ mod tests {
         assert_eq!(suggested_filename("https://example.com/files/report%20final.pdf"), "report final.pdf");
         assert_eq!(suggested_filename("https://example.com/"), "example.com");
         assert_eq!(suggested_filename("not a url"), "download");
+    }
+
+    #[test]
+    fn only_http_links_can_be_handed_off() {
+        assert!(handoff_candidate("https://example.com/a.zip"));
+        assert!(handoff_candidate("http://example.com/a.zip"));
+        assert!(!handoff_candidate("blob:https://example.com/x"));
+        assert!(!handoff_candidate("data:text/plain,hi"));
+        assert!(!handoff_candidate("file:///c:/x"));
     }
 
     #[test]

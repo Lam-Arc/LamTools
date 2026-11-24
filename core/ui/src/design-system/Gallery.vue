@@ -54,7 +54,7 @@ import workflowRuntimeSource from '../../../src/lamtools_core/plugins/bundled/wo
 import type { NodeStateStatus } from '../../../src/lamtools_core/plugins/bundled/workflow/ui/types'
 import WorkflowTriggersPanel from '../../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue'
 import type { WorkflowDef } from '../../../src/lamtools_core/plugins/bundled/workflow/ui/types'
-import type { CoreRuntimeStepGroup, CoreMessage } from '@/types.ts'
+import type { CoreRuntimeStepGroup, CoreMessage, CoreMessageEditRequest } from '@/types.ts'
 import type { CorePermissionPreset } from '@/composer/execution.ts'
 import ComputerUseCapsule from '@/computerUse/ComputerUseCapsule.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
@@ -238,7 +238,7 @@ const entries = [
   { name: 'WorkflowControlBar', category: '组合', group: '工作流与任务', description: '工作流运行、保存与冲突操作；仅本地模拟', source: workflowControlsSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowControlBar.vue' },
   { name: 'WorkflowCanvas', category: '组合', group: '工作流与任务', description: '真实工作流画布；节点、布局和复制仅作用于本地示例', source: workflowCanvasSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue' },
   { name: 'WindowControls', category: '按钮', description: '桌面右上角的最小化、最大化和关闭；展厅只预览外观', source: '', sourcePath: 'src/components/TitleBar.vue', loadSource: () => import('@/components/TitleBar.vue?raw') },
-  { name: 'CoreWorkspace', category: '组合', group: '项目与工作区', description: 'Agent 与 Browser 布局切换、分屏关闭保护和标签溢出；仅使用本地示例', alsoPreviews: ['core/ui/src/components/WorkspaceShell.vue', 'core/ui/src/components/CoreWorkspaceContentHost.vue', 'core/ui/src/components/CoreSplitTextEditor.vue', 'core/ui/src/components/CoreWorkspaceTabDrawer.vue', 'core/ui/src/components/CoreWorkspaceTabs.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreWorkspace.vue?raw'), import('@/components/CoreWorkspaceContentHost.vue?raw'), import('@/components/CoreSplitTextEditor.vue?raw'), import('@/components/CoreWorkspaceTabDrawer.vue?raw'), import('@/components/CoreWorkspaceTabs.vue?raw'), import('@/workspace/composition.ts?raw'), import('./SplitWorkspacePreview.vue?raw')]).then(([view, host, editor, drawer, tabs, composition, preview]) => ({ default: [view.default, host.default, editor.default, drawer.default, tabs.default, composition.default, preview.default].join('\n\n') })) },
+  { name: 'CoreWorkspace', category: '组合', group: '项目与工作区', description: 'Agent 与 Browser 布局切换、分屏关闭保护和标签溢出；仅使用本地示例', alsoPreviews: ['core/ui/src/components/WorkspaceShell.vue', 'core/ui/src/components/CoreWorkspaceContentHost.vue', 'core/ui/src/components/CoreSplitTextEditor.vue', 'core/ui/src/components/CoreWorkspaceTabDrawer.vue', 'core/ui/src/components/CoreWorkspaceTabs.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreWorkspace.vue?raw'), import('@/components/CoreWorkspaceContentHost.vue?raw'), import('@/components/CoreSplitTextEditor.vue?raw'), import('@/components/CoreWorkspaceTabDrawer.vue?raw'), import('@/components/CoreWorkspaceTabs.vue?raw'), import('@/workspace/composition.ts?raw'), import('@/styles/split-workspace.css?raw'), import('./SplitWorkspacePreview.vue?raw')]).then(([view, host, editor, drawer, tabs, composition, styles, preview]) => ({ default: [view.default, host.default, editor.default, drawer.default, tabs.default, composition.default, styles.default, preview.default].join('\n\n') })) },
   { name: 'CoreSplitPreview', category: '组合', group: '文件与资料', description: '分屏文件预览、失败和重试；仅使用本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitPreview.vue?raw'), import('./SplitFilePreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitFilePreview.vue */\n${preview.default}` })) },
   { name: 'PreviewLightbox', category: '组合', group: '文件与资料', description: '灯箱和预览表面；图片可缩放拖动标注，只显示本地示例内容', source: '', sourcePath: 'src/preview/PreviewLightbox.vue', alsoPreviews: ['core/ui/src/preview/PreviewSurface.vue', 'core/ui/src/preview/PreviewImageViewer.vue', 'core/ui/src/annotation/AnnotationToolbar.vue'], loadSource: () => Promise.all([import('@/preview/PreviewLightbox.vue?raw'), import('@/preview/PreviewSurface.vue?raw'), import('@/preview/PreviewImageViewer.vue?raw'), import('@/annotation/AnnotationToolbar.vue?raw')]).then(([lightbox, surface, viewer, toolbar]) => ({ default: `${lightbox.default}\n\n/* src/preview/PreviewSurface.vue */\n${surface.default}\n\n/* src/preview/PreviewImageViewer.vue */\n${viewer.default}\n\n/* src/annotation/AnnotationToolbar.vue */\n${toolbar.default}` })) },
   { name: 'FirstRunChecklist', category: '组合', group: '项目与工作区', description: '首次使用清单及各阶段；进度只保存在展厅', source: '', loadSource: () => import('@/components/FirstRunChecklist.vue?raw') },
@@ -415,6 +415,13 @@ const galleryProcessMessage = computed<CoreMessage>(() => ({
 function toggleGalleryProcess(id: string) { const next = new Set(galleryProcessExpanded.value); if (next.has(id)) next.delete(id); else next.add(id); galleryProcessExpanded.value = next }
 const galleryMessageReadonly = ref(true)
 const galleryMessageResult = ref('')
+const galleryEditRefused = ref(false)
+const galleryEditableMessage = ref<CoreMessage>({ id: 'gallery:turn:edit:user', role: 'user', content: '调整这条消息。', timestamp: '' })
+const galleryEditBasis = () => ({ threadId: 'gallery', revision: 1 })
+function settleGalleryEdit(request: CoreMessageEditRequest): void {
+  if (!galleryEditRefused.value) galleryEditableMessage.value = { ...galleryEditableMessage.value, content: request.content }
+  request.onSettled?.(!galleryEditRefused.value)
+}
 const galleryMessageTransport = { request: async () => { throw new Error('展厅不访问真实会话') } } as unknown as LamToolsTransport
 
 /** 展厅里的气泡外观只改本地示例偏好，不写真实设置。 */
@@ -737,6 +744,8 @@ async function translateSampleText() {
 }
 const captureFrame = { width: 320, height: 180, x: 0, y: 0, scale: 1, capturedAt: 0, data: new Uint8ClampedArray(320 * 180 * 4).fill(200) }
 const submissionState = ref<'preparing' | 'sending' | 'failed' | 'unknown'>('sending')
+const submissionIsReplacement = ref(false)
+const submissionVersionConflict = ref(false)
 const submissionStates = [{ value: 'preparing', label: '准备中' }, { value: 'sending', label: '发送中' }, { value: 'failed', label: '发送失败' }, { value: 'unknown', label: '接收待确认' }]
 // user:“展品里的图片请用工作区内真实存在的图片文件路径”+(图片走项目自带资源，path 仍是真实工作区路径，url 由 Vite 解析)。
 const galleryMediaPreviewRequested = ref('')
@@ -1012,6 +1021,13 @@ onBeforeUnmount(() => {
           <div class="chat-thread material-stage" style="width: 100%" data-gallery-bubbles><MessageView v-for="message in galleryMessages" :key="message.id" :msg="message" :transport="galleryMessageTransport" :assistant-bubble-appearance="galleryAssistantBubbles ? 'boxed' : 'plain'" :message-actions="false" :decisions-disabled="galleryMessageReadonly" @question-submit="galleryMessageResult = $event.text" /></div>
           <div class="chat-thread" style="width: 100%" data-gallery-process><MessageView :msg="galleryProcessMessage" :transport="galleryMessageTransport" :process-expanded-ids="galleryProcessExpanded" :turn-active="galleryMessageLive" @toggle-process="toggleGalleryProcess" /></div>
           <span v-if="galleryMessageResult">本地回答：{{ galleryMessageResult }}</span>
+          <!-- user:“分叉/编辑 稳定性/速度 找优化点进行优化”+(可模拟拒绝替换，检查草稿有没有保留)。 -->
+          <details>
+            <summary>历史消息编辑</summary>
+            <label><input v-model="galleryEditRefused" class="sunday-checkbox" type="checkbox" /> 模拟提交失败</label>
+            <MessageView :msg="galleryEditableMessage" :transport="galleryMessageTransport" message-actions
+              :read-edit-basis="galleryEditBasis" @edit-message="settleGalleryEdit" />
+          </details>
         </template>
         <template v-else-if="item.name === 'WorkflowControlBar'">
           <label><input v-model="galleryWorkflowRunning" class="sunday-checkbox" type="checkbox" data-workflow-controls-running />运行中</label>
@@ -1251,7 +1267,11 @@ onBeforeUnmount(() => {
         </template>
         <template v-else-if="item.name === 'CoreSubmissionStatus'">
           <div class="filter-control">状态 <UiSelect :model-value="submissionState" :options="submissionStates" data-gallery-submission-state aria-label="发送状态" @update:model-value="submissionState = $event === 'preparing' || $event === 'failed' || $event === 'unknown' ? $event : 'sending'" /></div>
-          <CoreSubmissionStatus :submissions="[{ id: 'sample', threadId: 'sample', text: '示例消息', attachments: [], state: submissionState, error: submissionState === 'failed' ? '示例错误' : '' }]" :can-edit="true" :busy="disabled" @retry="submissionRetries++" @edit="submissionEdits++" />
+          <!-- user:“全做”+(展厅也能验证历史替换失败时保留原操作重试)。 -->
+          <label><input v-model="submissionIsReplacement" class="sunday-checkbox" type="checkbox" /> 编辑历史消息</label>
+          <!-- user:“全修”+(展厅可看历史版本冲突，验证这时不提供旧稿重试)。 -->
+          <label v-if="submissionIsReplacement && submissionState === 'failed'"><input v-model="submissionVersionConflict" class="sunday-checkbox" type="checkbox" /> 历史版本冲突</label>
+          <CoreSubmissionStatus :submissions="[{ id: 'sample', threadId: 'sample', text: '示例消息', attachments: [], state: submissionState, error: submissionState === 'failed' ? '示例错误' : '', replaceTurnId: submissionIsReplacement ? 'sample-turn' : undefined, needsReopen: submissionIsReplacement && submissionState === 'failed' && submissionVersionConflict }]" :can-edit="true" :busy="disabled" @retry="submissionRetries++" @edit="submissionEdits++" />
           <span>重试 {{ submissionRetries }} 次 · 编辑 {{ submissionEdits }} 次</span>
         </template>
         <template v-else-if="item.name === 'CoreSubAgentActivityIndicator'">

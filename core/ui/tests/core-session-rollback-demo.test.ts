@@ -9,13 +9,13 @@ describe('Shared Core App rollback host wiring', () => {
     expect(source).toMatch(/@rollback-message="handleRollbackMessage"/)
     expect(source).toMatch(/@fork-message="handleForkMessage"/)
     expect(source).toMatch(/session\.fork[\s\S]*turn_id: payload\.turnId/)
-    expect(source).toMatch(/session\.rollback[\s\S]*turn_id: payload\.turnId/)
+    expect(source).toMatch(/session\.rollback[\s\S]*turn_id: turnId/)
     expect(source).not.toMatch(/loadCheckpointGraph\(/)
   })
 
   it('reconnects the active thread after the conversation is restored', () => {
     expect(source).toContain("const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))")
-    expect(source).toMatch(/async function refreshAfterRollback\(\)[\s\S]*await refreshSessions\(\)[\s\S]*await selectSession\(sessionId\)/)
+    expect(source).toMatch(/async function refreshAfterRollback\(sessionId: string\)[\s\S]*if \(activeSessionId\.value === sessionId\) await selectSession\(sessionId\)/)
   })
 
   it('edits by clearing the conversation, never by requiring a checkpoint', () => {
@@ -27,8 +27,7 @@ describe('Shared Core App rollback host wiring', () => {
       source.indexOf('async function handleEditMessage'),
       source.indexOf('async function handleEditMessage') + 1600,
     )
-    expect(editHandler).toMatch(/session\.rollback[\s\S]*turn_id: payload\.turnId/)
-    expect(editHandler).toMatch(/submitComposer\(\)/)
+    expect(editHandler).toMatch(/replaceMessage\(\{\s*threadId: sessionId,\s*turnId: payload\.turnId/)
   })
 
   it('gates edit/fork/rollback on the compaction boundary, not on checkpoints', () => {

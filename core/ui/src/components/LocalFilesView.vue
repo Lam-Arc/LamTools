@@ -7,7 +7,14 @@
         <strong>{{ status.message }}</strong>
         <span v-if="status.hint">{{ status.hint }}</span>
       </div>
-      <button type="button" class="lf-btn lf-btn-quiet" @click="loadStatus(true)">重试</button>
+      <button
+        v-if="status.state === 'missing_cli' && status.can_install"
+        type="button"
+        class="lf-btn"
+        :disabled="engineBusy"
+        @click="installEngine"
+      >{{ engineBusy ? '下载中…' : '下载查询工具' }}</button>
+      <button type="button" class="lf-btn lf-btn-quiet" :disabled="engineBusy" @click="loadStatus(true)">重试</button>
     </div>
 
     <div class="lf-top">
@@ -567,6 +574,7 @@ const KINDS = [
 ]
 
 const status = ref<Record<string, any> | null>(null)
+const engineBusy = ref(false)
 const roots = ref<RootEntry[]>([])
 const collections = ref<CollectionEntry[]>([])
 const items = ref<FileItem[]>([])
@@ -702,6 +710,27 @@ async function loadStatus(refresh = false): Promise<void> {
     if (refresh) message.value = '已重新检测搜索索引'
   } catch (err) {
     status.value = { state: 'error', message: `无法读取搜索状态：${String(err)}` }
+  }
+}
+
+async function installEngine(): Promise<void> {
+  engineBusy.value = true
+  message.value = '正在下载 Everything 查询工具…'
+  try {
+    const data = await rpc('libraryfs.setup')
+    const installation = (data.installation || {}) as Record<string, any>
+    await loadStatus(true)
+    if (installation.already_present) {
+      message.value = '查询工具已经存在，已重新检测'
+    } else {
+      message.value = `查询工具已安装到 ${installation.path || '应用数据目录'}`
+    }
+    if (status.value?.available) await runSearch(true)
+    else if (status.value?.state === 'not_running') message.value += '；启动 Everything 后点重试'
+  } catch (err) {
+    message.value = `下载失败：${String(err)}`
+  } finally {
+    engineBusy.value = false
   }
 }
 

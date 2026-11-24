@@ -23,6 +23,161 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::link::write_event;
 
+// user:“全修”+(按会话保留已转发的序号，每条会话独立回放)。
+#[derive(Default)]
+pub struct ThreadCursors {
+    positions: std::collections::BTreeMap<String, u64>,
+    active: Option<String>,
+}
+
+impl ThreadCursors {
+    pub fn track(&mut self, thread: &str, seq: u64) {
+        self.positions.entry(thread.to_owned()).or_insert(seq);
+        if self.active.as_deref() != Some(thread) {
+            self.active = Some(thread.to_owned());
+        }
+    }
+
+    pub fn rewind(&mut self, thread: &str, seq: u64) {
+        self.track(thread, seq);
+        let saved = self.positions.get_mut(thread).expect("tracked thread");
+        *saved = (*saved).min(seq);
+    }
+
+    pub fn active(&self) -> Option<&str> {
+        self.active.as_deref()
+    }
+
+    pub fn positions(&self) -> Vec<(String, u64)> {
+        self.positions
+            .iter()
+            .map(|(thread, seq)| (thread.clone(), *seq))
+            .collect()
+    }
+
+    pub fn already_delivered(&self, event: &serde_json::Value) -> bool {
+        event_position(event).is_some_and(|(thread, seq)| {
+            self.positions
+                .get(thread)
+                .is_some_and(|saved| *saved >= seq)
+        })
+    }
+
+    pub fn delivered(&mut self, event: &serde_json::Value) {
+        if let Some((thread, seq)) = event_position(event) {
+            let saved = self.positions.entry(thread.to_owned()).or_default();
+            *saved = (*saved).max(seq);
+        }
+    }
+}
+
+fn event_position(params: &serde_json::Value) -> Option<(&str, u64)> {
+    let thread = params
+        .get("thread_id")
+        .or_else(|| params.get("threadId"))?
+        .as_str()?;
+    Some((thread, event_seq(params)?))
+}
+
+const REPLAY_PAGE_SIZE: usize = 32;
+
+/// Replay every page before releasing buffered live events.
+pub async fn replay_thread<Fetch, FetchFuture, Forward, ForwardFuture>(
+    thread: &str,
+    mut after: u64,
+    mut fetch: Fetch,
+    mut forward: Forward,
+) -> Result<()>
+where
+    Fetch: FnMut(serde_json::Value) -> FetchFuture,
+    FetchFuture: std::future::Future<Output = Result<serde_json::Value>>,
+    Forward: FnMut(serde_json::Value) -> ForwardFuture,
+    ForwardFuture: std::future::Future<Output = Result<()>>,
+{
+    loop {
+        let page = fetch(serde_json::json!({
+            "thread_id": thread,
+            "last_seen_seq": after,
+            "include_snapshot": false,
+            "full_journal": true,
+            "limit": REPLAY_PAGE_SIZE,
+        }))
+        .await?;
+        let events = page
+            .get("events")
+            .and_then(|value| value.as_array())
+            .context("Core replay returned no event list")?;
+        let previous = after;
+        for event in events {
+            let Some((event_thread, seq)) = event_position(event) else {
+                continue;
+            };
+            if event_thread != thread || seq <= after {
+                continue;
+            }
+            forward(event.clone()).await?;
+            after = seq;
+        }
+        let has_more = page.get("has_more").and_then(|value| value.as_bool()) == Some(true)
+            || events.len() == REPLAY_PAGE_SIZE;
+        if !has_more {
+            return Ok(());
+        }
+        if after == previous {
+            anyhow::bail!("Core replay did not advance");
+        }
+    }
+}
+
+#[tokio::test]
+async fn remote_repair_replays_all_pages_and_stops_at_a_failed_write() {
+    use serde_json::json;
+    let mut seen = Vec::new();
+    let result = replay_thread(
+        "second",
+        5,
+        |query| async move {
+            let after = query["last_seen_seq"].as_u64().unwrap();
+            Ok(json!({"events":[{"thread_id":"second","seq":after+1}], "has_more": after == 5}))
+        },
+        |event| {
+            let seq = event["seq"].as_u64().unwrap();
+            seen.push(seq);
+            async move {
+                if seq == 7 {
+                    anyhow::bail!("connection dropped")
+                }
+                Ok(())
+            }
+        },
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(seen, [6, 7]);
+}
+
+#[test]
+fn remote_repair_keeps_independent_sequences_for_two_threads() {
+    let mut cursors = ThreadCursors::default();
+    cursors.track("first", 10);
+    cursors.track("second", 2);
+    cursors.delivered(&serde_json::json!({"thread_id":"first","seq":11}));
+    cursors.delivered(&serde_json::json!({"threadId":"second","seq":4}));
+    assert_eq!(
+        cursors.positions(),
+        vec![("first".into(), 11), ("second".into(), 4)]
+    );
+    cursors.rewind("first", 9);
+    assert_eq!(cursors.active(), Some("first"));
+    cursors.delivered(&serde_json::json!({"thread_id":"second","seq":4}));
+    assert_eq!(cursors.active(), Some("first"));
+    assert_eq!(
+        cursors.positions(),
+        vec![("first".into(), 9), ("second".into(), 4)]
+    );
+    assert!(!cursors.already_delivered(&serde_json::json!({"thread_id":"second","seq":5})));
+}
+
 /// 事件位点：Core journal 里的 `seq`，加上它属于哪条会话。
 ///
 /// 两条都要：`lastSeenSeq` 只说明「看到哪」，补事件还得知道「补哪一条会话」——Core 的
@@ -191,11 +346,10 @@ pub async fn pump_core_events_with_cursor(
             .get("params")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        // 先记位点再转发：转发失败的这一条，下一次重连还能被补回来。
-        cursor.observe(&params);
-        if write_event(&send, method, params).await.is_err() {
+        if write_event(&send, method, params.clone()).await.is_err() {
             break;
         }
+        cursor.observe(&params);
     }
     Ok(())
 }

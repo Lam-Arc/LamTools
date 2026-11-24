@@ -93,4 +93,35 @@ describe('math render contract', () => {
     )
     expect(source).toMatch(/import\s+'katex\/dist\/katex\.min\.css'/)
   })
+
+  /**
+   * user:“如图所见 latex 渲染存在问题”+(公式内部的排版不许被公式之外的样式改写)。
+   *
+   * 这条契约不能靠 jsdom 验证：上下标和分数掉下去是布局结果，jsdom 不做布局。
+   * 它保护的是机制本身——KaTeX 用「零高度行 + 行内 top 偏移」叠出上下标与分数，
+   * 所以公式内部这些属性必须钉回 KaTeX 自带的值；而且必须写在 @layer 里带 !important，
+   * 才不会被插件/主题注入到 document.head 的样式（未分层，权重可能更高）盖掉。
+   * 真实浏览器里的 A/B 结果：同一套外部样式下，未隔离的公式被拆散，走渲染器的公式正常。
+   */
+  it('pins the KaTeX layout inside a cascade layer so外部样式不能改写公式内部排版', () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, '../src/components/MarkdownRenderer.vue'),
+      'utf8',
+    )
+    const layer = /@layer\s+sunday-katex-isolation\s*\{([\s\S]*?)\r?\n\}/.exec(source)
+    expect(layer).not.toBeNull()
+    const rules = layer![1]
+    // vlist 链：表格外壳 + 每个零高度行 + 行内格
+    expect(rules).toMatch(/\.katex \.vlist-t\)\s*\{[\s\S]*?display:\s*inline-table\s*!important/)
+    expect(rules).toMatch(/\.katex \.vlist-r\)\s*\{[\s\S]*?display:\s*table-row\s*!important/)
+    expect(rules).toMatch(/\.katex \.vlist\)\s*\{[\s\S]*?(display:\s*table-cell|vertical-align:\s*bottom)\s*!important/)
+    expect(rules).toMatch(/\.katex \.vlist > span\)\s*\{[\s\S]*?height:\s*0\s*!important/)
+    expect(rules).toMatch(/\.katex \.vlist > span\)\s*\{[\s\S]*?position:\s*relative\s*!important/)
+    expect(rules).toMatch(/\.katex \.vlist > span > span\)\s*\{[\s\S]*?display:\s*inline-block\s*!important/)
+    // 行高与字距：外部放大行高同样会把每一层推下去
+    expect(rules).toMatch(/\.katex\)\s*\{[\s\S]*?line-height:\s*1\.2\s*!important/)
+    expect(rules).toMatch(/letter-spacing:\s*normal\s*!important/)
+    // \smash 是唯一的例外：它靠行高 0 把内容从行盒里摘出去
+    expect(rules).toMatch(/\.katex \.smash[\s\S]*?line-height:\s*0\s*!important/)
+  })
 })

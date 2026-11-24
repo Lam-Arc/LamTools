@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CoreAppServerClient } from '../src/appServer/client'
+import { CoreAppServerClient, CoreRequestAcceptanceUnknownError } from '../src/appServer/client'
 import { DirectHttpTransport, DirectTransport } from '../src/transport/directTransport'
 import { TransportDisconnectedError, TransportRpcError } from '../src/transport/types'
 import type {
@@ -53,6 +53,34 @@ class FakeRpcTransport implements LamToolsTransport {
     for (const listener of this.stateListeners) listener(state)
   }
 }
+
+// user:“全修”+(已经发出的请求被断线中断，标记待确认，随后按原编号只查回执)。
+it('classifies a socket disconnect as unknown acceptance without retransmitting', async () => {
+  const transport = new FakeRpcTransport()
+  const write = vi.spyOn(transport, 'request').mockImplementation(async (request) => {
+    if (request.kind === 'rpc' && request.method === 'turn/start') throw new TransportDisconnectedError()
+    return {} as never
+  })
+  const client = new CoreAppServerClient({ transport, clientInfo: { name: 'test' } })
+  try {
+    await expect(client.request('turn/start', { thread_id: 'source', client_message_id: 'send-1' }))
+      .rejects.toBeInstanceOf(CoreRequestAcceptanceUnknownError)
+    expect(write.mock.calls.filter(([req]) => req.kind === 'rpc' && req.method === 'turn/start')).toHaveLength(1)
+  } finally { client.close() }
+})
+
+it('keeps a definitive busy rejection available for the queue fallback', async () => {
+  const transport = new FakeRpcTransport()
+  const busy = new TransportRpcError(undefined, 'session has an active turn')
+  vi.spyOn(transport, 'request').mockImplementation(async (request) => {
+    if (request.kind === 'rpc' && request.method === 'turn/start') throw busy
+    return {} as never
+  })
+  const client = new CoreAppServerClient({ transport, clientInfo: { name: 'test' } })
+  try {
+    await expect(client.request('turn/start', { thread_id: 'source', client_message_id: 'send-2' })).rejects.toBe(busy)
+  } finally { client.close() }
+})
 
 class ReconnectRaceTransport implements LamToolsTransport {
   private readonly stateListeners = new Set<(state: TransportConnectionState) => void>()

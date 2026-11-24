@@ -980,11 +980,31 @@ const overlayInspector = computed(() => catalogWidth.value > 0 && catalogWidth.v
 const narrowCatalog = computed(() => catalogWidth.value > 0 && catalogWidth.value < 800)
 const overlayTop = ref(180)
 const overlayRight = ref(18)
-const overlayInspectorStyle = computed(() => ({
-  top: `${overlayTop.value}px`,
-  right: `${overlayRight.value}px`,
-  maxHeight: `calc(100dvh - ${overlayTop.value}px - 16px)`,
-}))
+// user:“添加供应商后背景变黑但配置卡片没出现”+(顶层几何量按墙面算，到了手机上墙面本来就靠下，
+// 卡片只剩两百多像素、还容易被键盘挡住；窄目录里直接改成一整张底部表单，不再按墙面定位)。
+const overlayInspectorStyle = computed(() => {
+  if (narrowCatalog.value) {
+    // user:“把这个卡片给我放到中间，你看现在下面确认键是点不着的”+(贴底会让卡片下缘钻到
+    // 底部导航后面，保存键点不到；窄屏改成正中间的一张卡，上下都留出空档，内部可滚动)。
+    return {
+      top: '50%',
+      right: 'auto',
+      bottom: 'auto',
+      left: '50%',
+      width: 'calc(100vw - 24px)',
+      maxWidth: '560px',
+      maxHeight: 'calc(100dvh - 150px)',
+      transform: 'translate(-50%, -50%)',
+      borderRadius: '16px',
+      paddingBottom: 'var(--space-4)',
+    }
+  }
+  return {
+    top: `${overlayTop.value}px`,
+    right: `${overlayRight.value}px`,
+    maxHeight: `calc(100dvh - ${overlayTop.value}px - 16px)`,
+  }
+})
 
 /** Keep the overlay drawer pinned to the top-right of the wall, under the controls. */
 function updateOverlayGeometry(): void {

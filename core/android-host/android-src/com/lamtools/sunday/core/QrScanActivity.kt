@@ -9,11 +9,13 @@ import android.graphics.ImageFormat
 import android.hardware.Camera
 import android.os.Bundle
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
@@ -69,7 +71,46 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.WRAP_CONTENT,
         Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-      ).apply { topMargin = 96 },
+      ).apply { topMargin = statusBarHeight() + dp(72) },
+    )
+    // user:“扫码连接处左上角无返回键，不通过系统返回则卡死在此界面”+
+    // (全屏相机页只画了取景框，没有任何可见出口；左上角给一个常显的返回键，
+    //  点它等同取消扫码，不去赌系统返回手势。)
+    val topBar = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(4), 0, dp(12), 0)
+    }
+    // 相机画面可能很亮：返回键要自带半透明圆底，白字直接压在预览上会看不见。
+    val back = TextView(this).apply {
+      text = "←"
+      setTextColor(Color.WHITE)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+      gravity = Gravity.CENTER
+      background = android.graphics.drawable.GradientDrawable().apply {
+        shape = android.graphics.drawable.GradientDrawable.OVAL
+        setColor(Color.argb(150, 0, 0, 0))
+      }
+      isClickable = true
+      contentDescription = "返回"
+      setOnClickListener { finishCancelled() }
+    }
+    val size = dp(44)
+    topBar.addView(back, LinearLayout.LayoutParams(size, size))
+    val title = TextView(this).apply {
+      text = "扫码连接电脑"
+      setTextColor(Color.WHITE)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+      setShadowLayer(4f, 0f, 1f, Color.BLACK)
+    }
+    topBar.addView(title)
+    root.addView(
+      topBar,
+      FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        Gravity.TOP,
+      ).apply { topMargin = statusBarHeight() },
     )
     setContentView(root)
 
@@ -227,6 +268,13 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
   override fun onResume() {
     super.onResume()
     if (surfaceView?.holder?.surface?.isValid == true) startCamera()
+  }
+
+  private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+  private fun statusBarHeight(): Int {
+    val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+    return if (id > 0) resources.getDimensionPixelSize(id) else dp(24)
   }
 
   private fun stopCamera() {

@@ -61,6 +61,7 @@ afterEach(() => {
   resetPreviewLightbox()
   vi.mocked(copyImageBlob).mockClear()
   document.body.innerHTML = ''
+  vi.unstubAllGlobals()
 })
 
 describe('lightbox image presentation', () => {
@@ -125,4 +126,34 @@ describe('lightbox image presentation', () => {
     const labels = Array.from(toolbar!.querySelectorAll('button')).map(button => button.getAttribute('aria-label'))
     expect(labels).toEqual(expect.arrayContaining(['箭头', '问号', '叹号', '文字块', '画笔', '颜色', '撤销', '重做', '清空', '退出标注']))
   })
+})
+
+
+it('discards a late media read after switching the lightbox target', async () => {
+  const releases = new Map<string, () => void>()
+  const request = vi.fn(async ({ path }: { path: string }) => {
+    if (path.startsWith('/files/read-reference?')) {
+      const file = new URL(path, 'http://localhost').searchParams.get('path')!
+      await new Promise<void>(resolve => releases.set(file, resolve))
+    }
+    return { status: 200, headers: {}, body: PNG_BYTES }
+  })
+  const create = vi.fn(() => 'blob:current-image')
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL = create
+    static revokeObjectURL = vi.fn()
+  })
+  mountLightbox({ transport: { request } as unknown as LamToolsTransport })
+  await wrappers.at(-1)!.setProps({
+    resolver: async (target, transport) => ({ ...await resolveImage(target, transport), url: '/api/core/file' }),
+  })
+  await openAndSettle('E:/p/a.png')
+  await openAndSettle('E:/p/b.png')
+  expect(releases.has('E:/p/a.png')).toBe(true)
+  expect(releases.has('E:/p/b.png')).toBe(true)
+  releases.get('E:/p/b.png')!()
+  await flushPromises()
+  releases.get('E:/p/a.png')!()
+  await flushPromises()
+  expect(create).toHaveBeenCalledTimes(1)
 })

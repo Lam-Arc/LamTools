@@ -17,6 +17,7 @@ from ..queue_state import (
     queue_order_key,
 )
 from ..turn_acceptance import QUEUE_ITEM_ACCEPTED_METHODS
+from ..steering import GUIDANCE_HANDOFF_IDS
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 
 
@@ -25,6 +26,7 @@ async def handle_queue_create_operation(
     request_id: int | str | None,
     params: dict[str, Any],
     context: CoreLiveContext,
+    guidance_handoff_ids: tuple[str, ...] = (),
 ) -> CoreLiveOperationOutcome:
     from .events import _append_app_event
     from .params import _expected_revision, _include_snapshot_param, _load_snapshot_outside_write_lock
@@ -73,6 +75,9 @@ async def handle_queue_create_operation(
         runtime_snapshot=queue_runtime_snapshot,
     )
     payload["work_root"] = prepared.work_root
+    # user:“去找消息发送/引导/排队/分叉/编辑中最应优化/重构的地方”+(引导转入队列时，队列接收和转发凭据同一次提交)。
+    if guidance_handoff_ids:
+        payload[GUIDANCE_HANDOFF_IDS] = list(guidance_handoff_ids)
     if params.get("goal_continuation"):
         payload["goal_continuation"] = True
     if getattr(context.persistence, "can_use_rust_write", False) and (
@@ -149,25 +154,53 @@ async def handle_queue_create_operation(
             return event, materialized
 
         event, materialized = await context.persistence.write(write)
-    await context.hub.publish(event)
-    # Response queue item is rebuilt from the payload we just wrote; the queue
-    # lives in the metadata row, so no full snapshot assembly is required.
-    queue_item = {
-        **payload,
-        **(materialized.payload_extra if materialized is not None else {}),
-        "queue_item_id": queue_item_id,
-        "status": "queued",
-        "mode": str(payload.get("mode") or "next_turn"),
-        "input": prepared.visible_input,
-        "seq": event.seq,
-        "last_method": "queue/itemAccepted",
+    # user:“全做”+(排队重试按最初接受的条目 ID 查询当前状态，已移除的条目不重新广播)。
+    snapshot = None
+    include_snapshot = _include_snapshot_param(params)
+    if materialized is None:
+        async with context.session_factory() as db:
+            state = await context.persistence.load(db, thread_id) if include_snapshot else (
+                await context.persistence.load_metadata(db, thread_id)
+            )
+        if include_snapshot:
+            snapshot = state
+        queue_item = next((
+            item for item in state.get("queue") or []
+            if isinstance(item, dict) and item.get("queue_item_id") == event.item_id
+        ), None)
+    else:
+        await context.hub.publish(event)
+        queue_item = {
+            **event.payload,
+            "queue_item_id": event.item_id,
+            "status": "queued",
+            "seq": event.seq,
+            "last_method": "queue/itemAccepted",
+        }
+        if include_snapshot:
+            snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
+    response_payload: dict[str, Any] = {
+        "queue_item": queue_item,
+        "events": [event.to_dict()],
+        "accepted": True,
+        "replayed": materialized is None,
     }
-    response_payload: dict[str, Any] = {"queue_item": queue_item, "events": [event.to_dict()]}
-    if _include_snapshot_param(params):
-        response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
+    if snapshot is not None:
+        response_payload["snapshot"] = snapshot
+    if (params.get("dispatch_if_idle") is True and queue_item is not None
+        and queue_item.get("mode") == "next_turn"
+        and not context.host.runtime_task_registry.active_run_id(thread_id)):
+        from .background import _spawn_live_background
+        from .queue_dispatch import _dispatch_next_queue_item
+
+        # user:“及优化速度/逻辑”+(桌面入队晚于回合收尾时主动唤醒派发，入队回执不等派发)。
+        _spawn_live_background(_dispatch_next_queue_item(
+            context=context, thread_id=thread_id, work_root=prepared.work_root,
+            completed_turn_id="", only_after_completion=True,
+        ), label="queue-dispatch-after-enqueue", thread_id=thread_id)
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, response_payload),
-        publish_events=[event],
+        publish_events=[event] if materialized is not None else [],
     )
 
 
@@ -215,10 +248,12 @@ async def handle_queue_update_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
         )
-    if getattr(context.persistence, "can_use_rust_write", False):
-        from .events import _app_event_input
-        async with context.session_factory() as db:
-            snapshot = await context.persistence.load_metadata(db, thread_id)
+    # user:“及优化速度/逻辑”+(校验和修改在同一事务中，派发后不能再把条目写回队列)。
+    async def write(
+        db: AsyncSession,
+    ) -> tuple[str, AppEventEnvelope | None]:
+        # 队列条目本身存放在元数据行；更新计划不需要逐条装配会话内容。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
         plan = build_queue_update_plan(
             snapshot,
             queue_item_id=queue_item_id,
@@ -227,50 +262,24 @@ async def handle_queue_update_operation(
             mode=str(params.get("mode") or "").strip() or None,
         )
         if not plan.applied:
-            outcome_kind, payload = plan.reason, None
-        else:
-            ev_input = _app_event_input(
-                AppEventInput(
-                    thread_id=thread_id,
-                    method="queue/itemUpdated",
-                    item_id=queue_item_id,
-                    payload=plan.payload or {},
-                )
-            )
-            envelopes = await context.persistence.append_batch_atomic(app_events=[ev_input])
-            outcome_kind, payload = "applied", envelopes[0]
-    else:
-        async def write(
-            db: AsyncSession,
-        ) -> tuple[str, AppEventEnvelope | None]:
-            # 队列条目本身存放在元数据行；更新计划不需要逐条装配会话内容。
-            snapshot = await context.persistence.load_metadata(db, thread_id)
-            plan = build_queue_update_plan(
-                snapshot,
-                queue_item_id=queue_item_id,
-                input_items=prepared.visible_input,
-                runtime_input_items=prepared.runtime_input,
-                mode=str(params.get("mode") or "").strip() or None,
-            )
-            if not plan.applied:
-                return plan.reason, None
-            # 更新排队条目是幂等追加（queue_item_id 为键），计划在事务内基于最新元数据
-            # 行构建，客户端期望修订号不参与任何读改写。这里不做 CAS：活跃回合持续追加
-            # 事件会让客户端读到的修订号必然落后，CAS 会把合法的编辑打成修订冲突
-            # （2026-10-12，与 queue.create 同一原因）。
-            event = await _append_app_event(
-                db,
-                context=context,
-                event=AppEventInput(
-                    thread_id=thread_id,
-                    method="queue/itemUpdated",
-                    item_id=queue_item_id,
-                    payload=plan.payload or {},
-                ),
-            )
-            return "applied", event
+            return plan.reason, None
+        # 更新排队条目是幂等追加（queue_item_id 为键），计划在事务内基于最新元数据
+        # 行构建，客户端期望修订号不参与任何读改写。这里不做 CAS：活跃回合持续追加
+        # 事件会让客户端读到的修订号必然落后，CAS 会把合法的编辑打成修订冲突
+        # （2026-10-12，与 queue.create 同一原因）。
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="queue/itemUpdated",
+                item_id=queue_item_id,
+                payload=plan.payload or {},
+            ),
+        )
+        return "applied", event
 
-        outcome_kind, payload = await context.persistence.write(write)
+    outcome_kind, payload = await context.persistence.write(write)
     if outcome_kind != "applied":
         response_payload = {"applied": False, "reason": outcome_kind, "events": []}
         if _include_snapshot_param(params):
