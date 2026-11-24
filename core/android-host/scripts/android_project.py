@@ -637,13 +637,11 @@ def fix_generated_node_path() -> None:
         if finish >= 0:
             text = text[:begin] + marker + node_path + text[finish:]
 
-    old_args = 'val args = listOf("tauri", "android", "android-studio-script")'
-    if old_args in text:
-        text = text.replace(
-            old_args,
-            'val args = listOf("%s", "android", "android-studio-script")' % cli_path,
-            1,
-        )
+    # user:“全部审查，提交，发布”+(Tauri also generates an npm-run wrapper on a clean checkout).
+    cli_args = '"android", "android-studio-script"'
+    direct = f'val args = listOf("{cli_path}", {cli_args})'
+    for prefix in ('"tauri"', '"run", "--", "tauri"'):
+        text = text.replace(f'val args = listOf({prefix}, {cli_args})', direct, 1)
 
     if text != original:
         build_task.write_text(text, encoding="utf-8")
