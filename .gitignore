@@ -235,3 +235,13 @@ core/p2p/target/
 
 # user:“可视化组件展厅”+(展厅构建结果可重建，不进入仓库)
 /core/ui/dist-design-system/
+
+# Rust build output for the p2p status probe
+core/p2p-status/target/
+
+# 桌面端本机调试抓帧数据（frame-live.ndjson 一类的运行产物）
+/core/desktop/.lamtools/
+
+# vue-tsc 为插件 UI 生成的声明文件（构建产物；flow-shims 是手写的，保留）
+core/src/lamtools_core/plugins/bundled/workflow/ui/*.d.ts
+!core/src/lamtools_core/plugins/bundled/workflow/ui/flow-shims.d.ts
