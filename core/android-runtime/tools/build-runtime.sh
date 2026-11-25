@@ -182,8 +182,11 @@ log "pylib: $(du -sh "$PYLIB" | cut -f1) in $(ls "$PYLIB" | wc -l) entries"
 log "copying the core"
 APP="$ROOTFS/opt/sunday/app"
 rm -rf "$APP"; mkdir -p "$APP"
+# user:"顺便把运行时重打"+(本机 Rust 构建缓存与 node_modules 是开发产物，
+# 不能随源码进入手机运行时：controller/target 一处就 1.1G，会让内置运行时翻倍。)
 tar -C "$CORE_DIR" -cf - \
   --exclude='__pycache__' --exclude='*.pyc' \
+  --exclude='target' --exclude='node_modules' --exclude='.git' \
   src config skills \
   | tar -C "$APP" -xf -
 # The config loader resolves bundled defaults as <pkg>/../../../config/resources.
