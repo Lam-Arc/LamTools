@@ -28,6 +28,8 @@ export interface PluginPageContext extends PluginPageScope {
   onVisibilityChange: (listener: (visible: boolean) => void) => () => void
   openPage: (pageId: string) => void
   openFile: (path: string) => void
+  /** 原生目录选择器：插件要一个绝对路径时不必让用户手输。 */
+  pickDirectory: () => Promise<string | null>
   addStyle: (css: string) => () => void
 }
 type Cleanup = () => void | Promise<void>
@@ -60,7 +62,7 @@ export async function loadPluginPageModule(page: PluginPageEntry): Promise<Plugi
 }
 
 export function createPluginPageInstance(host: HTMLElement, page: PluginPageEntry, scope: PluginPageScope, rpc: PluginRpc,
-  options: { loadModule?: typeof loadPluginPageModule; visible?: boolean; openPage?: (id: string) => void; openFile?: (path: string) => void } = {}) {
+  options: { loadModule?: typeof loadPluginPageModule; visible?: boolean; openPage?: (id: string) => void; openFile?: (path: string) => void; pickDirectory?: () => Promise<string | null> } = {}) {
   const bound = { ...scope }
   const controller = new AbortController(), listeners = new Set<(visible: boolean) => void>()
   const styles = new Set<() => void>()
@@ -94,6 +96,10 @@ export function createPluginPageInstance(host: HTMLElement, page: PluginPageEntr
     openPage(id: string) { if (!disposed) options.openPage?.(id) },
     // user:“该修就修，不用停下”+(插件页面可在其项目上下文中打开链接文件)。
     openFile(path: string) { if (!disposed && typeof path === 'string' && path.trim()) options.openFile?.(path) },
+    async pickDirectory() {
+      if (disposed) return null
+      try { return (await options.pickDirectory?.()) ?? null } catch { return null }
+    },
     // user:“它自己的样式好像全部都丢了”+(由宿主统一授权样式并归当前页面实例清理)。
     addStyle(css: string) {
       if (disposed) return () => {}

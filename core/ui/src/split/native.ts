@@ -425,3 +425,9 @@ export async function subscribeBrowserDownloadRequests(
 export async function browserNetworkState(mode: 'accelerator' | 'system' | 'direct', endpoint = ''): Promise<boolean> {
   return splitNative<boolean>('browser_network_state', { mode, endpoint })
 }
+
+/** 原生「选择文件夹」对话框；取消时返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  const value = await splitNative<string | null>('pick_directory', {})
+  return typeof value === 'string' && value.trim() ? value : null
+}

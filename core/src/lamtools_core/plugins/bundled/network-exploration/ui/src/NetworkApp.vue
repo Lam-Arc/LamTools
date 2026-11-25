@@ -1,9 +1,9 @@
 <script setup>
-// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
-// user:“你应当设计的是一个高级、简洁、现代的网络工具界面，不用管跟 sunday 是否适配”+(使用独立深色视觉和简洁导航，不继承宿主面板布局)。
-// user:“概览、下载、互联、诊断四个视图，代理和高级网络设置放进设置页”+(左栏只留四件常用事，其余收进设置，不再有进不去的页面)。
+// user:“你应当设计的是一个高级、简洁、现代的网络工具界面”+(独立、克制的网络控制台：数据行优先，不做卡片堆)。
+// user:“设置里面什么叫留空以保持默认目录？目录这种属于是必要信息吧 为什么要藏起来”+(凡是有默认值的地方都直接写出来)。
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
+  Gauge,
   Network,
   Home,
   Download,
@@ -12,7 +12,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-vue-next";
-import { useNetwork } from "./session.mjs";
+import { useNetwork, bytes } from "./session.mjs";
 import HomeView from "./HomeView.vue";
 import TransferView from "./TransferView.vue";
 import InterconnectView from "./InterconnectView.vue";
@@ -21,46 +21,14 @@ import SettingsView from "./SettingsView.vue";
 const props = defineProps({ context: { type: Object, required: true } });
 const s = useNetwork(props.context),
   report = ref(null);
-// user:“概览/下载/互联/诊断”+(四个平级视图；设置是独立入口，不占用第四个以上的平级位置)。
 const items = [
-  {
-    id: "overview",
-    title: "概览",
-    hint: "网络状态、速率与常用操作",
-    icon: Home,
-    component: HomeView,
-  },
-  {
-    id: "transfer",
-    title: "下载",
-    hint: "任务、进度与文件",
-    icon: Download,
-    component: TransferView,
-  },
-  {
-    id: "devices",
-    title: "互联",
-    hint: "我的设备与文件互传",
-    icon: Network,
-    component: InterconnectView,
-  },
-  {
-    id: "diagnose",
-    title: "诊断",
-    hint: "检查网络并定位问题",
-    icon: Activity,
-    component: DiagnoseView,
-  },
+  { id: "overview", title: "概览", icon: Home, component: HomeView },
+  { id: "transfer", title: "下载", icon: Download, component: TransferView },
+  { id: "devices", title: "互联", icon: Network, component: InterconnectView },
+  { id: "diagnose", title: "诊断", icon: Activity, component: DiagnoseView },
 ];
-const settingsItem = {
-  id: "settings",
-  title: "设置",
-  hint: "代理、加速与高级网络设置",
-  icon: Settings2,
-  component: SettingsView,
-};
+const settingsItem = { id: "settings", title: "设置", icon: Settings2, component: SettingsView };
 const navItems = items;
-// user:“代理和高级网络设置置于设置页，不新增大量平级入口”+(设置页用分区切换，六个分区都在同一页)。
 const SECTIONS = [
   { id: "acceleration", title: "加速" },
   { id: "proxy", title: "代理与线路" },
@@ -71,7 +39,6 @@ const SECTIONS = [
 ];
 const PAGE_STORAGE = "easynet:page";
 const section = ref("acceleration");
-// 旧入口（快捷胶囊、卡片链接）用功能名指路；统一在这里翻译成新结构，避免出现进不去的页面。
 const SECTION_ALIASES = {
   proxy: "proxy",
   acceleration: "acceleration",
@@ -120,117 +87,80 @@ function quickPage(event) {
   if (typeof id === "string" && id) show(id);
 }
 const current = computed(() =>
-  page.value === "settings"
-    ? settingsItem
-    : items.find((item) => item.id === page.value) || items[0],
+  page.value === "settings" ? settingsItem : items.find((item) => item.id === page.value) || items[0],
 );
 function diagnostic(value) {
   report.value = value;
   page.value = "diagnose";
 }
-onMounted(() =>
-  window.addEventListener("sunday:network-plugin-page", quickPage),
-);
-onBeforeUnmount(() =>
-  window.removeEventListener("sunday:network-plugin-page", quickPage),
-);
+// user:“实时速率和累计流量必须区分”+(顶栏只放会变的三个数，累计与口径留在概览里说明)。
+const liveDown = computed(() => Number(s.state?.traffic?.download || 0));
+const liveUp = computed(() => Number(s.state?.traffic?.upload || 0));
+const liveDelay = computed(() => {
+  const node = s.proxy?.proxies?.[s.proxy?.proxies?.Auto?.now] || null;
+  return Number(node?.history?.at(-1)?.delay || 0);
+});
+onMounted(() => window.addEventListener("sunday:network-plugin-page", quickPage));
+onBeforeUnmount(() => window.removeEventListener("sunday:network-plugin-page", quickPage));
 </script>
 <template>
-  <div class="nx-app" :aria-busy="Boolean(s.busy)">
-    <aside class="nx-sidebar">
-      <div class="nx-brand" title="EasyNet">
-        <Network :size="25" :stroke-width="1.7" /><span>EasyNet</span>
-      </div>
+  <div class="nx-app nx2" :aria-busy="Boolean(s.busy)">
+    <aside class="nx2-rail">
+      <div class="nx2-brand" title="EasyNet"><Gauge :size="19" :stroke-width="1.8" /><span>EasyNet</span></div>
       <nav aria-label="网络工具">
-        <template v-for="item in navItems" :key="item.id">
-          <button
-            class="nx-nav-item"
-            :class="{ 'is-active': page === item.id }"
-            :data-page="item.id"
-            :aria-current="page === item.id ? 'page' : undefined"
-            :title="item.hint"
-            @click="show(item.id)"
-          >
-            <component
-              :is="item.icon"
-              :size="20"
-              :stroke-width="1.65"
-            /><span>{{ item.title }}</span>
-          </button></template
-        >
-        <div class="nx-nav-divider" />
         <button
-          class="nx-nav-item"
-          :class="{ 'is-active': page === 'settings' }"
-          data-settings
-          :aria-current="page === 'settings' ? 'page' : undefined"
-          :title="settingsItem.hint"
-          @click="openSettings()"
+          v-for="item in navItems"
+          :key="item.id"
+          class="nx2-rail-item"
+          :class="{ 'is-active': page === item.id }"
+          :data-page="item.id"
+          :aria-current="page === item.id ? 'page' : undefined"
+          :title="item.title"
+          @click="show(item.id)"
         >
-          <component
-            :is="settingsItem.icon"
-            :size="20"
-            :stroke-width="1.65"
-          /><span>{{ settingsItem.title }}</span>
+          <component :is="item.icon" :size="18" :stroke-width="1.7" /><span>{{ item.title }}</span>
         </button>
       </nav>
-      <div class="nx-sidebar-foot">
-        <span
-          class="nx-live-dot"
-          :class="{ 'is-offline': Boolean(s.connectionError) || !s.state }"
-        /><span>{{
-          s.connectionError ? "离线" : s.state ? "监测中" : "连接中"
-        }}</span>
-      </div>
+      <button
+        class="nx2-rail-item nx2-rail-settings"
+        :class="{ 'is-active': page === 'settings' }"
+        data-settings
+        :aria-current="page === 'settings' ? 'page' : undefined"
+        title="设置"
+        @click="openSettings()"
+      >
+        <Settings2 :size="18" :stroke-width="1.7" /><span>设置</span>
+      </button>
     </aside>
-    <div class="nx-workspace">
-      <header class="nx-header">
-        <div>
-          <span class="nx-eyebrow">NETWORK CONSOLE</span>
-          <h1>{{ current.title }}</h1>
-          <p>{{ current.hint }}</p>
-        </div>
-        <div class="nx-header-actions">
-          <span v-if="s.busy" class="nx-working">正在处理…</span
-          ><span v-else-if="s.state && !s.connectionError" class="nx-live-label"
-            ><span class="nx-live-dot" />实时更新</span
-          ><button
-            class="btn nx-button btn--quiet nx-icon-button"
+
+    <div class="nx2-main">
+      <header class="nx2-top">
+        <h1>{{ current.title }}</h1>
+        <div class="nx2-top-live" aria-label="实时网络数据">
+          <span>↓ <b>{{ bytes(liveDown) }}/s</b></span>
+          <span>↑ <b>{{ bytes(liveUp) }}/s</b></span>
+          <span v-if="liveDelay">线路 <b>{{ liveDelay }} ms</b></span>
+          <button
+            class="nx2-icon"
             :disabled="Boolean(s.busy)"
             aria-label="刷新网络状态"
+            title="刷新"
             @click="s.refresh()"
           >
-            <RefreshCw :size="17" />
+            <RefreshCw :size="14" />
           </button>
         </div>
       </header>
-      <div
-        v-if="s.connectionError"
-        class="nx-notice nx-notice--error"
-        role="alert"
-      >
-        <span>暂时无法连接网络服务，请稍后重试。</span
-        ><button class="btn nx-button btn--quiet" @click="s.refresh()">重试</button>
-      </div>
-      <div
-        v-if="s.error || s.notice"
-        class="nx-notice"
-        :class="{ 'nx-notice--error': s.error }"
-        :role="s.error ? 'alert' : 'status'"
-      >
-        <span>{{ s.error || s.notice }}</span
-        ><button
-          class="btn nx-button btn--quiet nx-icon-button"
-          aria-label="关闭提示"
-          @click="
-            s.error = '';
-            s.notice = '';
-          "
-        >
-          <X :size="14" />
-        </button>
-      </div>
-      <main class="nx-content ne-content">
+
+      <p v-if="s.connectionError" class="nx2-banner nx2-banner--error" role="alert">
+        与服务断开，正在重试。<button class="nx2-link" @click="s.refresh()">立即重试</button>
+      </p>
+      <p v-else-if="s.error || s.notice" class="nx2-banner" :class="{ 'nx2-banner--error': s.error }" :role="s.error ? 'alert' : 'status'">
+        {{ s.error || s.notice }}
+        <button class="nx2-icon" aria-label="关闭提示" @click="(s.error = ''), (s.notice = '')"><X :size="13" /></button>
+      </p>
+
+      <main class="nx2-body">
         <Transition name="nx-page">
           <component
             :is="current.component"
@@ -245,20 +175,9 @@ onBeforeUnmount(() =>
             @settings="openSettings"
             @section="section = $event"
           />
-          <div v-else key="loading" class="nx-loading" aria-live="polite">
-            <div class="nx-skeleton nx-loading-banner" />
-            <div class="nx-loading-grid">
-              <div class="nx-skeleton nx-loading-chart" />
-              <div class="nx-skeleton nx-loading-chart" />
-            </div>
+          <div v-else class="nx2-loading" aria-live="polite">
             <p>正在读取网络状态…</p>
-            <button
-              v-if="s.connectionError"
-              class="btn nx-button btn--secondary"
-              @click="s.refresh()"
-            >
-              重新连接
-            </button>
+            <button v-if="s.connectionError" class="nx2-link" @click="s.refresh()">重新连接</button>
           </div>
         </Transition>
       </main>

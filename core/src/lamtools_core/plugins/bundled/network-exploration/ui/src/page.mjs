@@ -3,6 +3,8 @@ import { createApp } from "vue";
 import NetworkApp from "./NetworkApp.vue";
 import QuickPanel from "./QuickPanel.vue";
 import styles from "./style.css?inline";
+// user:“重新设计”+(控制台排版单独一份，避免和历史样式互相覆盖)。
+import redesign from "./redesign.css?inline";
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(独立插件注入共享按钮配方)。
 import buttonStyles from "../../../../../../../ui/src/styles/sunday-button.css?inline";
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(独立插件只注入共享开关样式，避免影响宿主其他控件)。

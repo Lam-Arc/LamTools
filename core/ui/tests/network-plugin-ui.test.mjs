@@ -17,7 +17,7 @@ it('renders the four visible pages and disposes without leaving polling', async 
   for (const page of ['overview', 'transfer', 'devices', 'diagnose']) {
     root.querySelector(`[data-page="${page}"]`).click();
     await flushPromises();
-    expect(root.querySelector('.ne-content').textContent.length).toBeGreaterThan(10);
+    expect(root.querySelector('.nx2-body').textContent.length).toBeGreaterThan(10);
   }
   controller.abort(); dispose();
   const calls = rpc.mock.calls.length;
@@ -49,6 +49,7 @@ it('does not interpret diagnostic text as HTML', async () => {
   root.querySelector('[data-page="transfer"]').click();
   await flushPromises();
   await new Promise(resolve => setTimeout(resolve, 0));
+  await flushPromises();
   await flushPromises();
   expect(root.querySelector('img')).toBeNull();
   expect(root.textContent).toContain(evil);

@@ -49,12 +49,12 @@ const currentId = computed(() =>
 const view = computed(() => views[currentId.value]);
 </script>
 <template>
-  <div class="nx-settings" data-settings-page>
-    <nav class="nx-settings-tabs" aria-label="设置分区">
+  <div class="nx2-page nx2-settings" data-settings-page>
+    <nav class="nx2-settings-tabs" aria-label="设置分区">
       <button
         v-for="tab in tabs"
         :key="tab.id"
-        class="nx-settings-tab"
+        class="nx2-settings-tab"
         :class="{ 'is-active': currentId === tab.id }"
         :data-settings-section="tab.id"
         :aria-current="currentId === tab.id ? 'page' : undefined"
@@ -65,7 +65,7 @@ const view = computed(() => views[currentId.value]);
         }}</span>
       </button>
     </nav>
-    <section class="nx-settings-body">
+    <section class="nx2-settings-body">
       <component
         :is="view"
         :key="currentId"

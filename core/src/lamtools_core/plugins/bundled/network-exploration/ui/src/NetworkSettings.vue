@@ -74,172 +74,75 @@ async function testRules() {
 }
 </script>
 <template>
-  <div class="nx-view-stack">
-    <div class="nx-section-heading">
-      <div>
+  <div class="nx2-page">
+    <section class="nx2-group">
+      <header class="nx2-group-head">
         <h2>本机网络</h2>
-        <p>查看当前地址和正在使用的 DNS。</p>
-      </div>
-      <button
-        class="btn nx-button btn--secondary"
-        :aria-expanded="editing"
-        @click="editing = !editing"
-      >
-        <Settings2 :size="15" />调整 DNS
-      </button>
-    </div>
-    <section class="nx-panel nx-interface-list">
-      <article
-        v-for="adapter in session.interfaces"
-        :key="adapter.index"
-        class="nx-interface"
-      >
-        <span class="nx-control-icon"><Monitor :size="20" /></span>
-        <div>
-          <strong>{{ adapter.name }}</strong>
-          <dl>
-            <div>
-              <dt>本机地址</dt>
-              <dd>{{ adapter.ipv4?.join("、") || "没有 IPv4 地址" }}</dd>
-            </div>
-            <div>
-              <dt>DNS</dt>
-              <dd>{{ adapter.dns?.join("、") || "由系统提供" }}</dd>
-            </div>
-            <div v-if="adapter.gateway?.length">
-              <dt>网关</dt>
-              <dd>{{ adapter.gateway.join("、") }}</dd>
-            </div>
-          </dl>
-        </div>
-      </article>
-      <div v-if="!session.interfaces.length" class="nx-empty nx-empty--small">
-        <Monitor :size="25" /><span>暂时没有读取到网络接口。</span>
-      </div>
-    </section>
-    <form v-if="editing" class="nx-panel nx-form" @submit.prevent="saveDns">
-      <h2>调整 DNS</h2>
-      <div class="nx-form-grid">
-        <!-- user:“确保视觉、功能和交互不退化”+(未选网络接口时禁止提交，保留必选行为)。 -->
-        <div class="nx-form-field"><span>网络接口</span><UiSelect v-model="interfaceIndex" :options="interfaceOptions" placeholder="选择正在使用的网络" aria-label="网络接口" data-network-interface :menu-min-width="180" /></div
-        ><label
-          ><span>DNS 地址</span
-          ><input
-            v-model="servers"
-            class="nx-input"
-            required
-            placeholder="多个地址用逗号隔开"
-        /></label>
-      </div>
-      <p class="nx-help">修改前会保存原设置，之后可在“防护”中恢复。</p>
-      <button class="btn nx-button btn--secondary" :disabled="Boolean(session.busy) || !interfaceIndex">
-        确认并申请修改
-      </button>
-    </form>
-    <section class="nx-panel nx-form">
-      <div class="nx-panel-heading">
-        <h2><Globe :size="17" />查询网站地址</h2>
-      </div>
-      <form class="nx-inline-form" @submit.prevent="lookup">
-        <input
-          v-model="query"
-          class="nx-input"
-          placeholder="输入域名"
-          aria-label="查询域名"
-          required
-        /><UiSelect v-model="provider" class="nx-shared-select" :options="providerOptions" aria-label="查询方式" data-network-dns-provider :menu-min-width="150" />
-        <button
-          class="btn nx-button btn--secondary"
-          :disabled="Boolean(session.busy)"
-        >
-          <Search :size="14" />查询
+        <button class="nx2-btn" data-dns-toggle :aria-expanded="editing" @click="editing = !editing">
+          <Settings2 :size="14" />{{ editing ? "收起 DNS 修改" : "调整 DNS" }}
         </button>
+      </header>
+      <table class="nx2-table">
+        <thead><tr><th>网卡</th><th>地址</th><th>网关</th><th>DNS</th></tr></thead>
+        <tbody>
+          <tr v-for="adapter in session.interfaces" :key="adapter.index">
+            <td>{{ adapter.name }}</td>
+            <td class="nx2-mono">{{ (adapter.ipv4 || []).join("、") || "—" }}</td>
+            <td class="nx2-mono">{{ (adapter.gateway || []).join("、") || "—" }}</td>
+            <td class="nx2-mono nx2-dim">{{ (adapter.dns || []).join("、") || "—" }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section v-if="editing" class="nx2-station">
+      <div class="nx2-station-top">
+        <span class="nx2-station-icon"><Settings2 :size="18" /></span>
+        <span class="nx2-station-title">调整 DNS<small class="nx2-row-hint">修改前会保存原设置，可恢复</small></span>
+      </div>
+      <div class="nx2-form-grid">
+        <div><span>网络接口</span><UiSelect v-model="interfaceIndex" :options="interfaceOptions" placeholder="选择正在使用的网络" aria-label="网络接口" data-network-interface :menu-min-width="180" /></div>
+        <label><span>DNS 地址（逗号分隔）</span><input v-model="servers" class="nx2-input" placeholder="1.1.1.1, 8.8.8.8" /></label>
+        <div class="nx2-form-actions"><button class="nx2-btn nx2-btn--primary" data-dns-apply :disabled="Boolean(session.busy) || !interfaceIndex" @click="saveDns">应用</button></div>
+      </div>
+      <p class="nx2-note">之后可在「防护 → 网络设置记录」里恢复原设置。</p>
+    </section>
+
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>查询网站地址</h2></header>
+      <form class="nx2-composer nx2-composer--inline" @submit.prevent="lookup">
+        <input v-model="query" class="nx2-input" placeholder="输入域名" aria-label="查询域名" />
+        <UiSelect v-model="provider" :options="providerOptions" aria-label="查询方式" data-network-dns-provider :menu-min-width="150" />
+        <button class="nx2-btn" :disabled="Boolean(session.busy)"><Search :size="13" />查询</button>
       </form>
-      <div v-if="answers" class="nx-query-result">
-        <span class="nx-subtle"
-          >{{ answers.domain }} · {{ answers.ms || 0 }} ms</span
-        >
-        <div
-          v-for="(answer, index) in answers.addresses || answers.answers || []"
-          :key="index"
-          class="nx-query-address"
-        >
-          {{ typeof answer === "string" ? answer : answer.data }}
-        </div>
-        <span v-if="!(answers.addresses || answers.answers || []).length"
-          >没有查到地址</span
-        >
+      <div v-if="answers" class="nx2-rows" data-dns-result>
+        <div v-if="answers.addresses?.length" class="nx2-row"><span class="nx2-row-label">地址</span><span class="nx2-row-value nx2-mono">{{ answers.addresses.join("、") }}</span><span class="nx2-row-hint">{{ answers.ms }} ms</span></div>
+        <div v-else-if="answers.answers?.length" class="nx2-row"><span class="nx2-row-label">记录</span><span class="nx2-row-value nx2-mono">{{ answers.answers.slice(0, 4).map((row) => row.data || row.IPAddress || "").join("、") }}</span><span class="nx2-row-hint">{{ answers.ms }} ms</span></div>
+        <p v-else class="nx2-empty-line">没有取到解析结果。</p>
       </div>
     </section>
-    <section class="nx-settings-fold">
-      <button
-        class="btn nx-button btn--quiet"
-        :aria-expanded="ruleEditor"
-        @click="editRules"
-      >
-        网站规则匹配预览<ChevronDown :size="13" />
-      </button>
-      <div v-if="ruleEditor" class="nx-panel nx-form">
-        <p class="nx-help">
-          用于检查匹配结果；实际代理分流以订阅中的规则为准。
-        </p>
-        <div v-for="(rule, index) in rules" :key="index" class="nx-rule-row">
-          <input
-            v-model="rule.domain"
-            class="nx-input"
-            placeholder="例如 github.com"
-            aria-label="规则域名"
-          /><UiSelect v-model="rule.outbound" class="nx-rule-select" :options="outboundOptions" aria-label="规则出口" data-network-rule-outbound :menu-min-width="140" />
-          <button
-            class="btn nx-button btn--quiet nx-icon-button"
-            aria-label="删除规则"
-            @click="rules.splice(index, 1)"
-          >
-            <X :size="14" />
-          </button>
+
+    <section class="nx2-group">
+      <header class="nx2-group-head">
+        <h2>域名规则</h2>
+        <button class="nx2-btn nx2-btn--ghost" data-rules-edit :aria-expanded="ruleEditor" @click="editRules">{{ ruleEditor ? "收起" : "编辑规则" }}</button>
+      </header>
+      <div v-if="ruleEditor" class="nx2-rows">
+        <div v-for="(rule, index) in rules" :key="index" class="nx2-row nx2-row--cols">
+          <input v-model="rule.domain" class="nx2-input" placeholder="例如 github.com" aria-label="规则域名" />
+          <UiSelect v-model="rule.outbound" :options="outboundOptions" aria-label="规则出口" data-network-rule-outbound :menu-min-width="140" />
+          <button class="nx2-icon" aria-label="删除规则" @click="rules.splice(index, 1)"><X :size="14" /></button>
         </div>
-        <div class="nx-actions">
-          <button
-            class="btn nx-button btn--quiet"
-            @click="rules.push({ domain: '', outbound: 'DIRECT' })"
-          >
-            <Plus :size="14" />添加规则</button
-          ><button
-            class="btn nx-button btn--secondary"
-            :disabled="Boolean(session.busy)"
-            @click="saveRules"
-          >
-            保存规则
-          </button>
+        <div class="nx2-actions">
+          <button class="nx2-btn nx2-btn--ghost" @click="rules.push({ domain: '', outbound: 'DIRECT' })"><Plus :size="13" />添加规则</button>
+          <button class="nx2-btn" :disabled="Boolean(session.busy)" @click="saveRules">保存规则</button>
         </div>
-        <form class="nx-inline-form" @submit.prevent="testRules">
-          <input
-            v-model="domain"
-            class="nx-input"
-            required
-            placeholder="输入域名，看看会匹配到哪里"
-            aria-label="测试规则域名"
-          /><button
-            class="btn nx-button btn--secondary"
-            :disabled="Boolean(session.busy)"
-          >
-            测试匹配
-          </button>
-        </form>
-        <p v-if="matched">
-          {{
-            matched.matched
-              ? `匹配到 ${matched.matched.domain}`
-              : "未匹配到专属规则"
-          }}
-          ·
-          {{
-            { DIRECT: "直接连接", PROXY: "通过代理", REJECT: "阻止连接" }[
-              matched.outbound
-            ]
-          }}
-        </p>
       </div>
+      <form class="nx2-composer nx2-composer--inline" @submit.prevent="testRules">
+        <input v-model="domain" class="nx2-input" placeholder="输入域名，看看会匹配到哪里" aria-label="测试规则域名" />
+        <button class="nx2-btn" :disabled="Boolean(session.busy)">测试匹配</button>
+      </form>
+      <p v-if="matched" class="nx2-note">匹配结果：{{ matched.outbound }}（未应用到系统代理）。</p>
     </section>
   </div>
 </template>

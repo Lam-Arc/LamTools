@@ -97,147 +97,72 @@ async function loadDevices() {
 }
 </script>
 <template>
-  <div class="nx-view-stack">
-    <section class="nx-panel">
-      <div class="nx-panel-heading">
-        <h2><Clock :size="17" />定时检查</h2>
-        <button class="btn nx-button btn--quiet" @click="creating = !creating">
-          <Plus :size="14" />添加
-        </button>
-      </div>
-      <p class="nx-help">定期检查常用网站，结果会保存在“检测”中。</p>
-      <form
-        v-if="creating"
-        class="nx-inline-form nx-schedule-form"
-        @submit.prevent="add"
-      >
-        <input
-          v-model="target"
-          class="nx-input"
-          required
-          placeholder="检查哪个网站"
-          aria-label="定时检查的网站"
-        /><UiSelect v-model="interval" class="nx-shared-select" :options="intervalOptions" aria-label="检查间隔" data-network-interval :menu-min-width="140" />
-        <button
-          class="btn nx-button btn--secondary"
-          :disabled="Boolean(session.busy)"
-        >
-          添加计划
-        </button>
+  <div class="nx2-page">
+    <section class="nx2-group">
+      <header class="nx2-group-head">
+        <h2>定时检查</h2>
+        <button class="nx2-btn nx2-btn--ghost" data-add-schedule @click="creating = !creating">{{ creating ? "收起" : "新增计划" }}</button>
+      </header>
+      <form v-if="creating" class="nx2-composer nx2-composer--inline" @submit.prevent="add">
+        <input v-model="target" class="nx2-input" placeholder="检查哪个网站" aria-label="定时检查的网站" />
+        <UiSelect v-model="interval" :options="intervalOptions" aria-label="检查间隔" data-network-interval :menu-min-width="140" />
+        <button class="nx2-btn nx2-btn--primary" :disabled="Boolean(session.busy)">添加计划</button>
       </form>
-      <article
-        v-for="(row, index) in session.state?.automations || []"
-        :key="index"
-        class="nx-schedule-row"
-      >
-        <SundaySwitch
-          size="sm"
-          :label="`${row.target} 定时检查`"
-          :model-value="row.enabled"
-          :disabled="Boolean(session.busy)"
-          @update:model-value="toggle(index)"
-        />
-        <div>
-          <strong>{{ row.target }}</strong
-          ><small>每 {{ row.interval_minutes }} 分钟检查一次</small>
+      <div v-if="session.state?.automations?.length" class="nx2-rows">
+        <div v-for="(row, index) in session.state.automations" :key="index" class="nx2-row nx2-row--cols" data-schedule-row>
+          <SundaySwitch size="sm" :label="`${row.target} 定时检查`" :model-value="row.enabled" :disabled="Boolean(session.busy)" @update:model-value="toggle(index)" />
+          <span class="nx2-row-value">{{ row.target }}</span>
+          <span class="nx2-row-hint">每 {{ row.interval_minutes }} 分钟</span>
+          <span class="nx2-actions">
+            <button class="nx2-link" :disabled="Boolean(session.busy)" @click="preview(index)"><Play :size="12" />试运行</button>
+            <button class="nx2-link nx2-bad" :disabled="Boolean(session.busy)" aria-label="删除定时检查" @click="remove(index)"><X :size="12" /></button>
+          </span>
         </div>
-        <button
-          class="btn nx-button btn--quiet"
-          :disabled="Boolean(session.busy)"
-          @click="preview(index)"
-        >
-          <Play :size="13" />试运行</button
-        ><button
-          class="btn nx-button btn--quiet nx-icon-button"
-          :disabled="Boolean(session.busy)"
-          aria-label="删除定时检查"
-          @click="remove(index)"
-        >
-          <X :size="14" />
-        </button>
-      </article>
-      <p
-        v-if="!session.state?.automations?.length && !creating"
-        class="nx-empty-inline"
-      >
-        还没有计划，需要时再添加。
-      </p>
-    </section>
-    <section class="nx-panel">
-      <div class="nx-panel-heading">
-        <h2><Monitor :size="17" />本地设备</h2>
-        <button class="btn nx-button btn--quiet" @click="loadDevices">
-          查看设备
-        </button>
       </div>
-      <p class="nx-help">查看系统记录过的局域网邻居。</p>
-      <button
-        v-if="!devices"
-        class="btn nx-button btn--secondary"
-        :disabled="Boolean(session.busy)"
-        @click="loadDevices"
-      >
-        读取设备列表
-      </button>
-      <div v-if="devices?.devices" class="nx-table-scroll">
-        <table class="nx-table">
-          <thead>
-            <tr>
-              <th>设备地址</th>
-              <th>硬件地址</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, index) in devices.devices" :key="index">
-              <td>{{ row.IPAddress }}</td>
-              <td>{{ row.LinkLayerAddress || "—" }}</td>
-              <td>{{ row.state }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="!devices.devices.length" class="nx-empty-inline">
-          没有读取到设备记录。
-        </p>
+      <p v-else class="nx2-empty-line">还没有定时检查。它只做只读诊断，不会改网络设置。</p>
+    </section>
+
+    <!-- 局域网设备本来属于「互联」；这里只保留按需读取的一眼核对，不重复做一整套页面。 -->
+    <section class="nx2-group">
+      <header class="nx2-group-head">
+        <h2>局域网设备</h2>
+        <span class="nx2-row-hint">系统邻居缓存，只读</span>
+        <button class="nx2-btn nx2-btn--ghost" @click="loadDevices"><Monitor :size="13" />查看设备</button>
+      </header>
+      <table v-if="devices?.devices?.length" class="nx2-table" data-device-table>
+        <thead><tr><th>地址</th><th>物理地址</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr v-for="row in devices.devices" :key="row.IPAddress">
+            <td class="nx2-mono">{{ row.IPAddress }}</td>
+            <td class="nx2-mono nx2-dim">{{ row.LinkLayerAddress || "—" }}</td>
+            <td>{{ row.state || "未知" }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="nx2-empty-line">点「查看设备」读取系统邻居缓存（不代表都在线）。</p>
+    </section>
+
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>更新频率</h2></header>
+      <div class="nx2-row nx2-row--cols">
+        <span class="nx2-row-label">网速采样</span>
+        <UiSelect :model-value="sample" :options="sampleOptions" :disabled="Boolean(session.busy) || savingSample" aria-label="网速采样间隔" data-network-sampling :menu-min-width="140" @update:model-value="setSample" />
+        <span class="nx2-row-hint">间隔越短数字越及时，开销也越高。</span>
       </div>
     </section>
-    <section class="nx-panel nx-settings-rows">
-      <div>
-        <span
-          ><strong>网速更新频率</strong
-          ><small>降低更新频率可以减少后台采样。</small></span
-        ><UiSelect :model-value="sample" :options="sampleOptions" :disabled="Boolean(session.busy) || savingSample" aria-label="网速采样间隔" data-network-sampling :menu-min-width="140" @update:model-value="setSample" />
-      </div>
-      <div>
-        <span
-          ><strong>导出检查记录</strong
-          ><small>保存检查结果和近期事件，方便对照。</small></span
-        ><button
-          class="btn nx-button btn--secondary"
-          :disabled="Boolean(session.busy)"
-          @click="exportReports"
-        >
-          <FileDown :size="14" />导出
-        </button>
-      </div>
-    </section>
-    <section v-if="session.state?.events?.length" class="nx-recent">
-      <div class="nx-section-heading">
+
+    <section class="nx2-group">
+      <header class="nx2-group-head">
         <h2>活动记录</h2>
-        <span class="nx-subtle"
-          >最近 {{ Math.min(session.state.events.length, 40) }} 条</span
-        >
+        <button class="nx2-btn nx2-btn--ghost" @click="exportReports"><FileDown :size="13" />导出</button>
+      </header>
+      <div v-if="session.state?.events?.length" class="nx2-rows">
+        <div v-for="(event, index) in [...session.state.events].reverse().slice(0, 40)" :key="index" class="nx2-row">
+          <span class="nx2-row-value">{{ event.message }}</span>
+          <span class="nx2-row-hint">{{ dateLabel(event.time) }}</span>
+        </div>
       </div>
-      <div
-        v-for="(event, index) in [...session.state.events]
-          .reverse()
-          .slice(0, 40)"
-        :key="index"
-        class="nx-event"
-      >
-        <Check :size="14" /><span>{{ event.message }}</span
-        ><time>{{ dateLabel(event.time) }}</time>
-      </div>
+      <p v-else class="nx2-empty-line">还没有记录。</p>
     </section>
   </div>
 </template>

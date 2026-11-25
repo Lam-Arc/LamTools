@@ -73,111 +73,46 @@ function status(value) {
 }
 </script>
 <template>
-  <div class="nx-view-stack">
-    <div class="nx-section-heading">
-      <div>
-        <h2>应用联网与恢复</h2>
-        <p>只修改你选择的应用，随时检查并恢复原设置。</p>
-      </div>
-      <button class="btn nx-button btn--secondary" @click="loadApps">
-        <Monitor :size="15" />选择应用
-      </button>
-    </div>
-    <section v-if="choosing" class="nx-panel nx-form">
-      <h2>管理一个应用</h2>
-      <div class="nx-inline-form">
-        <input
-          v-if="manual"
-          v-model="selected"
-          class="nx-input"
-          placeholder="应用 .exe 的完整路径"
-          aria-label="应用路径"
-        /><UiSelect v-else v-model="selected" class="nx-shared-select" :options="appOptions" placeholder="从当前连接的应用中选择" aria-label="选择应用" data-network-application :menu-min-width="220" />
-        <button
-          class="btn nx-button btn--quiet"
-          @click="
-            manual = !manual;
-            selected = '';
-          "
-        >
-          {{ manual ? "从列表选择" : "手动输入路径" }}
-        </button>
-      </div>
-      <div class="nx-application-actions">
-        <div>
-          <h3>阻止这个应用联网</h3>
-          <p>创建仅作用于该应用的出站防火墙规则。</p>
-          <button
-            class="btn nx-button btn--secondary nx-danger-text"
-            :disabled="!selected || Boolean(session.busy)"
-            @click="apply('firewall')"
-          >
-            <ShieldOff :size="14" />申请阻止联网
-          </button>
+  <div class="nx2-page">
+    <section class="nx2-group">
+      <header class="nx2-group-head">
+        <h2>应用联网</h2>
+        <button class="nx2-btn" @click="loadApps"><Monitor :size="14" />选择应用</button>
+      </header>
+      <div v-if="choosing" class="nx2-station">
+        <div class="nx2-composer nx2-composer--inline">
+          <input v-if="manual" v-model="selected" class="nx2-input" placeholder="应用 .exe 的完整路径" aria-label="应用路径" />
+          <UiSelect v-else v-model="selected" :options="appOptions" placeholder="从当前连接的应用中选择" aria-label="选择应用" data-network-application :menu-min-width="220" />
+          <button class="nx2-btn nx2-btn--ghost" @click="manual = !manual; selected = ''">{{ manual ? "从列表选择" : "手动输入路径" }}</button>
         </div>
-        <div>
-          <h3>限制这个应用的上传</h3>
-          <p>降低后台上传对其他任务的影响。</p>
-          <div class="nx-inline-form">
-            <UiSelect v-model="speed" class="nx-shared-select" :options="speedOptions" aria-label="应用上传速度上限" data-network-upload-limit :menu-min-width="140" />
-            <button
-              class="btn nx-button btn--secondary"
-              :disabled="!selected || Boolean(session.busy)"
-              @click="apply('qos')"
-            >
-              申请限速
-            </button>
+        <div class="nx2-rows">
+          <div class="nx2-row nx2-row--cols">
+            <span class="nx2-row-label">阻止联网</span>
+            <span class="nx2-row-hint">只对这个应用创建出站防火墙规则</span>
+            <button class="nx2-btn" :disabled="!selected || Boolean(session.busy)" @click="apply('firewall')"><ShieldOff :size="13" />申请阻止</button>
+          </div>
+          <div class="nx2-row nx2-row--cols">
+            <span class="nx2-row-label">上传限速</span>
+            <UiSelect v-model="speed" :options="speedOptions" aria-label="应用上传速度上限" data-network-upload-limit :menu-min-width="140" />
+            <button class="nx2-btn" :disabled="!selected || Boolean(session.busy)" @click="apply('qos')">申请限速</button>
           </div>
         </div>
+        <p class="nx2-note">这两项可能需要管理员权限，执行前会显示影响范围。</p>
       </div>
-      <p class="nx-help">
-        这两项操作可能需要 Windows 管理员权限，执行前会显示影响范围。
-      </p>
+      <p v-else class="nx2-empty-line">选择一个应用后，可以只对它阻止联网或限制上传。</p>
     </section>
-    <section class="nx-panel nx-transaction-list">
-      <div class="nx-panel-heading">
-        <h2><Undo2 :size="17" />网络设置记录</h2>
-        <span class="nx-subtle">{{ transactions.length }} 条</span>
-      </div>
-      <article v-for="row in transactions" :key="row.id" class="nx-transaction">
-        <span class="nx-transaction-icon"><ShieldCheck :size="18" /></span>
-        <div>
-          <strong>{{ title(row) }}</strong>
-          <p v-if="row.request?.program">
-            {{ row.request.program.split("\\").at(-1) }}
-          </p>
-          <small>{{ dateLabel(row.time) }}</small>
+
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>网络设置记录</h2><span class="nx2-row-hint">{{ transactions.length }} 条</span></header>
+      <div v-if="transactions.length" class="nx2-rows">
+        <div v-for="row in transactions" :key="row.id" class="nx2-row nx2-row--cols" data-transaction>
+          <span class="nx2-row-value">{{ title(row) }}<small v-if="row.request?.program" class="nx2-row-hint"> · {{ row.request.program.split("\\").at(-1) }}</small></span>
+          <span class="nx2-tag" :class="{ 'is-warn': ['external_change', 'recovery_required'].includes(row.status), 'is-ok': row.status === 'applied' }">{{ status(row.status) }}</span>
+          <span class="nx2-row-hint">{{ dateLabel(row.time) }}</span>
+          <button v-if="row.status === 'applied'" class="nx2-link" :disabled="Boolean(session.busy)" @click="session.run('system.restore', { id: row.id }, '已检查并恢复原设置')">恢复</button>
         </div>
-        <span
-          class="nx-status-text"
-          :class="{
-            'is-warning': ['external_change', 'recovery_required'].includes(
-              row.status,
-            ),
-          }"
-          >{{ status(row.status) }}</span
-        ><button
-          v-if="
-            ['applied', 'prepared', 'recovery_required'].includes(row.status)
-          "
-          class="btn nx-button btn--secondary"
-          :disabled="Boolean(session.busy)"
-          @click="
-            session.run('system.restore', { id: row.id }, '已检查并恢复原设置')
-          "
-        >
-          <Undo2 :size="13" />恢复
-        </button>
-      </article>
-      <div v-if="!transactions.length" class="nx-empty">
-        <ShieldCheck :size="31" :stroke-width="1.4" /><strong
-          >还没有修改网络设置</strong
-        >
-        <p>通过这里执行的修改，会留下可恢复的记录。</p>
       </div>
+      <p v-else class="nx2-empty-line">还没有修改过系统网络设置。</p>
     </section>
-    <p class="nx-help">
-      如果设置已被其他软件或用户修改，会保留当前状态，避免直接覆盖。
-    </p>
   </div>
 </template>

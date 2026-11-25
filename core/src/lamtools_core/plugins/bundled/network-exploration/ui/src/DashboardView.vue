@@ -1,136 +1,72 @@
 <script setup>
-// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
-// user:“加速页里头不用分什么线路加速…选线路的事儿，去代理里面”+(加速页只做本机加速；订阅和线路全部留在代理页)。
+// user:“整个 easynet 与其相关界面重新设计”+(加速页也改成状态行 + 事实行，不再用大字卡和大标题)。
 import { computed } from "vue";
-import {
-  Power,
-  ArrowUpRight,
-  Link,
-  Activity,
-  Check,
-  ShieldCheck,
-} from "lucide-vue-next";
+import { Power, ChevronRight } from "lucide-vue-next";
+import SundaySwitch from "../../../../../../../ui/src/components/SundaySwitch.vue";
 import SpeedChart from "./SpeedChart.vue";
 import { dateLabel } from "./session.mjs";
 const props = defineProps({ session: Object });
 const emit = defineEmits(["navigate", "diagnostic"]);
 const active = computed(() => Boolean(props.session.accelerated));
+const proxyRunning = computed(() => Boolean(props.session.state?.proxy?.running));
+const running = computed(() => Boolean(props.session.state?.proxy?.running && props.session.state?.proxy?.config_saved));
+const events = computed(() => [...(props.session.state?.events || [])].reverse().slice(0, 4));
 async function oneClick() {
   await props.session.toggleAcceleration();
 }
 </script>
 <template>
-  <div class="nx-accel-page">
-    <section class="nx-accel-control" :class="{ 'is-on': active }">
-      <div class="nx-accel-orb"><Power :size="24" :stroke-width="1.7" /></div>
-      <div class="nx-accel-copy">
-        <span class="nx-kicker">LOCAL ACCELERATION</span>
-        <h2>{{ active ? "本机加速中" : "未加速" }}</h2>
-        <p>
-          {{
-            active
-              ? "本机直连：命中 GitHub、Steam 等常用站点时用 DoH 选 IP。"
-              : "不需要订阅。点一下，用 DoH 选路直连 GitHub、Steam 等常用站点。"
-          }}
-        </p>
+  <div class="nx2-page">
+    <!-- user:“按照这个思路，其他页面也一样处理一下”+(加速就是开没开：和首页同一个开关、同一种形状，不在这里换成另一种控件)。 -->
+    <section class="nx2-station nx-accel-control" data-acceleration-station>
+      <div class="nx2-station-top">
+        <span class="nx2-station-icon" :class="{ 'is-on': active }"><Power :size="18" :stroke-width="1.8" /></span>
+        <span class="nx2-station-title">本机加速<small class="nx2-row-hint">{{ active ? "已开启" : "未开启" }}</small></span>
+        <SundaySwitch
+          data-acceleration
+          label="本机加速"
+          :model-value="active"
+          :disabled="Boolean(session.busy) || !session.systemProxyReady"
+          @update:model-value="oneClick"
+        />
       </div>
-      <button
-        class="btn nx-button nx-large"
-        :class="active ? 'btn--secondary' : 'btn--primary'"
-        :aria-pressed="active"
-        :disabled="Boolean(session.busy) || !session.systemProxyReady"
-        data-acceleration
-        @click="oneClick"
-      >
-        <Power :size="17" />{{
-          session.busy === "proxy.start"
-            ? "正在准备线路…"
-            : session.busy === "accelerator.start"
-              ? "正在准备…"
-              : session.busy === "system.apply"
-                ? "正在开启…"
-                : active
-                  ? "停止加速"
-                  : "一键加速"
-        }}
-      </button>
+      <p class="nx2-station-state">
+        {{ active
+          ? "命中 GitHub、Steam 等常用站点时用 DoH 选 IP 直连，不改 hosts、不装证书。"
+          : "不需要订阅。开启后只改系统代理，指向本机加速端口。" }}
+      </p>
+      <p v-if="session.busy" class="nx2-station-state">
+        {{ session.busy === "proxy.start" ? "正在准备线路…" : session.busy === "accelerator.start" ? "正在准备…" : "正在开启…" }}
+      </p>
+      <p v-else-if="!session.systemProxyReady" class="nx2-station-state nx2-bad">系统代理不可用，先到「代理与线路」检查。</p>
     </section>
 
-    <div class="nx-accel-grid">
-      <SpeedChart
-        :history="session.state?.history || []"
-        :traffic="session.state?.traffic"
-      />
-      <section class="nx-panel nx-accel-facts">
-        <div class="nx-panel-heading">
-          <h2><ShieldCheck :size="17" />运行方式</h2>
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>运行方式</h2></header>
+      <div class="nx2-rows">
+        <div class="nx2-row nx2-row--cols"><span class="nx2-row-label">加速方式</span><span class="nx2-row-value">DoH 选 IP 直连</span><span class="nx2-row-hint">命中常用站点才走加速</span></div>
+        <div class="nx2-row nx2-row--cols"><span class="nx2-row-label">系统改动</span><span class="nx2-row-value">仅系统代理</span><span class="nx2-row-hint">不改 DNS、不改 hosts</span></div>
+        <div class="nx2-row nx2-row--cols"><span class="nx2-row-label">证书</span><span class="nx2-row-value">不安装</span><span class="nx2-row-hint">TLS 原样透传</span></div>
+        <div class="nx2-row nx2-row--cols">
+          <span class="nx2-row-label">线路兜底</span>
+          <span class="nx2-row-value">{{ proxyRunning ? "已就绪" : "未开启" }}</span>
+          <button class="nx2-link" @click="emit('navigate', 'proxy')">去代理页管理<ChevronRight :size="12" /></button>
         </div>
-        <div class="nx-fact">
-          <span>加速方式</span><strong>DoH 选 IP 直连</strong>
-        </div>
-        <div class="nx-fact">
-          <span>系统改动</span><strong>仅系统代理</strong>
-        </div>
-        <div class="nx-fact">
-          <span>证书 / hosts</span><strong>不修改</strong>
-        </div>
-        <div class="nx-fact">
-          <span>订阅线路</span
-          ><button
-            class="btn nx-button btn--quiet nx-fact-link"
-            @click="emit('navigate', 'proxy')"
-          >
-            去代理页管理<ArrowUpRight :size="13" />
-          </button>
-        </div>
-        <p class="nx-help">
-          有订阅时会自动准备线路兜底，但不改系统代理；直连失败的域名会记住并优先走线路。
-        </p>
-      </section>
-    </div>
+      </div>
+    </section>
 
-    <div
-      class="nx-accel-lower"
-      :class="{ 'nx-single': !session.state?.events?.length }"
-    >
-      <section class="nx-panel nx-site-check">
-        <div class="nx-panel-heading">
-          <h2><Link :size="17" />检查网站访问</h2>
+    <!-- 网速图自己带标题与数值，外面不再套一层重复标题。 -->
+    <SpeedChart :history="session.state?.history || []" :traffic="session.state?.traffic" />
+
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>最近活动</h2><button class="nx2-link" @click="emit('navigate', 'advanced')">查看记录<ChevronRight :size="12" /></button></header>
+      <div v-if="events.length" class="nx2-rows">
+        <div v-for="(event, index) in events" :key="index" class="nx2-row">
+          <span class="nx2-row-value">{{ event.message }}</span>
+          <span class="nx2-row-hint">{{ dateLabel(event.time) }}</span>
         </div>
-        <p class="nx-help">
-          网站能不能打开，去「诊断」里一次看完：地址解析、连接、响应和代理。
-        </p>
-        <div class="nx-actions">
-          <button
-            class="btn nx-button btn--secondary"
-            data-open-diagnose
-            @click="emit('navigate', 'diagnose')"
-          >
-            <Activity :size="15" />打开诊断
-          </button>
-        </div>
-      </section>
-      <section v-if="session.state?.events?.length" class="nx-panel nx-recent">
-        <div class="nx-section-heading">
-          <h2>最近活动</h2>
-          <button
-            class="btn nx-button btn--quiet"
-            @click="emit('navigate', 'advanced')"
-          >
-            查看记录<ArrowUpRight :size="13" />
-          </button>
-        </div>
-        <div
-          v-for="(event, index) in [...session.state.events]
-            .reverse()
-            .slice(0, 3)"
-          :key="index"
-          class="nx-event"
-        >
-          <Check :size="14" /><span>{{ event.message }}</span
-          ><time>{{ dateLabel(event.time) }}</time>
-        </div>
-      </section>
-    </div>
+      </div>
+      <p v-else class="nx2-empty-line">还没有事件。</p>
+    </section>
   </div>
 </template>

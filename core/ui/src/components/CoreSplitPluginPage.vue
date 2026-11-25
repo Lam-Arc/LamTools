@@ -5,6 +5,7 @@ import type { SplitTab } from '@/workspace/types'
 import type { PluginRpc } from '@/plugins/types'
 import { contributionState, ensureContributions } from '@/plugins/contributions'
 import { createPluginPageInstance, loadPluginPageModule, parsePluginPageKey } from '@/plugins/pages'
+import { pickDirectory } from '@/split/native'
 import { t } from '@/i18n'
 const props = defineProps<{ tab: SplitTab; visible: boolean; workRoot: string; requestRpc: PluginRpc }>()
 const emit = defineEmits<{ 'open-page': [target: { plugin: string; id: string }]; 'open-file': [path: string, scope: {workRoot: string; projectId?: string; sessionId?: string}] }>()
@@ -31,6 +32,7 @@ function start(force = false) {
   instance = createPluginPageInstance(host.value, entry, bound, props.requestRpc, { visible: props.visible, loadModule: loadPluginPageModule,
     openPage: id => emit('open-page', { plugin: entry.plugin, id }),
     openFile: path => emit('open-file', path, {workRoot:bound.workRoot,projectId:bound.projectId,sessionId:bound.sessionId}),
+    pickDirectory: () => pickDirectory(),
   })
   void instance.ready.catch(cause => { if (alive && current === generation) error.value = String(cause) })
     .finally(() => { if (alive && current === generation) loading.value = false })

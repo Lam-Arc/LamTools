@@ -7,10 +7,10 @@ describe('network transfer shared selects', () => {
     const run = vi.fn(async () => null)
     const session = { state: { proxy: { running: false }, downloads: [] }, tasks: [{ gid: 'job', status: 'active', totalLength: 100, completedLength: 10 }], busy: '', run, loadTasks: vi.fn() }
     const wrapper = mount(TransferView, { props: { session } })
+    await wrapper.findAll('button').find(button => button.text().includes('更多选项'))!.trigger('click')
     wrapper.get('[data-transfer-connections]').getComponent(UiSelect).vm.$emit('update:modelValue', '4')
     wrapper.get('[data-transfer-speed]').getComponent(UiSelect).vm.$emit('update:modelValue', '1048576')
     await wrapper.get('input[aria-label="下载链接"]').setValue('https://example.com/file')
-    await wrapper.findAll('button').find(button => button.text().includes('更多选项'))!.trigger('click')
     const route = wrapper.get('[data-transfer-route]').getComponent(UiSelect)
     expect(route.props('options').find((item: any) => item.value === 'proxy').disabled).toBe(true)
     route.vm.$emit('update:modelValue', 'direct')

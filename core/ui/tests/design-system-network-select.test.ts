@@ -14,7 +14,7 @@ describe('network schedule shared selects', () => {
     sampling.vm.$emit('update:modelValue', '10')
     await wrapper.vm.$nextTick()
     expect(run).toHaveBeenCalledWith('settings.update', { revision: 3, settings: { sample_seconds: 10 } }, '更新频率已保存')
-    await wrapper.findAll('button').find(button => button.text().includes('添加'))!.trigger('click')
+    await wrapper.get('[data-add-schedule]').trigger('click')
     const interval = wrapper.get('[data-network-interval]').getComponent(UiSelect)
     interval.vm.$emit('update:modelValue', '60')
     await wrapper.get('form').trigger('submit')

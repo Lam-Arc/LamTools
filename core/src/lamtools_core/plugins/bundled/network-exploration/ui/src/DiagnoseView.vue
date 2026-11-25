@@ -1,247 +1,142 @@
 <script setup>
-// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
-// user:“可交互式网络工具界面，不需要太专业”+(诊断按可理解的阶段显示真实证据，原始参数不占据主界面)。
+// user:“提供一个普通用户可以理解的「检查网络」按钮”+(一个动作、一条结论、下面才是逐层证据)。
+// user:“当把界面上的所有文字都去掉的时候，用户想干某些事，还能不能够猜到、知道应该怎么做”+(整机检查是唯一的主按钮；网站检查是第二件事，结果先给结论，证据要时才展开)。
 import { computed, ref, watch } from "vue";
-import {
-  Activity,
-  Check,
-  X,
-  Globe,
-  Search,
-  Clock,
-  ChevronDown,
-  ChevronRight,
-  ArrowUpRight,
-} from "lucide-vue-next";
+import { Activity, Check, X, ChevronRight, Search } from "lucide-vue-next";
 import { dateLabel } from "./session.mjs";
 const props = defineProps({ session: Object, report: Object });
 const target = ref("github.com"),
   selected = ref(null),
-  details = ref(false),
-  kind = ref("basic");
+  kind = ref("basic"),
+  showMachineEvidence = ref(true),
+  showSiteEvidence = ref(false);
 watch(
   () => props.report,
   (value) => {
-    if (value) {
+    if (!value) return;
+    // 外部跳进来只可能是网站检查结果；整机结果留在整机区块里。
+    if (value.kind === "network") network.value = value;
+    else {
       selected.value = value;
-      target.value = value.target;
+      target.value = value.target || target.value;
+      showSiteEvidence.value = false;
     }
   },
   { immediate: true },
 );
-const current = computed(
-  () => selected.value || props.session.state?.reports?.at(-1),
-);
-// user:“提供一个普通用户可以理解的「检查网络」按钮”“诊断不依赖单一网站或单一服务端”+(一次点击检查本机、网关、DNS、外网和代理，并给出人话结论)。
 const network = ref(
-  [...(props.session.state?.reports || [])]
-    .reverse()
-    .find((row) => row.kind === "network") || null,
+  [...(props.session.state?.reports || [])].reverse().find((row) => row.kind === "network") || null,
 );
 const networkBusy = computed(() => props.session.busy === "diagnose");
 async function checkNetwork() {
   const result = await props.session.run("diagnose", { kind: "network" }, "");
-  if (result?.report) network.value = result.report;
+  if (result?.report) {
+    network.value = result.report;
+    showMachineEvidence.value = true;
+  }
 }
-function stageLabel(stage) {
-  return (
-    {
-      "本机网络": "本机网络",
-      网关: "网关与局域网",
-      DNS: "域名解析",
-      "外网连接": "外网连接",
-      代理: "代理设置",
-    }[stage] || stage
-  );
-}
-function label(stage) {
-  return (
-    {
-      DNS: "找到网站地址",
-      TCP: "建立网络连接",
-      "TLS / HTTP": "检查安全连接与响应",
-      Ping: "检查响应延迟",
-      Traceroute: "检查访问路径",
-      ICMP: "检查网络响应",
-    }[stage] || stage
-  );
-}
+// 网站结果不能回落到整机结果上：那会让同一份结论在页面里出现两次。
+const siteReport = computed(() => {
+  const rows = props.session.state?.reports || [];
+  const candidate = selected.value || [...rows].reverse().find((row) => row.kind !== "network") || null;
+  return candidate && candidate.kind !== "network" ? candidate : null;
+});
 async function diagnose() {
   const result = await props.session.diagnose(target.value, kind.value);
   if (result?.report) {
     selected.value = result.report;
-    details.value = false;
+    showSiteEvidence.value = false;
   }
 }
+function openHistory(row) {
+  if (row.kind === "network") {
+    network.value = row;
+    showMachineEvidence.value = true;
+    return;
+  }
+  selected.value = row;
+  showSiteEvidence.value = false;
+}
+function stageLabel(stage) {
+  return { "本机网络": "本机网络", "网关": "网关与局域网", "DNS": "域名解析", "外网连接": "外网连接", "代理": "代理设置" }[stage] || stage;
+}
+function siteStage(stage) {
+  return { DNS: "域名解析", TCP: "建立连接", "TLS / HTTP": "安全连接与响应", Ping: "响应延迟", Traceroute: "访问路径", ICMP: "网络响应" }[stage] || stage;
+}
+const history = computed(() => [...(props.session.state?.reports || [])].reverse().slice(0, 8));
 </script>
 <template>
-  <div class="nx-view-stack">
-    <!-- user:“提供一个普通用户可以理解的「检查网络」按钮”+(一键检查本机、网关、DNS、外网与代理，直接给结论)。 -->
-    <section class="nx-panel nx-network-check" data-network-check-panel>
-      <div class="nx-panel-heading">
-        <h2><Activity :size="17" />这台电脑的网络</h2>
-        <span class="nx-subtle">{{
-          network ? dateLabel(network.time) : "还没检查"
-        }}</span>
+  <div class="nx2-page">
+    <!-- 整机检查：图标 + 一句话 + 一个主按钮，和首页的操作台同一种形状。 -->
+    <section class="nx2-check" data-network-check-block>
+      <div>
+        <h2><Activity :size="16" :stroke-width="1.9" />检查这台电脑的网络</h2>
+        <p class="nx2-note">本机、网关、域名解析、外网、代理五层一次看完，不用先想一个网址。</p>
       </div>
-      <p class="nx-help">
-        检查本机连接、网关、域名解析、外网和代理，不用先想一个网站。
-      </p>
-      <div class="nx-actions">
-        <button
-          class="btn nx-button btn--primary"
-          data-network-check
-          :disabled="networkBusy"
-          @click="checkNetwork"
-        >
-          {{ networkBusy ? "检查中…" : "检查网络" }}
-        </button>
+      <button class="nx2-btn nx2-btn--primary nx2-btn--lg" data-network-check :disabled="networkBusy" @click="checkNetwork">
+        <Activity :size="15" />{{ networkBusy ? "检查中…" : "检查网络" }}
+      </button>
+    </section>
+
+    <section v-if="network" class="nx2-group" data-network-result>
+      <p class="nx2-verdict" :class="{ 'nx2-bad': network.failures > 0 }">{{ network.conclusion?.text || "检查完成" }}</p>
+      <p class="nx2-note">{{ network.conclusion?.suggestion }}</p>
+      <button class="nx2-link" :aria-expanded="showMachineEvidence" data-network-evidence-toggle @click="showMachineEvidence = !showMachineEvidence">
+        {{ showMachineEvidence ? "收起检查详情" : "查看检查详情" }}<ChevronRight :size="12" :class="{ 'is-open': showMachineEvidence }" />
+      </button>
+      <div v-if="showMachineEvidence" class="nx2-rows">
+        <div v-for="(check, index) in network.checks || []" :key="index" class="nx2-row nx2-row--cols">
+          <span class="nx2-row-label">{{ stageLabel(check.stage) }}</span>
+          <span class="nx2-tag" :class="check.ok ? 'is-ok' : 'is-bad'"><component :is="check.ok ? Check : X" :size="11" />{{ check.ok ? "通过" : "未通过" }}</span>
+          <span class="nx2-row-hint nx2-ellipsis" :title="check.evidence">{{ check.evidence }}</span>
+        </div>
       </div>
-      <div v-if="network" class="nx-network-result" data-network-result>
-        <strong :class="{ 'nx-danger-text': network.failures > 0 }">{{
-          network.conclusion?.text || "检查完成"
-        }}</strong>
-        <p v-if="network.conclusion?.suggestion" class="nx-help">
-          {{ network.conclusion.suggestion }}
+      <p class="nx2-note">检查时间 {{ dateLabel(network.time) }} · 只报告测量结果，没有改动任何系统设置。</p>
+    </section>
+
+    <section class="nx2-group">
+      <header class="nx2-group-head"><h2>检查某个网站</h2></header>
+      <form class="nx2-composer nx2-composer--inline" data-diagnose-form @submit.prevent="diagnose">
+        <input v-model="target" name="target" class="nx2-input nx2-input--lg" placeholder="例如 github.com" required aria-label="检测网站" />
+        <button class="nx2-btn" :disabled="Boolean(session.busy)"><Search :size="13" />{{ session.busy === "diagnose" ? "检查中…" : "开始检测" }}</button>
+      </form>
+      <div class="nx2-radio-row">
+        <label><input v-model="kind" type="radio" value="basic" />快速检查</label>
+        <label><input v-model="kind" type="radio" value="ping" />加测延迟</label>
+        <label><input v-model="kind" type="radio" value="traceroute" />查看访问路径</label>
+      </div>
+
+      <div v-if="siteReport" class="nx2-site-result" data-site-result>
+        <p class="nx2-verdict" :class="{ 'nx2-bad': siteReport.failures > 0 }">
+          <b class="nx2-mono">{{ siteReport.target }}</b>
+          <span class="nx2-row-hint">{{ siteReport.failures > 0 ? "有未通过的检查" : "检查通过" }}</span>
         </p>
-        <div class="nx-check-list">
-          <div
-            v-for="(check, index) in network.checks || []"
-            :key="index"
-            class="nx-check-row"
-          >
-            <span class="nx-check-status" :class="{ 'is-failure': !check.ok }"
-              ><Check v-if="check.ok" :size="14" /><X v-else :size="14" /></span
-            ><strong>{{ stageLabel(check.stage) }}</strong
-            ><span>{{ check.ok ? "通过" : "未通过" }}</span
-            ><span class="nx-subtle">{{ check.evidence }}</span>
+        <p class="nx2-note">{{ siteReport.conclusion?.text }}<template v-if="siteReport.conclusion?.suggestion"> · {{ siteReport.conclusion.suggestion }}</template></p>
+        <button class="nx2-link" :aria-expanded="showSiteEvidence" data-site-evidence-toggle @click="showSiteEvidence = !showSiteEvidence">
+          {{ showSiteEvidence ? "收起" : "查看检查详情" }}<ChevronRight :size="12" :class="{ 'is-open': showSiteEvidence }" />
+        </button>
+        <div v-if="showSiteEvidence" class="nx2-rows" data-check-evidence>
+          <div v-for="(check, index) in siteReport.checks || []" :key="index" class="nx2-row nx2-row--cols">
+            <span class="nx2-row-label">{{ siteStage(check.stage) }}</span>
+            <span class="nx2-tag" :class="check.ok ? 'is-ok' : 'is-bad'"><component :is="check.ok ? Check : X" :size="11" />{{ check.ok ? "通过" : "未通过" }}</span>
+            <span class="nx2-row-hint">{{ check.ms != null ? `${check.ms} ms` : "" }}</span>
+            <span class="nx2-row-hint nx2-ellipsis" :title="check.evidence">{{ check.evidence || check.address || check.addresses?.join("、") || (check.status ? `响应 ${check.status}` : "") }}</span>
           </div>
         </div>
       </div>
+      <p v-else class="nx2-empty-line">还没有检查过网站。输入域名后点「开始检测」。</p>
     </section>
-    <section class="nx-panel nx-diagnose-start">
-      <div class="nx-diagnose-symbol">
-        <Activity :size="25" :stroke-width="1.5" />
-      </div>
-      <h2>看看哪里没连上</h2>
-      <p>输入一个网站，检查地址解析、连接和响应。</p>
-      <form
-        class="nx-inline-form"
-        data-diagnose-form
-        @submit.prevent="diagnose"
-      >
-        <label class="nx-input-with-icon"
-          ><Globe :size="16" /><input
-            v-model="target"
-            name="target"
-            class="nx-input"
-            placeholder="例如 github.com"
-            required
-            aria-label="检测网站" /></label
-        ><button class="btn nx-button btn--primary" :disabled="Boolean(session.busy)">
-          <Search :size="15" />{{
-            session.busy === "diagnose" ? "检查中…" : "开始检测"
-          }}
+
+    <section v-if="history.length" class="nx2-group">
+      <header class="nx2-group-head"><h2>最近检查</h2><span class="nx2-row-hint">{{ history.length }} 条</span></header>
+      <div class="nx2-rows">
+        <button v-for="row in history" :key="row.id" class="nx2-row nx2-row--button" @click="openHistory(row)">
+          <span class="nx2-row-value">{{ row.kind === "network" ? "整机网络" : row.target }}</span>
+          <span class="nx2-tag" :class="row.failures > 0 ? 'is-bad' : 'is-ok'">{{ row.failures > 0 ? "有未通过项" : "通过" }}</span>
+          <span class="nx2-row-hint">{{ dateLabel(row.time) }}</span>
+          <ChevronRight :size="13" />
         </button>
-      </form>
-      <div class="nx-diagnose-options">
-        <label
-          ><input v-model="kind" type="radio" value="basic" />快速检查</label
-        ><label
-          ><input v-model="kind" type="radio" value="ping" />加测延迟</label
-        ><label
-          ><input
-            v-model="kind"
-            type="radio"
-            value="traceroute"
-          />查看访问路径</label
-        >
       </div>
     </section>
-    <section
-      v-if="session.busy === 'diagnose'"
-      class="nx-panel nx-diagnose-pending"
-      aria-live="polite"
-    >
-      <div class="nx-skeleton nx-skeleton-title" />
-      <p>正在检查网站地址、连接和安全响应…</p>
-      <div v-for="n in 3" :key="n" class="nx-skeleton nx-skeleton-row" />
-    </section>
-    <section v-else-if="current" class="nx-panel nx-report">
-      <div class="nx-report-heading">
-        <span
-          class="nx-result-icon"
-          :class="{ 'is-failure': current.failures > 0 }"
-          ><Check v-if="!current.failures" :size="22" /><X v-else :size="22"
-        /></span>
-        <div>
-          <h2>{{ current.failures > 0 ? "发现未通过的检查" : "检查通过" }}</h2>
-          <p>
-            {{ current.target }}<span class="nx-meta-divider">·</span
-            >{{ dateLabel(current.time) }}
-          </p>
-        </div>
-      </div>
-      <div class="nx-check-list">
-        <div
-          v-for="(check, index) in current.checks || []"
-          :key="index"
-          class="nx-check-row"
-        >
-          <span class="nx-check-status" :class="{ 'is-failure': !check.ok }"
-            ><Check v-if="check.ok" :size="14" /><X v-else :size="14" /></span
-          ><strong>{{ label(check.stage) }}</strong
-          ><span>{{ check.ok ? "通过" : "未通过" }}</span
-          ><time v-if="check.ms != null">{{ check.ms }} ms</time>
-        </div>
-      </div>
-      <p v-if="current.recommendation" class="nx-report-advice">
-        {{ current.recommendation }}
-      </p>
-      <button
-        class="btn nx-button btn--quiet nx-report-detail-button"
-        :aria-expanded="details"
-        @click="details = !details"
-      >
-        {{ details ? "收起" : "查看" }}检查详情<ChevronDown :size="13" />
-      </button>
-      <div v-if="details" class="nx-check-evidence">
-        <div v-for="(check, index) in current.checks || []" :key="index">
-          <strong>{{ label(check.stage) }}</strong>
-          <p>
-            {{
-              check.evidence ||
-              check.address ||
-              check.addresses?.join("、") ||
-              (check.status ? `网站响应：${check.status}` : "未提供额外信息")
-            }}
-          </p>
-        </div>
-      </div>
-    </section>
-    <section v-if="session.state?.reports?.length" class="nx-history">
-      <div class="nx-section-heading">
-        <h2>最近检查</h2>
-        <span class="nx-subtle">{{ session.state.reports.length }} 条记录</span>
-      </div>
-      <button
-        v-for="report in [...session.state.reports].reverse().slice(0, 12)"
-        :key="report.id"
-        class="nx-history-row"
-        @click="selected = report"
-      >
-        <span
-          class="nx-history-result"
-          :class="{ 'is-failure': report.failures > 0 }"
-          ><component :is="report.failures ? X : Check" :size="14" /></span
-        ><strong>{{ report.target }}</strong
-        ><span>{{ report.failures ? "有未通过的检查" : "检查通过" }}</span
-        ><time>{{ dateLabel(report.time) }}</time
-        ><ChevronRight :size="15" />
-      </button>
-    </section>
-    <div v-else-if="!current" class="nx-empty nx-diagnose-empty">
-      <Clock :size="25" /><span>检查记录会保存在这里，方便下次对照。</span>
-    </div>
   </div>
 </template>

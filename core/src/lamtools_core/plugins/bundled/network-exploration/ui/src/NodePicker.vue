@@ -84,110 +84,34 @@ async function optimize() {
 }
 </script>
 <template>
-  <section class="nx-panel nx-nodes">
-    <div class="nx-panel-heading">
-      <div>
-        <span class="nx-kicker">03 / 线路与测速</span>
-        <h2><Radio :size="17" />选择线路</h2>
-      </div>
-      <div class="nx-node-head-actions">
-        <button
-          class="btn nx-button btn--quiet nx-icon-button"
-          aria-label="刷新线路"
-          :disabled="Boolean(session.busy)"
-          @click="session.loadProxy()"
-        >
-          <RefreshCw :size="15" />
-        </button>
-        <button
-          class="btn nx-button btn--secondary nx-optimize"
-          data-optimize
-          :disabled="Boolean(session.busy) || !nodes.length"
-          @click="optimize"
-        >
-          <Zap :size="13" />{{
-            session.busy === "proxy.optimize" ? "测速中…" : "选择最快"
-          }}
-        </button>
-      </div>
-    </div>
-    <p class="nx-help">点一行直接切换；右侧刷新键单独测速。</p>
-    <template v-if="groups.length">
-      <div class="nx-line-groups" role="group" aria-label="线路分组">
-        <button
-          v-for="[name] in groups"
-          :key="name"
-          class="nx-line-group"
-          :class="{ 'is-active': chosenGroup === name }"
-          :aria-pressed="chosenGroup === name"
-          @click="chosenGroup = name"
-        >
-          {{ name }}
-          <span>{{ groups.length > 1 ? "" : "" }}</span>
-        </button>
-        <span class="nx-subtle">{{ nodes.length }} 条</span>
-      </div>
-      <input
-        v-if="nodes.length > 8"
-        v-model="filter"
-        class="nx-input nx-node-search"
-        placeholder="搜索线路"
-        aria-label="搜索线路"
-      />
-      <div class="nx-line-list" :class="{ 'nx-node-list--compact': compact }">
-        <div
-          v-for="name in nodes"
-          :key="name"
-          class="nx-line-row"
-          :class="{ 'is-selected': group.now === name }"
-        >
-          <button
-            class="nx-line-choice"
-            :data-node="name"
-            :aria-pressed="group.now === name"
-            :disabled="Boolean(session.busy)"
-            @click="session.selectNode(chosenGroup, name)"
-          >
-            <span class="nx-line-radio"
-              ><Check v-if="group.now === name" :size="11" /></span
-            >
-            <span class="nx-line-name">{{
-              name === "DIRECT"
-                ? "直接连接"
-                : name === "REJECT"
-                  ? "阻止连接"
-                  : name
-            }}</span>
-            <span v-if="currentExit(name)" class="nx-subtle nx-line-exit">{{
-              currentExit(name)
-            }}</span>
-            <span class="nx-line-meter" :class="tone(name)"
-              ><i :style="{ width: `${quality(name)}%` }"
-            /></span>
-            <span class="nx-line-ms">{{ latency(name) }}</span>
-          </button>
-          <button
-            v-if="!compact"
-            class="btn nx-button btn--quiet nx-icon-button nx-line-refresh"
-            :disabled="Boolean(session.busy)"
-            :aria-label="`测试 ${name} 的延迟`"
-            @click="testNode(name)"
-          >
-            <RefreshCw :size="13" />
-          </button>
-        </div>
-      </div>
-    </template>
-    <div v-else class="nx-empty nx-empty--small">
-      <Radio :size="24" /><strong>{{
-        session.state?.proxy?.running
-          ? "尚未找到可选线路"
-          : "开启代理后可切换线路"
-      }}</strong>
-      <p>添加订阅，使用你已有的代理节点。</p>
-      <button class="btn nx-button btn--secondary" @click="$emit('import')">
-        <Plus :size="14" />添加订阅
+  <section class="nx2-group nx-nodes">
+    <header class="nx2-group-head">
+      <h2>线路</h2>
+      <span class="nx2-row-hint">{{ nodes.length }} 条</span>
+      <button class="nx2-btn" data-optimize :disabled="Boolean(session.busy) || !nodes.length" @click="optimize">
+        <Zap :size="13" />{{ session.busy === "proxy.optimize" ? "测速中…" : "选择最快" }}
       </button>
+    </header>
+
+    <div v-if="groups.length > 1" class="nx-filter-tabs" role="group" aria-label="线路分组">
+      <button v-for="[name] in groups" :key="name" :class="{ active: chosenGroup === name }" :aria-pressed="chosenGroup === name" @click="chosenGroup = name">{{ name }}</button>
+    </div>
+    <input v-if="nodes.length > 8" v-model="filter" class="nx2-input" placeholder="搜索线路" aria-label="搜索线路" />
+
+    <div class="nx2-rows">
+      <div v-for="name in nodes" :key="name" class="nx2-row nx2-row--node">
+        <button class="nx2-node-choice" :data-node="name" :aria-pressed="group.now === name" :disabled="Boolean(session.busy)" @click="session.selectNode(chosenGroup, name)">
+          <span class="nx2-node-check"><Check v-if="group.now === name" :size="12" :stroke-width="2.4" /></span>
+          <span class="nx2-node-name">{{ name === "DIRECT" ? "直接连接" : name === "REJECT" ? "阻止连接" : name }}</span>
+          <span v-if="currentExit(name)" class="nx2-row-hint nx2-ellipsis">{{ currentExit(name) }}</span>
+          <span class="nx2-node-meter"><i :class="tone(name)" :style="{ width: `${quality(name)}%` }" /></span>
+          <span class="nx2-node-ms">{{ latency(name) }}</span>
+        </button>
+        <button v-if="!compact" class="nx2-icon" :disabled="Boolean(session.busy)" :aria-label="`测试 ${name} 的延迟`" @click="testNode(name)">
+          <RefreshCw :size="13" />
+        </button>
+      </div>
+      <p v-if="!nodes.length" class="nx2-empty-line">开启代理后加载线路。</p>
     </div>
   </section>
 </template>

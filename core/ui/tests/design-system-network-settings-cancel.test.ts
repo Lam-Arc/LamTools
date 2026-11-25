@@ -20,11 +20,11 @@ it('keeps the old sampling interval until saving succeeds', async () => {
 it('keeps DNS editing open when the operation is cancelled', async () => {
   const session = { busy: '', interfaces: [{ index: 1, name: '示例', ipv4: [], dns: [] }], state: { rules: [] }, run: vi.fn(async () => ({ cancelled: true })), read: vi.fn() }
   const wrapper = mount(NetworkSettings, { props: { session } })
-  await wrapper.findAll('button').find(button => button.text().includes('调整 DNS'))!.trigger('click')
+  await wrapper.get('[data-dns-toggle]').trigger('click')
   const select = wrapper.findAllComponents(UiSelect).find(item => item.attributes('data-network-interface') !== undefined)!
   select.vm.$emit('update:modelValue', '1'); await flushPromises()
-  await wrapper.findAll('form').find(form => form.text().includes('确认并申请修改'))!.trigger('submit'); await flushPromises()
-  expect(wrapper.findAll('form').some(form => form.text().includes('确认并申请修改'))).toBe(true)
+  await wrapper.get('[data-dns-apply]').trigger('click'); await flushPromises()
+  expect(wrapper.find('[data-dns-apply]').exists()).toBe(true)
   expect(session.read).not.toHaveBeenCalled()
   wrapper.unmount()
 })

@@ -1,0 +1,440 @@
+/* user:“整个 easynet 与其相关界面重新设计”+(控制台式排版：数据行、表、一条强调色；不做卡片堆与装饰标题)。 */
+.nx-app.nx2 {
+  /* 开关组件依赖宿主主题变量：插件单独加载时给一套等价的值，避免退化成白块。 */
+  --sunday-signal: var(--nx-accent);
+  --sunday-signal-ink: var(--nx-accent-ink);
+  --sunday-area-text: var(--nx-text);
+  --sunday-w: 38px;
+  --sunday-h: 22px;
+  --sunday-thumb: 16px;
+  --sunday-travel: 16px;
+  --sunday-pad: 2px;
+  --radius-sm: 6px;
+  --dur-base: 0.15s;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --nx2-gap: 22px;
+  --nx2-rail: 168px;
+  display: grid;
+  grid-template-columns: var(--nx2-rail) minmax(0, 1fr);
+  height: 100%;
+  min-height: 420px;
+  background: var(--nx-bg);
+  color: var(--nx-text);
+}
+.nx2-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 12px 14px;
+  border-right: 1px solid var(--nx-line);
+  background: var(--nx-rail);
+  scrollbar-width: none;
+}
+.nx2-rail::-webkit-scrollbar { display: none; }
+.nx2-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 16px;
+  color: var(--nx-accent);
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+.nx2-rail nav { display: flex; flex-direction: column; gap: 2px; }
+.nx2-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nx-muted);
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.nx2-rail-item:hover { background: color-mix(in srgb, var(--nx-text) 6%, transparent); color: var(--nx-text); }
+.nx2-rail-item.is-active { background: color-mix(in srgb, var(--nx-accent) 12%, transparent); color: var(--nx-accent); }
+.nx2-rail-settings { margin-top: 10px; }
+.nx2-dot {
+  width: 6px; height: 6px; margin: 12px 10px 0;
+  border-radius: 50%; background: var(--nx-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nx-accent) 18%, transparent);
+}
+.nx2-dot.is-off { background: var(--nx-faint); box-shadow: none; }
+
+.nx2-main { display: flex; min-width: 0; flex-direction: column; }
+.nx2-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 16px 26px;
+  border-bottom: 1px solid var(--nx-line);
+}
+.nx2-top h1 { font-size: 19px; font-weight: 620; letter-spacing: -0.02em; white-space: nowrap; }
+.nx2-top-live { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px 14px; margin-left: auto; color: var(--nx-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.nx2-top-live b { color: var(--nx-text); font-weight: 600; }
+.nx2-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0; padding: 9px 26px;
+  border-bottom: 1px solid var(--nx-line);
+  background: color-mix(in srgb, var(--nx-accent) 8%, transparent);
+  font-size: 12px;
+}
+.nx2-banner--error { background: color-mix(in srgb, var(--nx-error) 12%, transparent); color: var(--nx-error); }
+.nx2-body { flex: 1; min-height: 0; overflow: auto; padding: 20px 26px 34px; }
+.nx2-body > * { width: 100%; max-width: 1080px; margin-inline: auto; }
+.nx2-page { display: flex; flex-direction: column; gap: var(--nx2-gap); }
+.nx2-loading { padding: 40px 0; color: var(--nx-muted); font-size: 13px; }
+
+.nx2-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--nx-line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.nx2-metric { display: flex; flex-direction: column; gap: 4px; padding: 13px 16px; min-width: 0; }
+.nx2-metric + .nx2-metric { border-left: 1px solid var(--nx-line); }
+.nx2-metric > span { display: flex; align-items: center; gap: 5px; color: var(--nx-muted); font-size: 11px; }
+.nx2-metric > strong { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nx2-metric[data-stat="download"] > strong { color: var(--nx-accent); }
+
+.nx2-group { display: flex; flex-direction: column; gap: 10px; }
+.nx2-group-head { display: flex; align-items: baseline; gap: 10px; }
+.nx2-group-head h2 { font-size: 13px; font-weight: 620; letter-spacing: 0.01em; color: var(--nx-text); }
+.nx2-group-head > .nx2-row-hint { flex: 1; }
+.nx2-rows { display: flex; flex-direction: column; }
+.nx2-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in srgb, var(--nx-line) 70%, transparent);
+  font-size: 13px;
+  min-width: 0;
+}
+.nx2-row:first-child { border-top-color: var(--nx-line); }
+.nx2-row--cols { display: grid; grid-template-columns: 104px auto minmax(0, 1fr); align-items: center; }
+.nx2-row--button { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: transparent; color: inherit; text-align: left; }
+.nx2-row--button:hover { background: color-mix(in srgb, var(--nx-text) 4%, transparent); }
+.nx2-row-label { flex: 0 0 auto; width: 104px; color: var(--nx-muted); font-size: 12px; }
+.nx2-row-value { flex: 1; min-width: 0; }
+.nx2-row-hint { color: var(--nx-faint); font-size: 12px; min-width: 0; }
+.nx2-row--task { display: grid; grid-template-columns: minmax(0, 1fr) auto 90px; gap: 12px; }
+.nx2-mini-track { display: block; height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--nx-text) 12%, transparent); overflow: hidden; }
+.nx2-mini-track > span { display: block; height: 100%; background: var(--nx-accent); border-radius: inherit; }
+
+.nx2-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--nx-line);
+  color: var(--nx-muted); font-size: 11px; white-space: nowrap;
+}
+.nx2-tag.is-ok { border-color: transparent; background: color-mix(in srgb, var(--nx-accent) 14%, transparent); color: var(--nx-accent); }
+.nx2-tag.is-bad { border-color: transparent; background: color-mix(in srgb, var(--nx-error) 16%, transparent); color: var(--nx-error); }
+.nx2-tag.is-warn { border-color: transparent; background: color-mix(in srgb, var(--nx-warning) 16%, transparent); color: var(--nx-warning); }
+
+.nx2-note { margin: 0; color: var(--nx-faint); font-size: 11px; line-height: 1.6; }
+.nx2-note--tight { margin-top: -4px; }
+.nx2-empty-line { margin: 0; padding: 6px 0; color: var(--nx-faint); font-size: 12px; }
+.nx2-bad { color: var(--nx-error); }
+.nx2-dim { color: var(--nx-faint); }
+.nx2-mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.nx2-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.nx2-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 32px; padding: 6px 12px;
+  border: 1px solid var(--nx-line); border-radius: 8px;
+  background: color-mix(in srgb, var(--nx-text) 5%, transparent);
+  color: var(--nx-text); font-size: 12px; white-space: nowrap;
+}
+.nx2-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--nx-text) 9%, transparent); }
+.nx2-btn--primary { border-color: transparent; background: var(--nx-accent); color: var(--nx-accent-ink); font-weight: 600; }
+.nx2-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--nx-accent) 86%, #fff); }
+.nx2-btn--ghost { background: transparent; border-color: transparent; color: var(--nx-muted); padding-inline: 8px; }
+.nx2-btn--ghost:hover:not(:disabled) { color: var(--nx-text); background: color-mix(in srgb, var(--nx-text) 6%, transparent); }
+.nx2-btn--lg { min-height: 38px; padding-inline: 16px; font-size: 13px; }
+.nx2-wide { width: 100%; justify-content: space-between; }
+.nx2-link { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--nx-muted); font-size: 12px; padding: 2px 0; white-space: nowrap; }
+.nx2-link:hover:not(:disabled) { color: var(--nx-accent); }
+.nx2-icon { display: inline-grid; place-items: center; width: 26px; height: 26px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--nx-muted); }
+.nx2-icon:hover:not(:disabled) { background: color-mix(in srgb, var(--nx-text) 8%, transparent); color: var(--nx-text); }
+.nx2-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.nx2-input {
+  min-height: 32px; padding: 6px 10px;
+  border: 1px solid var(--nx-line); border-radius: 8px;
+  background: var(--nx-input); color: var(--nx-text);
+  font-size: 13px; min-width: 0;
+}
+.nx2-input--lg { min-height: 38px; font-size: 13px; }
+.nx2-input:focus-visible { outline: 1px solid color-mix(in srgb, var(--nx-accent) 70%, transparent); outline-offset: 1px; }
+.nx2-composer { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--nx-line); border-radius: 12px; background: var(--nx-panel); }
+.nx2-composer.is-dragging { border-color: var(--nx-accent); }
+.nx2-composer-line { display: flex; gap: 8px; min-width: 0; }
+.nx2-composer-line > .nx2-input { flex: 1; min-width: 0; }
+.nx2-composer--inline { flex-direction: row; padding: 0; border: 0; background: none; }
+.nx2-composer--inline > .nx2-input { flex: 1; }
+.nx2-save-line { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; color: var(--nx-muted); font-size: 12px; }
+.nx2-save-line > b { flex: 1 1 100%; order: 3; }
+.nx2-save-line b { color: var(--nx-text); font-weight: 550; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.nx2-dir-editor { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.nx2-dir-editor > .nx2-input { flex: 1; min-width: 200px; }
+.nx2-advanced-toggle { align-self: flex-start; }
+.nx2-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.nx2-form-grid > label, .nx2-form-grid > div { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--nx-muted); }
+.nx2-form-actions { justify-content: flex-end; }
+.nx2-radio-row { display: flex; flex-wrap: wrap; gap: 14px; color: var(--nx-muted); font-size: 12px; }
+.nx2-radio-row label { display: inline-flex; align-items: center; gap: 5px; }
+
+.nx2-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.nx-filter-tabs { display: flex; flex-wrap: wrap; gap: 2px; border: 1px solid var(--nx-line); border-radius: 9px; padding: 2px; }
+.nx-filter-tabs button { white-space: nowrap; }
+.nx-filter-tabs button { border: 0; border-radius: 7px; background: transparent; color: var(--nx-muted); padding: 5px 10px; font-size: 12px; }
+.nx-filter-tabs button.active { background: color-mix(in srgb, var(--nx-accent) 14%, transparent); color: var(--nx-accent); }
+
+.nx2-tasks { display: flex; flex-direction: column; }
+.nx2-task { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid var(--nx-line); }
+.nx2-task-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.nx2-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.nx2-task-bar { display: flex; align-items: center; gap: 10px; }
+.nx2-track { flex: 1; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--nx-text) 12%, transparent); overflow: hidden; }
+.nx2-track > span { display: block; height: 100%; border-radius: inherit; background: var(--nx-accent); transition: width 0.2s ease; }
+.nx2-task-pct { width: 38px; text-align: right; color: var(--nx-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.nx2-task-meta { display: flex; flex-wrap: wrap; gap: 12px; color: var(--nx-faint); font-size: 11px; }
+.nx2-task-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nx2-task-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 6px; color: var(--nx-text); font-size: 12px; }
+
+.nx2-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.nx2-table th { text-align: left; font-weight: 500; color: var(--nx-faint); font-size: 11px; padding: 6px 0; border-bottom: 1px solid var(--nx-line); }
+.nx2-table td { padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--nx-line) 60%, transparent); }
+.nx2-table td:last-child { white-space: nowrap; }
+
+.nx2-check { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 20px; border: 1px solid var(--nx-line); border-radius: 12px; background: color-mix(in srgb, var(--nx-accent) 5%, var(--nx-panel)); }
+.nx2-check h2 { font-size: 15px; font-weight: 620; margin-bottom: 3px; }
+.nx2-verdict { margin: 0; font-size: 14px; font-weight: 600; }
+.nx2-site-result { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
+
+.nx2-two { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--nx2-gap); }
+
+@media (max-width: 900px) {
+  .nx2-two { grid-template-columns: 1fr; }
+}
+
+/* user:“面板只有半屏宽的时候更要用得下去”+(窄宽度下导航变顶栏，指标两列，行改成竖向排列)。 */
+@media (max-width: 760px) {
+  .nx-app.nx2 { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .nx2-rail {
+    flex-direction: row; align-items: center; gap: 2px;
+    padding: 8px 10px; border-right: 0;
+    border-bottom: 1px solid var(--nx-line);
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .nx2-brand { padding: 0 6px 0 2px; }
+  .nx2-brand span { display: none; }
+  .nx2-rail nav { flex-direction: row; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .nx2-rail nav::-webkit-scrollbar { display: none; }
+  .nx2-rail-settings { flex: 0 0 auto; }
+  .nx2-rail-item { flex: 0 0 auto; flex-direction: row; padding: 7px 10px; font-size: 12px; white-space: nowrap; }
+  .nx2-rail-settings { margin-top: 0; margin-left: auto; }
+  .nx2-dot { margin: 0 4px 0 8px; flex: 0 0 auto; }
+  .nx2-top { padding: 10px 14px; }
+  .nx2-top h1 { font-size: 16px; }
+  .nx2-top-live { gap: 10px; font-size: 11px; }
+  .nx2-top-live > span { white-space: nowrap; }
+  .nx2-banner { padding: 8px 14px; }
+  .nx2-body { padding: 12px 14px 26px; }
+  .nx2-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nx2-metric { padding: 11px 12px; }
+  .nx2-metric > strong { font-size: 16px; }
+  .nx2-metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--nx-line); }
+  .nx2-metric:nth-child(4) { border-top: 1px solid var(--nx-line); }
+  .nx2-row--cols { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; align-items: baseline; }
+  .nx2-row--cols > :nth-child(n + 3) { grid-column: 1 / -1; }
+  .nx2-row-label { width: auto; white-space: nowrap; }
+  .nx2-row--task { grid-template-columns: minmax(0, 1fr) auto; }
+  .nx2-mini-track { display: none; }
+  .nx2-task-actions { gap: 8px; }
+  .nx2-composer { padding: 12px; }
+  .nx2-toolbar { flex-direction: column; align-items: flex-start; }
+}
+
+/* user:“设置不要再像一叠卡片”+(左边一列分区，右边是这一区的全部内容)。 */
+.nx2-settings { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 26px; align-items: start; }
+.nx2-settings-tabs { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx2-settings-tab {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--nx-muted); font-size: 12px; text-align: left;
+}
+.nx2-settings-tab:hover { background: color-mix(in srgb, var(--nx-text) 6%, transparent); color: var(--nx-text); }
+.nx2-settings-tab.is-active { background: color-mix(in srgb, var(--nx-accent) 12%, transparent); color: var(--nx-accent); }
+.nx2-settings-body { min-width: 0; }
+@media (max-width: 900px) {
+  .nx2-settings { grid-template-columns: 1fr; gap: 12px; }
+  .nx2-settings-tabs { position: static; flex-direction: row; flex-wrap: wrap; }
+}
+
+/* user:“整个 easynet 与其相关界面重新设计”+(设置里的旧面板统一压平：不要每个区块一张卡、不要眉标)。 */
+.nx-kicker { display: none; }
+.nx-panel { border-radius: 12px; background: transparent; }
+.nx-section-heading h2 { font-size: 13px; font-weight: 620; }
+.nx-panel-heading { padding-bottom: 6px; }
+.nx-view-stack { display: flex; flex-direction: column; gap: 18px; }
+.nx-subscribe-actions .nx-button { min-height: 32px; border-radius: 8px; }
+
+/* user:“整个 easynet 与其相关界面重新设计”+(更窄时导航只留图标，四个入口与设置都放得下)。 */
+@media (max-width: 620px) {
+  /* 标签比图标更好认：宁可挤一点也让文字留着，装饰性的品牌与状态点让位。 */
+  .nx2-rail-item { padding: 7px 7px; gap: 5px; font-size: 11px; }
+  .nx2-brand { display: none; }
+  .nx2-dot { display: none; }
+}
+
+/* user:“用户最关心最常用的东西有没有放在首页”+(下载/加速/代理三个操作台，形状自解释)。 */
+.nx2-home { gap: 16px; }
+.nx2-station {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px; min-width: 0;
+  border: 1px solid var(--nx-line); border-radius: 14px;
+  background: var(--nx-panel);
+}
+.nx2-station-download { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.nx2-station-download > .nx2-input { flex: 1; min-width: 0; }
+.nx2-station-icon {
+  display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nx-text) 7%, transparent);
+  color: var(--nx-muted);
+}
+.nx2-station-icon.is-on { background: color-mix(in srgb, var(--nx-accent) 16%, transparent); color: var(--nx-accent); }
+.nx2-station-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+/* 路径是必要信息：宁可换行也不截断。 */
+.nx2-station-foot > .nx2-row-hint { flex: 1 1 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.nx2-station-foot > .nx2-link { margin-left: auto; }
+.nx2-stations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.nx2-station-top { display: flex; align-items: center; gap: 10px; }
+.nx2-station-title { flex: 1; font-size: 13px; font-weight: 600; }
+.nx2-station-state { margin: 0; color: var(--nx-faint); font-size: 11px; }
+.nx2-station-add { align-self: flex-start; }
+@media (max-width: 760px) {
+  .nx2-stations { grid-template-columns: 1fr; }
+}
+
+/* user:“加速/代理开关要一眼看出开没开”+(插件内自带轨道与滑块样式，不依赖宿主层叠顺序)。 */
+.nx-app .sunday-switch { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.nx-app .sunday-switch__input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.nx-app .sunday-switch__track {
+  position: relative; display: block;
+  width: 38px; height: 22px; flex: 0 0 38px;
+  border: 1px solid var(--nx-line); border-radius: 999px;
+  background: color-mix(in srgb, var(--nx-text) 12%, transparent);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.nx-app .sunday-switch__thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: color-mix(in srgb, var(--nx-text) 62%, transparent);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.nx-app .sunday-switch__input:checked + .sunday-switch__track {
+  border-color: var(--nx-accent);
+  background: var(--nx-accent);
+}
+.nx-app .sunday-switch__input:checked + .sunday-switch__track .sunday-switch__thumb {
+  background: var(--nx-accent-ink);
+  transform: translateX(16px);
+}
+.nx-app .sunday-switch__input:disabled { cursor: default; }
+.nx-app .sunday-switch:has(.sunday-switch__input:disabled) { opacity: 0.5; }
+
+/* 下拉箭头用实色描边，去文字/低对比场景也看得见。 */
+.nx-app .ui-select-arrow { border-top-color: var(--nx-text); }
+
+/* 线路表：一行一条，延迟用条 + 毫秒双写，点整行即切换。 */
+.nx2-row--node { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.nx2-node-choice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 64px 52px;
+  align-items: center; gap: 10px;
+  padding: 3px 0;
+  border: 0; background: transparent;
+  color: inherit; text-align: left;
+}
+.nx2-node-choice[aria-pressed="true"] { color: var(--nx-accent); }
+.nx2-node-check {
+  display: grid; place-items: center;
+  width: 18px; height: 18px;
+  border: 1px solid var(--nx-line); border-radius: 50%;
+  color: var(--nx-accent);
+}
+.nx2-node-choice[aria-pressed="true"] .nx2-node-check {
+  border-color: var(--nx-accent);
+  background: color-mix(in srgb, var(--nx-accent) 16%, transparent);
+}
+.nx2-node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.nx2-node-meter { height: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--nx-text) 12%, transparent); }
+.nx2-node-meter > i { display: block; height: 100%; background: var(--nx-accent); }
+.nx2-node-meter > i.is-mid { background: var(--nx-warning); }
+.nx2-node-meter > i.is-slow { background: var(--nx-error); }
+.nx2-node-meter > i.is-unknown { background: color-mix(in srgb, var(--nx-text) 24%, transparent); }
+.nx2-node-ms { text-align: right; font-size: 11px; color: var(--nx-muted); font-variant-numeric: tabular-nums; }
+.nx2-skeleton-line { display: block; height: 10px; width: 60%; border-radius: 6px; background: color-mix(in srgb, var(--nx-text) 10%, transparent); }
+@media (max-width: 760px) {
+  .nx2-node-choice { grid-template-columns: 18px minmax(0, 1fr) 56px 48px; }
+  .nx2-node-choice > .nx2-row-hint { display: none; }
+}
+
+/* user:“按照这个思路，其他页面也一样处理一下”+(把首页的做法用到所有页：一行说明配一个动作、状态按内容宽度显示、窄屏不出现孤行)。 */
+/* 状态标签按文字宽度显示，不被网格拉成一整行。 */
+.nx2-tag { justify-self: start; width: fit-content; }
+.nx2-verdict { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+/* 「一句话 + 一个动作」：说明可以换行，按钮始终贴在自己那一侧，不会顶出页面。 */
+.nx2-row--action { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.nx2-row--action > .nx2-row-value { flex: 1 1 240px; min-width: 0; }
+/* 保存位置：保存到 → 路径 → 更改，路径优先占满一行，必要时换行也不省略。 */
+.nx2-save-line > b { order: 2; flex: 1 1 240px; }
+.nx2-save-line > .nx2-link { order: 3; }
+.nx2-save-line > .nx2-row-hint { order: 4; }
+/* 单动作区块（检查网络、加速）：图标 + 标题 + 动作，仍是行不是大卡片。 */
+.nx2-check { padding: 14px 16px; gap: 12px; background: transparent; }
+.nx2-check h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.nx2-check .nx2-note { font-size: 11px; }
+/* 设置分区在窄屏按三列排，不会剩一个孤零零的分区占一整行。 */
+@media (max-width: 620px) {
+  .nx2-settings-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .nx2-settings-tab { justify-content: flex-start; }
+  .nx2-check { flex-direction: column; align-items: stretch; }
+  .nx2-check > .nx2-btn { width: 100%; justify-content: center; }
+}
+
+/* 网速图沿用旧面板结构：标题、口径、曲线排成一行，窄屏也不折成三层。 */
+.nx-app .nx-panel-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nx-app .nx-panel-heading h2 { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 620; }
+.nx-app .nx-panel-heading .nx-subtle { color: var(--nx-faint); font-size: 11px; }
+
+/* user:“用户最关心最常用的东西有没有放在首页”+(窄屏把输入框让给链接本身，进度条必须看得见)。 */
+@media (max-width: 620px) {
+  .nx2-station-download > .nx2-station-icon { display: none; }
+  .nx2-row--task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .nx2-row--task > .nx2-mini-track { display: block; grid-column: 1 / -1; }
+}
+/* 行标签前的图标与小字对齐，不给行高添乱。 */
+.nx2-row-label { display: inline-flex; align-items: center; gap: 5px; }
+
+/* 概览里的下载行：进度条单独占一行铺满，读起来像队列而不是几条小横线。 */
+.nx2-row--task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; }
+.nx2-row--task > .nx2-mini-track { grid-column: 1 / -1; }
+@media (max-width: 620px) {
+  .nx2-row--task > .nx2-mini-track { display: block; }
+}
+/* 展开态的小箭头转 90°，和「展开/收起」说的是同一件事。 */
+.nx2-link > .is-open { transform: rotate(90deg); }
+.nx2-link > svg { transition: transform 0.15s ease; }

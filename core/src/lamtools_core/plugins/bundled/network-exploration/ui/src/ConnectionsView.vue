@@ -44,80 +44,31 @@ onMounted(query);
 onBeforeUnmount(() => { generation += 1; });
 </script>
 <template>
-  <div class="nx-view-stack">
-    <div class="nx-section-heading">
-      <div>
-        <h2>应用正在连接什么</h2>
-        <p>按应用、地址或端口查找当前连接。</p>
-      </div>
-      <span class="nx-subtle">{{ total }} 个连接</span>
-    </div>
-    <form class="nx-inline-form nx-searchbar" @submit.prevent="query">
-      <label class="nx-input-with-icon"
-        ><Search :size="16" /><input
-          v-model="filter"
-          class="nx-input"
-          placeholder="搜索应用、IP 或端口"
-          aria-label="搜索连接" /></label
-      ><button class="btn nx-button btn--secondary" :disabled="loading">
-        <RefreshCw :size="14" />刷新
-      </button>
+  <div class="nx2-page">
+    <form class="nx2-composer nx2-composer--inline" data-connections-searchbar @submit.prevent="query">
+      <input v-model="filter" class="nx2-input" placeholder="搜索应用、IP 或端口" aria-label="搜索连接" />
+      <button class="nx2-btn" :disabled="loading"><RefreshCw :size="13" />刷新</button>
+      <span class="nx2-row-hint">{{ total }} 个连接</span>
     </form>
-    <section class="nx-panel nx-table-panel">
-      <div v-if="loading" class="nx-table-loading">
-        <div v-for="n in 5" :key="n" class="nx-skeleton nx-skeleton-row" />
+
+    <section class="nx2-group">
+      <table v-if="visible.length" class="nx2-table">
+        <thead><tr><th>应用</th><th>本地端口</th><th>远端</th><th>协议</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr v-for="(row, index) in visible" :key="index">
+            <td :title="row.path || ''"><strong>{{ row.process || "未知应用" }}</strong><small class="nx2-row-hint" v-if="row.pid"> PID {{ row.pid }}</small></td>
+            <td class="nx2-mono">{{ row.local_port }}</td>
+            <td class="nx2-mono nx2-dim">{{ row.remote_address ? `${row.remote_address}:${row.remote_port}` : "—" }}</td>
+            <td><span class="nx2-tag">{{ row.protocol }}</span></td>
+            <td><span class="nx2-tag" :class="{ 'is-ok': row.state === 'Established' }">{{ status(row.state) }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else-if="loading" class="nx2-rows" data-connections-loading>
+        <div v-for="n in 5" :key="n" class="nx2-row"><span class="nx2-skeleton-line" /></div>
       </div>
-      <div v-else class="nx-table-scroll">
-        <table class="nx-table">
-          <thead>
-            <tr>
-              <th>应用</th>
-              <th>本地端口</th>
-              <th>远端地址</th>
-              <th>协议</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, index) in visible" :key="index">
-              <td :title="row.path || ''">
-                <strong>{{ row.process || "未知应用" }}</strong
-                ><small v-if="row.pid">PID {{ row.pid }}</small>
-              </td>
-              <td>{{ row.local_port }}</td>
-              <td class="nx-data-cell">
-                {{
-                  row.remote_address
-                    ? `${row.remote_address}:${row.remote_port}`
-                    : "—"
-                }}
-              </td>
-              <td>
-                <span class="nx-protocol">{{ row.protocol }}</span>
-              </td>
-              <td>
-                <span
-                  class="nx-connection-state"
-                  :class="{ 'is-live': row.state === 'Established' }"
-                  >{{ status(row.state) }}</span
-                >
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-if="!rows.length" class="nx-empty">
-          <ArrowLeftRight :size="28" /><strong>没有匹配的连接</strong>
-          <p>试着输入其他应用名称、地址或端口。</p>
-        </div>
-      </div>
-      <button
-        v-if="rows.length > limit"
-        class="btn nx-button btn--quiet nx-load-more"
-        @click="limit += 150"
-      >
-        再显示 150 个连接
-      </button>
+      <p v-else class="nx2-empty-line">没有匹配的连接。换个应用名、地址或端口试试。</p>
+      <button v-if="rows.length > limit" class="nx2-btn nx2-btn--ghost nx2-wide" @click="limit += 150">再多显示 150 条</button>
     </section>
-    <p class="nx-help">这里显示连接和端口，不代表每个应用的流量大小。</p>
   </div>
 </template>

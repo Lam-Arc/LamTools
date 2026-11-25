@@ -7,7 +7,15 @@ const result = ref('')
 const failLimit = ref(false)
 const session = reactive({
   busy: '', error: '', notice: '',
-  state: { proxy: { running: false }, downloads: [] },
+  state: {
+    proxy: { running: false },
+    downloads: [],
+    download_default: 'C:\示例\Downloads',
+    settings: { download: { concurrency: 3, max_tries: 5, bytes_per_second: 0, directory: '' } },
+  },
+  async pickDirectory() { return 'C:\示例\Downloads' },
+  openFile() {},
+  async refresh() {},
   tasks: [
     { gid: 'sample-active', filename: '示例文件.zip', status: 'active', completedLength: 512, totalLength: 1024, downloadSpeed: 128 },
     { gid: 'sample-complete', filename: '已完成.pdf', status: 'complete', completedLength: 1024, totalLength: 1024, downloadSpeed: 0 },

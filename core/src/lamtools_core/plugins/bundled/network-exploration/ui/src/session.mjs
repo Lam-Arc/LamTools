@@ -341,6 +341,8 @@ export function useNetwork(context) {
     read,
     // user:“支持下载完成通知、校验、快速打开文件”+(用宿主提供的 openFile 打开下载完成的文件)。
     openFile: (path) => context.openFile?.(path),
+    // user:“下载路径连个浏览都没有吗”+(用宿主的原生目录选择器，不让用户手打路径)。
+    pickDirectory: () => context.pickDirectory?.() ?? Promise.resolve(null),
     refresh,
     loadProxy,
     loadTasks,

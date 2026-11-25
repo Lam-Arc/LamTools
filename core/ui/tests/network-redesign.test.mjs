@@ -114,29 +114,28 @@ async function setup(overrides = {}) {
   await flushPromises();
   return { view, rpc };
 }
-it("renders one stat bar and three quick action blocks without raw state", async () => {
-  // user:“首页重做，放三个块和一个 bar，bar 写数值，三个块分别是加速代理下载的快捷操作”+(首页只保留数值条和三个快捷块)。
+it("puts download, acceleration and proxy on the overview as working stations", async () => {
+  // user:“用户最关心最常用的东西有没有放在首页？比如下载/加速/代理”+(三件事都在首屏，且都能直接操作)。
   const { view } = await setup();
-  expect(view.find("[data-stat-bar]").exists()).toBe(true);
   expect(
-    view
-      .findAll("[data-home-block]")
-      .map((block) => block.attributes("data-home-block")),
-  ).toEqual(["acceleration", "proxy", "transfer"]);
-  expect(view.text()).toContain("2.0 MB/s");
-  expect(view.text()).toContain("1.0 MB/s");
-  expect(view.text()).toContain("1 个任务");
+    view.findAll("[data-home-block]").map((row) => row.attributes("data-home-block")),
+  ).toEqual(["transfer", "acceleration", "proxy"]);
+  expect(view.find("[data-home-download]").exists()).toBe(true);
+  expect(view.find("[data-acceleration]").exists()).toBe(true);
+  expect(view.find("[data-home-proxy]").exists()).toBe(true);
+  expect(view.find("[data-network-strip]").exists()).toBe(true);
   expect(view.text()).not.toContain("45678");
   expect(view.find("textarea").exists()).toBe(false);
   expect(view.find("pre").exists()).toBe(false);
 });
-it("writes live numeric values into the home stat bar", async () => {
+it("writes live numeric values into the header", async () => {
+  // user:“实时速率和累计流量必须区分”+(顶栏只放会变的上传/下载与线路延迟)。
   const { view } = await setup();
   await flushPromises();
-  expect(view.get("[data-stat='download']").text()).toContain("2.0 MB/s");
-  expect(view.get("[data-stat='upload']").text()).toContain("1.0 MB/s");
-  expect(view.get("[data-stat='total']").text()).toContain("14.3 MB");
-  expect(view.get("[data-stat='delay']").text()).toContain("26 ms");
+  const live = view.get(".nx2-top-live").text();
+  expect(live).toContain("2.0 MB/s");
+  expect(live).toContain("1.0 MB/s");
+  expect(live).toContain("26 ms");
 });
 it("keeps exactly overview, downloads, interconnect, and diagnostics in the left navigation", async () => {
   // user:“概览、下载、互联、诊断四个视图，代理和高级网络设置放进设置页”+(四个平级入口，设置单独一个入口)。
@@ -149,14 +148,16 @@ it("keeps exactly overview, downloads, interconnect, and diagnostics in the left
   expect(view.text()).toContain("诊断");
   expect(view.find("[data-settings]").exists()).toBe(true);
 });
-it("navigates from the home block links", async () => {
+it("navigates from the overview shortcuts", async () => {
   const { view } = await setup();
-  await view.get('[data-home-open="proxy"]').trigger("click");
+  await view.get('[data-home-open="devices"]').trigger("click");
   await flushPromises();
-  expect(view.find("[data-settings-page]").exists()).toBe(true);
-  expect(
-    view.get('[data-settings-section="proxy"]').attributes("aria-current"),
-  ).toBe("page");
+  expect(view.get('[data-page="devices"]').attributes("aria-current")).toBe("page");
+  await view.get('[data-page="overview"]').trigger("click");
+  await flushPromises();
+  await view.get('[data-home-open="transfer"]').trigger("click");
+  await flushPromises();
+  expect(view.get('[data-page="transfer"]').attributes("aria-current")).toBe("page");
 });
 it("saves a subscription while connected by reconnecting automatically", async () => {
   // user:“添加不了订阅”“把操作傻瓜化”+(保存时自动断开并重连，不要求用户先手动关闭代理)。
@@ -250,6 +251,8 @@ it("starts a download with the chosen parallel count and speed limit", async () 
   await view.get('[data-page="transfer"]').trigger("click");
   await flushPromises();
   await view.get('input[name="url"]').setValue("https://example.com/file.zip");
+  await view.get(".nx2-advanced-toggle").trigger("click");
+  await flushPromises();
   view.get("[data-transfer-connections]").getComponent(UiSelect).vm.$emit("update:modelValue", "4");
   view.get("[data-transfer-speed]").getComponent(UiSelect).vm.$emit("update:modelValue", "5242880");
   await view.get(".nx-download-composer").trigger("submit");
@@ -316,7 +319,7 @@ it("only enables the proxy switch after a subscription is saved", async () => {
 it("toggles the proxy directly from the home block", async () => {
   // user:“三个块分别是加速代理下载的快捷操作”+(代理块直接开关连接，不要求先跳到代理页)。
   const { view, rpc } = await setup();
-  await view.get("[data-home-proxy]").trigger("click");
+  await view.get('[data-home-proxy] input').setValue(false);
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("easynet.proxy.stop", {});
   expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
@@ -327,7 +330,8 @@ it("sends a home proxy block without a subscription to the proxy page", async ()
   const { view, rpc } = await setup({
     proxy: { running: false, config_saved: false },
   });
-  await view.get("[data-home-proxy]").trigger("click");
+  // 没订阅时不给按不动的开关，入口就是那个「添加订阅」按钮本身。
+  await view.get('[data-home-block="proxy"] [data-home-proxy]').trigger("click");
   await flushPromises();
   expect(view.find("[data-settings-page]").exists()).toBe(true);
   expect(
@@ -358,7 +362,7 @@ it("starts local acceleration from the home page without a subscription", async 
   const { view, rpc } = await setup({
     proxy: { running: false, config_saved: false },
   });
-  await view.get("[data-acceleration]").trigger("click");
+  await view.get("[data-acceleration] input").setValue(true);
   await flushPromises();
   expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
     "page",
@@ -377,7 +381,7 @@ it("prepares the line fallback when acceleration starts with a subscription", as
   const { view, rpc } = await setup({
     proxy: { running: false, config_saved: true },
   });
-  await view.get("[data-acceleration]").trigger("click");
+  await view.get("[data-acceleration] input").setValue(true);
   await flushPromises();
   const methods = rpc.mock.calls.map(([method]) => method);
   expect(methods).toContain("easynet.proxy.start");
@@ -397,7 +401,7 @@ it("runs local acceleration from the acceleration page without a subscription", 
   await openSettings(view, "acceleration");
   expect(view.find("[data-acceleration-mode]").exists()).toBe(false);
   expect(view.find("[data-line-select]").exists()).toBe(false);
-  await view.get("[data-acceleration]").trigger("click");
+  await view.get('[data-acceleration] input').setValue(true);
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("easynet.accelerator.start", {});
   expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
@@ -411,8 +415,8 @@ it("keeps line switching on the proxy page instead of the acceleration page", as
   expect(view.get('[data-page="overview"]').attributes("aria-current")).toBe(
     "page",
   );
-  expect(view.text()).toContain("一键加速");
-  await view.get("[data-acceleration]").trigger("click");
+  expect(view.find("[data-acceleration]").exists()).toBe(true);
+  await view.get("[data-acceleration] input").setValue(true);
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("easynet.system.apply", {
     kind: "proxy",
@@ -462,11 +466,9 @@ it("does not claim acceleration is on when the user cancels the system change", 
       ? { cancelled: true }
       : original(method, params),
   );
-  await view.get("[data-acceleration]").trigger("click");
+  await view.get("[data-acceleration] input").setValue(true);
   await flushPromises();
-  expect(view.get("[data-acceleration]").attributes("aria-pressed")).toBe(
-    "false",
-  );
+  expect(view.get("[data-acceleration] input").element.checked).toBe(false);
   expect(view.text()).toContain("已取消操作");
 });
 it("opens the page requested by a quick pill", async () => {

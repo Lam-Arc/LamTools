@@ -107,10 +107,10 @@ it("opens the DNS editor that previously had no entry", async () => {
 it("opens application outbound control and the connection list", async () => {
   const { view } = await setup();
   await openSettings(view, "security");
-  expect(view.text()).toContain("应用联网与恢复");
+  expect(view.text()).toContain("应用联网");
   await view.get('[data-settings-section="connections"]').trigger("click");
   await flushPromises();
-  expect(view.text()).toContain("应用正在连接什么");
+  expect(view.find('input[aria-label="搜索连接"]').exists()).toBe(true);
 });
 it("asks the host to open the device page instead of duplicating pairing", async () => {
   // user:“「我的设备」只放跳转链接到现有设备连接页”+(插件派发事件，配对与互传仍由宿主设备页负责)。
@@ -146,7 +146,7 @@ it("saves global download settings with the current revision", async () => {
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("easynet.settings.update", {
     revision: 7,
-    settings: { download: { concurrency: 3, max_tries: 5, bytes_per_second: 0, directory: "" } },
+    settings: { download: { concurrency: 3, max_tries: 5, bytes_per_second: 0 } },
   });
 });
 it("checks the whole network from the diagnostics page", async () => {
@@ -178,8 +178,9 @@ it("summarises the live connection on the overview", async () => {
   const strip = view.get("[data-network-strip]").text();
   expect(strip).toContain("WLAN");
   expect(strip).toContain("192.168.1.5");
-  expect(strip).toContain("已连接");
-  expect(strip).toContain("新增下载任务");
+  expect(view.text()).toContain("已连接");
+  // 最近事件不再堆在概览首屏，检查结果只给一句结论。
+  expect(view.text()).toContain("还没检查过");
 });
 
 it("starts the proxy right after a subscription is saved", async () => {
@@ -188,7 +189,7 @@ it("starts the proxy right after a subscription is saved", async () => {
   await openSettings(view, "proxy");
   await view
     .findAll("button")
-    .find((button) => button.text().includes("粘贴订阅链接"))
+    .find((button) => button.text().includes("添加订阅"))
     .trigger("click");
   await flushPromises();
   await view.get('input[aria-label="订阅链接"]').setValue("https://sub.example.com/clash.yaml");
@@ -205,21 +206,20 @@ it("shows the default download folder and saves a new one", async () => {
   const { view, rpc } = await setup();
   await view.get('[data-page="transfer"]').trigger("click");
   await flushPromises();
-  await view.get("[data-download-settings] button").trigger("click");
-  await flushPromises();
+  // user:“目录这种属于是必要信息吧 为什么要藏起来”+(默认目录直接显示，点「更改」才出现输入框)。
   const hint = view.get("[data-download-default]").text();
   expect(hint).toContain("Sunday");
+  await view.get("[data-change-directory]").trigger("click");
+  await flushPromises();
   await view.get("[data-download-directory]").setValue("D:\\Downloads\\EasyNet");
   const save = view
-    .findAll("[data-download-settings] button")
-    .find((button) => button.text().includes("保存设置"));
+    .findAll(".nx2-dir-editor button")
+    .find((button) => button.text().includes("保存"));
   await save.trigger("click");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("easynet.settings.update", {
     revision: 7,
-    settings: {
-      download: { concurrency: 3, max_tries: 5, bytes_per_second: 0, directory: "D:\\Downloads\\EasyNet" },
-    },
+    settings: { download: { directory: "D:\\Downloads\\EasyNet" } },
   });
 });
 
@@ -269,4 +269,18 @@ it("opens a finished download on double click", async () => {
   await view.get('[data-task="done"]').trigger("dblclick");
   await flushPromises();
   expect(openFile).toHaveBeenCalledWith("D:\\Downloads\\movie.mkv");
+});
+
+it("picks the download folder with the system dialog", async () => {
+  // user:“下载路径连个浏览都没有吗？”+(点「浏览…」走系统目录选择器，选完直接填进输入框)。
+  const pickDirectory = vi.fn(async () => "E:\Downloads\Picked");
+  const { view } = await setup({}, { pickDirectory });
+  await view.get('[data-page="transfer"]').trigger("click");
+  await flushPromises();
+  await view.get("[data-change-directory]").trigger("click");
+  await flushPromises();
+  await view.get("[data-browse-directory]").trigger("click");
+  await flushPromises();
+  expect(pickDirectory).toHaveBeenCalledTimes(1);
+  expect(view.get("[data-download-directory]").element.value).toBe("E:\Downloads\Picked");
 });

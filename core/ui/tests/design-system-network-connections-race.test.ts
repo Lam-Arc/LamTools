@@ -11,7 +11,7 @@ it('keeps the newest connections search when responses arrive out of order', asy
   await wrapper.get('form').trigger('submit')
   expect(pending).toHaveLength(2)
   pending[0]({ connections: [{ process: '旧应用' }], total: 1 }); await flushPromises()
-  expect(wrapper.find('.nx-table-loading').exists()).toBe(true)
+  expect(wrapper.find('[data-connections-loading]').exists()).toBe(true)
   pending[1]({ connections: [{ process: '新应用' }], total: 1 }); await flushPromises()
   expect(wrapper.text()).toContain('新应用')
   expect(wrapper.text()).not.toContain('旧应用')
