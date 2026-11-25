@@ -237,13 +237,36 @@ def add_spa_fallback(
         candidate = (resolved / filename).resolve()
         if candidate == resolved or candidate.is_relative_to(resolved):
             if candidate.is_file():
-                return FileResponse(str(candidate))
+                # 入口页以外的 .html（capture / pet / ping 等）同样不能被缓存复用。
+                html_page = candidate.suffix.lower() in {".html", ".htm"}
+                return FileResponse(str(candidate), headers=NO_STORE_HEADERS if html_page else None)
         content = _index_html
         if import_map_provider is not None:
             from lamtools_core.plugin_system.import_map import inject_import_map
 
             content = inject_import_map(content, import_map_provider())
-        return HTMLResponse(content=content)
+        return HTMLResponse(content=content, headers=NO_STORE_HEADERS)
+
+
+# user:“这个打包版是最近打包过 刚更新的，就是你改完那一版”+“正常了”+(更新后窗口复用了缓存的
+# 入口 HTML，页面继续引用上一版的静态资源，界面和公式都停在旧版本，只有手动重载才恢复。
+# 入口 HTML 一律不缓存；带内容哈希的 /assets 才允许长期缓存。)
+NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+IMMUTABLE_ASSET_CACHE = "public, max-age=31536000, immutable"
+
+
+class _HashedAssetFiles(StaticFiles):
+    """带内容哈希的静态资源长期缓存；入口 HTML 不走这条路径。"""
+
+    async def get_response(self, path: str, scope: Any):  # noqa: ANN401 - Starlette 签名
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers.setdefault("Cache-Control", IMMUTABLE_ASSET_CACHE)
+        return response
 
 
 def _mount_frontend_assets(app: FastAPI, frontend_path: Path) -> None:
@@ -263,12 +286,12 @@ def _mount_frontend_assets(app: FastAPI, frontend_path: Path) -> None:
     # -- Static assets (JS / CSS / images / fonts) -----------------
     assets_dir = resolved / "assets"
     if assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
+        app.mount("/assets", _HashedAssetFiles(directory=str(assets_dir)), name="frontend_assets")
 
     # -- Root ------------------------------------------------------
     @app.get("/", include_in_schema=False)
     async def _serve_root() -> HTMLResponse:
-        return HTMLResponse(content=_index_html)
+        return HTMLResponse(content=_index_html, headers=NO_STORE_HEADERS)
 
 
 __all__ = ["add_spa_fallback", "create_app"]
