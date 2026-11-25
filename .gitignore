@@ -137,7 +137,9 @@ core/ui/dist-core-app/
 
 # UI / animation demos (experiments, not product code)
 core/ui/demo-*.html
-core/desktop/public/
+core/desktop/public/*
+# 公式字体是产品资源：KaTeX 的排版和字形都依赖它，随仓库一起走，不能按实验页对待。
+!core/desktop/public/katex-fonts/
 
 # Local-only scratch scripts (reliability tooling under core/scripts is tracked)
 core/scripts/__pycache__/

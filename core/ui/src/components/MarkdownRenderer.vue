@@ -31,7 +31,11 @@ import { messageStyleExtension, addAlertRenderer } from './messageStyleBlocks'
 import { marked, Marked, type Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
-import 'katex/dist/katex.min.css'
+// user:“还是坏的，我刚才说正常了指的是你那会开的 dev 内正常了。我现在打包版更新到 36 依旧无法正常显示”+
+// (dev 版走 vite 的 http，打包版主窗口走 Tauri 内嵌协议；后者里这份独立的 KaTeX 样式表请求没有送达，
+// 于是 KaTeX 的 HTML 与 MathML 备份同时可见、上下标和分数叠成一行。改成把样式随模块内联带过来，
+// 公式排版不再依赖单独的一次样式表请求，dev 与打包版走同一条注入路径。)
+import katexStylesSource from 'katex/dist/katex.min.css?raw'
 import { isExternalUrl, openExternalUrl } from '@/helpers/openUrl.ts'
 // user:“Ctrl/Cmd + 点击链接直接进内置浏览器”+(分类与可用性判定统一在 browser/entry，这里只决定落点)。
 import { classifyLink, wantsInternalBrowser } from '@/browser/linkRouting'
@@ -45,6 +49,18 @@ import { relativeLuminance } from '@/helpers/theme.ts'
 
 const referenceActions = useReferenceActions()
 defineOptions({ name: 'MarkdownRenderer' })
+
+// KaTeX 自带样式随模块一起到达，只挂一次。样式注入后其中的 url() 按文档地址解析，
+// 所以字体统一指向随应用一起发布的 /katex-fonts/（public/katex-fonts，打包后落在 dist 根）。
+// 这样公式的排版和字形都不再依赖任何一次独立的样式表或字体散请求。
+const KATEX_INLINE_STYLE_ID = 'sunday-katex-inline-styles'
+const KATEX_STYLES = String(katexStylesSource).replace(/url\((['"]?)fonts\//g, 'url($1/katex-fonts/')
+if (typeof document !== 'undefined' && !document.getElementById(KATEX_INLINE_STYLE_ID)) {
+  const style = document.createElement('style')
+  style.id = KATEX_INLINE_STYLE_ID
+  style.textContent = KATEX_STYLES
+  document.head.appendChild(style)
+}
 
 // Force every rendered anchor to open externally with safe rel attributes.
 // The click handler below is the primary guard (it intercepts and calls the
