@@ -42,4 +42,14 @@ describe('KaTeX 样式随模块挂载', () => {
     expect(source).toContain('document.head.appendChild(style)')
     expect(source).toMatch(/style\.textContent\s*=\s*KATEX_STYLES/)
   })
+
+  // user:“彻底检查好了再修复，不要再返工了”+(打包窗口的 style-src 带 nonce 会让
+  // 'unsafe-inline' 作废，元素上的 style 属性被整体拒绝；KaTeX 的高度与偏移全写在
+  // style 属性里，缺了这条公式必然散架。用断言把这个前提钉住，防止以后被删掉。)
+  test('打包窗口的安全策略放行元素内联样式', () => {
+    const conf = JSON.parse(readFileSync(resolve(root, '../../core/desktop/src-tauri/tauri.conf.json'), 'utf8'))
+    const csp: string = conf?.app?.security?.csp ?? ''
+    expect(csp).toContain("style-src-attr 'unsafe-inline'")
+    expect(csp).toContain("style-src 'self'")
+  })
 })
