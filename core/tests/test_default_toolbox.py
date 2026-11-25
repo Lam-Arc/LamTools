@@ -199,6 +199,7 @@ def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
     )
     from lamtools_core.tool import ToolSpec
     from lamtools_core.tool.default_toolbox import (
+        RETIRED_TOOL_NAMES,
         bundled_core_tool_specs,
         core_model_tools,
         default_core_tool_specs,
@@ -238,12 +239,25 @@ def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
     ]
 
     definitions = core_model_tools(specs)
-    assert len(definitions) == len(specs)
+    # user:“Web search几乎不可用，可以禁用掉了”+(退役工具永远不进模型清单，
+    # 数量按过滤后的期望值算，而不是按传进来的 specs 条数算)。
+    expected = [spec for spec in specs if spec.name not in RETIRED_TOOL_NAMES]
+    assert len(definitions) == len(expected)
     for definition in definitions:
         _assert_strict_schema(
             definition["function"]["parameters"],
             definition["function"]["name"],
         )
+
+
+def test_retired_web_search_never_reaches_the_model(tmp_path):
+    """user:“Web search几乎不可用，可以禁用掉了”+
+    (退役工具即便插件仍然启用，也不能出现在送给模型的工具清单里；
+     搜索统一走内置浏览器的 browser.search，避免两个搜索工具让模型选错)。
+    """
+    toolbox = build_core_toolbox(work_root=tmp_path)
+    names = {tool["function"]["name"] for tool in toolbox.model_tools()}
+    assert "web_search" not in names
 
 
 def test_core_toolbox_exposes_generic_tool_specs(tmp_path):

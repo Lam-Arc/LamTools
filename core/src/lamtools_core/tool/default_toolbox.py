@@ -1087,6 +1087,12 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
 # 内置插件 tools.jsonc 半声明式引用（bundled_core_tool_specs 补全）。
 _BUNDLED_PLUGIN_TOOL_NAMES = frozenset({"git_status", "git_diff", "web_search", "generate_image"})
 
+# user:“现在是不是有两个 Web search 工具？”“Web search几乎不可用，可以禁用掉了”+
+# (退役名单：这些工具不再交给模型。搜索统一走内置浏览器的 browser.search——真实浏览器会话、
+#  能过反爬、拿到的是完整自然结果；web_search 是纯 HTTP 抓取，实际几乎不可用，
+#  两个都能搜只会让模型选错。插件定义与设置页保留，回滚只需从这里删掉名字)。
+RETIRED_TOOL_NAMES: frozenset[str] = frozenset({"web_search"})
+
 
 def _core_spec_for(name: str) -> ToolSpec:
     item = {str(i["name"]): i for i in DEFAULT_TOOL_DEFINITIONS}[name]
@@ -1153,6 +1159,9 @@ def core_model_tools(
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
     for spec in specs or default_core_tool_specs():
+        # 退役工具永远不进模型清单，哪怕插件仍然启用着。
+        if spec.name in RETIRED_TOOL_NAMES:
+            continue
         if include_tools is not None and spec.name not in include_tools:
             continue
         if exclude_tools is not None and spec.name in exclude_tools:
@@ -3127,6 +3136,7 @@ __all__ = [
     "DEFAULT_TOOL_CATEGORIES",
     "DEFAULT_TOOL_FAILURE_MODES",
     "DEFAULT_TOOL_ORDER",
+    "RETIRED_TOOL_NAMES",
     "DEFAULT_TOOL_PERMISSIONS",
     "DEFAULT_TOOL_RECOVERY",
     "SubAgentRunner",
