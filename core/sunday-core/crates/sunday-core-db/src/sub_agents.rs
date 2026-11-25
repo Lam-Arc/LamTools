@@ -37,7 +37,10 @@ fn ensure_tables_on_conn(conn: &Connection) -> Result<(), DbError> {
         }
     }
     if !present_cols.is_empty() && !present_cols.contains("message_key") {
-        conn.execute("ALTER TABLE sub_agent_mailbox RENAME TO sub_agent_mailbox_legacy", [])?;
+        conn.execute(
+            "ALTER TABLE sub_agent_mailbox RENAME TO sub_agent_mailbox_legacy",
+            [],
+        )?;
     }
 
     conn.execute_batch(
@@ -75,12 +78,30 @@ fn ensure_tables_on_conn(conn: &Connection) -> Result<(), DbError> {
         }
     }
     for (col, ddl) in [
-        ("tags", "ALTER TABLE sub_agent_mailbox ADD COLUMN tags TEXT NOT NULL DEFAULT ''"),
-        ("wake", "ALTER TABLE sub_agent_mailbox ADD COLUMN wake INTEGER NOT NULL DEFAULT 0"),
-        ("wake_count", "ALTER TABLE sub_agent_mailbox ADD COLUMN wake_count INTEGER NOT NULL DEFAULT 0"),
-        ("source_call_id", "ALTER TABLE sub_agent_mailbox ADD COLUMN source_call_id TEXT NOT NULL DEFAULT ''"),
-        ("source_run_id", "ALTER TABLE sub_agent_mailbox ADD COLUMN source_run_id TEXT NOT NULL DEFAULT ''"),
-        ("source_turn_id", "ALTER TABLE sub_agent_mailbox ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''"),
+        (
+            "tags",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "wake",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN wake INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "wake_count",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN wake_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "source_call_id",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN source_call_id TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "source_run_id",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN source_run_id TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "source_turn_id",
+            "ALTER TABLE sub_agent_mailbox ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''",
+        ),
     ] {
         if !present_after.contains(col) {
             conn.execute(ddl, [])?;
@@ -278,7 +299,10 @@ pub fn sub_agent_delete_member(engine: &DbEngine, req: &Value) -> Result<Value, 
     Ok(json!({ "ok": true }))
 }
 
-pub fn sub_agent_recover_mark_interrupted(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
+pub fn sub_agent_recover_mark_interrupted(
+    engine: &DbEngine,
+    req: &Value,
+) -> Result<Value, DbError> {
     let parent_tid = req
         .get("parent_thread_id")
         .and_then(|v| v.as_str())
@@ -298,9 +322,8 @@ pub fn sub_agent_recover_mark_interrupted(engine: &DbEngine, req: &Value) -> Res
         .unwrap_or_else(now_unix_secs);
 
     let updated = engine.write_tx(|conn| {
-        let mut stmt = conn.prepare_cached(
-            "SELECT name, payload FROM sub_agents WHERE parent_thread_id = ?1",
-        )?;
+        let mut stmt = conn
+            .prepare_cached("SELECT name, payload FROM sub_agents WHERE parent_thread_id = ?1")?;
         let mut rows = stmt.query([parent_tid])?;
         let mut to_update: Vec<(String, Value)> = Vec::new();
         while let Some(r) = rows.next()? {
@@ -319,7 +342,10 @@ pub fn sub_agent_recover_mark_interrupted(engine: &DbEngine, req: &Value) -> Res
             payload.insert("completed_at".into(), json!(now));
             if let Some(started) = payload.get("started_at").and_then(|v| v.as_f64()) {
                 if started != 0.0 {
-                    payload.insert("elapsed_ms".into(), json!(((now - started) * 1000.0) as i64));
+                    payload.insert(
+                        "elapsed_ms".into(),
+                        json!(((now - started) * 1000.0) as i64),
+                    );
                 }
             }
             to_update.push((name, Value::Object(payload)));
@@ -363,10 +389,22 @@ pub fn sub_agent_mail_insert(engine: &DbEngine, req: &Value) -> Result<Value, Db
     } else {
         0_i64
     };
-    let source_call_id = req.get("source_call_id").and_then(|v| v.as_str()).unwrap_or("");
-    let source_run_id = req.get("source_run_id").and_then(|v| v.as_str()).unwrap_or("");
-    let source_turn_id = req.get("source_turn_id").and_then(|v| v.as_str()).unwrap_or("");
-    let fetch_id = req.get("fetch_id").and_then(|v| v.as_bool()).unwrap_or(false);
+    let source_call_id = req
+        .get("source_call_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source_run_id = req
+        .get("source_run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source_turn_id = req
+        .get("source_turn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let fetch_id = req
+        .get("fetch_id")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let digest = sha256_hex(body.as_bytes());
     let new_id = next_hex_id();
@@ -413,12 +451,24 @@ pub fn sub_agent_mail_insert(engine: &DbEngine, req: &Value) -> Result<Value, Db
     Ok(json!({ "inserted": inserted, "message_id": message_id }))
 }
 
-pub fn sub_agent_mail_mark_delivered_by_key(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+pub fn sub_agent_mail_mark_delivered_by_key(
+    engine: &DbEngine,
+    req: &Value,
+) -> Result<Value, DbError> {
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let direction = req.get("direction").and_then(|v| v.as_str()).unwrap_or("");
-    let message_key = req.get("message_key").and_then(|v| v.as_str()).unwrap_or("");
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let message_key = req
+        .get("message_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     engine.write_tx(|conn| {
         conn.execute(
             "UPDATE sub_agent_mailbox SET delivered_at=?1 WHERE parent_thread_id=?2 AND name=?3 AND direction=?4 AND message_key=?5",
@@ -430,7 +480,10 @@ pub fn sub_agent_mail_mark_delivered_by_key(engine: &DbEngine, req: &Value) -> R
 }
 
 pub fn sub_agent_pending_guidance(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let rows = engine.read(|conn| {
         let mut stmt = conn.prepare_cached(
@@ -457,7 +510,10 @@ pub fn sub_agent_pending_guidance(engine: &DbEngine, req: &Value) -> Result<Valu
 }
 
 pub fn sub_agent_ack_guidance(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let ids: Vec<String> = req
         .get("ids")
@@ -471,7 +527,10 @@ pub fn sub_agent_ack_guidance(engine: &DbEngine, req: &Value) -> Result<Value, D
     if ids.is_empty() {
         return Ok(json!({ "ok": true }));
     }
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     engine.write_tx(|conn| {
         let mut stmt = conn.prepare_cached(
             "UPDATE sub_agent_mailbox SET delivered_at = COALESCE(delivered_at, ?1)
@@ -486,12 +545,18 @@ pub fn sub_agent_ack_guidance(engine: &DbEngine, req: &Value) -> Result<Value, D
 }
 
 pub fn sub_agent_drain_parent_mailbox(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let mark_delivered = req
         .get("mark_delivered")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
 
     let res = if !mark_delivered {
         engine.read(|conn| {
@@ -552,7 +617,10 @@ pub fn sub_agent_drain_parent_mailbox(engine: &DbEngine, req: &Value) -> Result<
 }
 
 pub fn sub_agent_ack_parent_mailbox(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let ids: Vec<String> = req
         .get("ids")
         .and_then(|v| v.as_array())
@@ -565,7 +633,10 @@ pub fn sub_agent_ack_parent_mailbox(engine: &DbEngine, req: &Value) -> Result<Va
     if ids.is_empty() {
         return Ok(json!({ "ok": true }));
     }
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     engine.write_tx(|conn| {
         let placeholders = vec!["?"; ids.len()].join(",");
         let sql = format!(
@@ -586,7 +657,10 @@ pub fn sub_agent_ack_parent_mailbox(engine: &DbEngine, req: &Value) -> Result<Va
 }
 
 pub fn sub_agent_ack_parent_guidance(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let guidance_ids: HashSet<String> = req
         .get("guidance_ids")
         .and_then(|v| v.as_array())
@@ -599,7 +673,10 @@ pub fn sub_agent_ack_parent_guidance(engine: &DbEngine, req: &Value) -> Result<V
     if guidance_ids.is_empty() {
         return Ok(json!({ "ok": true }));
     }
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let res = engine.write_tx(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id,name,message_key FROM sub_agent_mailbox
@@ -636,7 +713,10 @@ pub fn sub_agent_ack_parent_guidance(engine: &DbEngine, req: &Value) -> Result<V
 }
 
 pub fn sub_agent_pending_event_count(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let n: i64 = engine.read(|conn| {
         conn.query_row(
             "SELECT COUNT(*) FROM sub_agent_events WHERE parent_thread_id = ?1 AND delivered_at IS NULL",
@@ -649,13 +729,21 @@ pub fn sub_agent_pending_event_count(engine: &DbEngine, req: &Value) -> Result<V
 }
 
 pub fn sub_agent_write_event(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let event_key = req.get("event_key").and_then(|v| v.as_str()).unwrap_or("");
-    let payload = req.get("payload").ok_or_else(|| DbError::Invalid("payload required".into()))?;
+    let payload = req
+        .get("payload")
+        .ok_or_else(|| DbError::Invalid("payload required".into()))?;
     let payload_str = serde_json::to_string(payload)?;
     let event_id = next_hex_id();
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let inserted = engine.write_tx(|conn| {
         let count = conn.execute(
             "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at)
@@ -668,8 +756,14 @@ pub fn sub_agent_write_event(engine: &DbEngine, req: &Value) -> Result<Value, Db
 }
 
 pub fn sub_agent_drain_member_events(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let events = engine.write_tx(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id,payload FROM sub_agent_events
@@ -688,7 +782,8 @@ pub fn sub_agent_drain_member_events(engine: &DbEngine, req: &Value) -> Result<V
         }
         drop(rows);
         if !ids.is_empty() {
-            let mut upd = conn.prepare_cached("UPDATE sub_agent_events SET delivered_at=?1 WHERE id=?2")?;
+            let mut upd =
+                conn.prepare_cached("UPDATE sub_agent_events SET delivered_at=?1 WHERE id=?2")?;
             for id in ids {
                 upd.execute(params![now, id])?;
             }
@@ -722,7 +817,10 @@ pub fn sub_agent_list_threads_with_pending_wakes(engine: &DbEngine) -> Result<Va
 }
 
 pub fn sub_agent_peek_wake_messages(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let res = engine.read(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id,name,body,tags,wake_count,created_at FROM sub_agent_mailbox
@@ -750,7 +848,9 @@ pub fn sub_agent_peek_wake_messages(engine: &DbEngine, req: &Value) -> Result<Va
     }
 }
 
-fn r_next_row(rows: &mut rusqlite::Rows<'_>) -> Result<Option<(String, String, String, String, i64, f64)>, DbError> {
+fn r_next_row(
+    rows: &mut rusqlite::Rows<'_>,
+) -> Result<Option<(String, String, String, String, i64, f64)>, DbError> {
     let Some(r) = rows.next()? else {
         return Ok(None);
     };
@@ -765,7 +865,10 @@ fn r_next_row(rows: &mut rusqlite::Rows<'_>) -> Result<Option<(String, String, S
 }
 
 pub fn sub_agent_bump_wake_counts(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let ids: Vec<String> = req
         .get("ids")
         .and_then(|v| v.as_array())
@@ -816,14 +919,26 @@ fn format_member_event_rust(payload: &Map<String, Value>) -> String {
             .iter()
             .filter_map(|m| m.as_object())
             .map(|m| {
-                let name = m.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("?");
-                let st = m.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("running");
+                let name = m
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("?");
+                let st = m
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("running");
                 let ms = m.get("running_ms").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 format!("{name}（{st}，已运行 {:.0} 秒）", ms / 1000.0)
             })
             .collect();
         let detail = parts.join("；");
-        let suffix = if payload.get("lease_timed_out").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let suffix = if payload
+            .get("lease_timed_out")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             "（本次等待已到租约上限）"
         } else {
             ""
@@ -842,7 +957,11 @@ fn format_member_event_rust(payload: &Map<String, Value>) -> String {
         Some(ms) if ms != 0.0 => format!("，用时 {:.0} 秒", ms / 1000.0),
         _ => String::new(),
     };
-    let status_fallback = payload.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or(event);
+    let status_fallback = payload
+        .get("status")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(event);
     let label = match event {
         "member_finished" => "已完成",
         "member_paused" => "已暂停（在等确认或补充信息）",
@@ -851,8 +970,16 @@ fn format_member_event_rust(payload: &Map<String, Value>) -> String {
         "member_interrupted" => "已被中断",
         _ => status_fallback,
     };
-    let summary = payload.get("summary").and_then(|v| v.as_str()).unwrap_or("").trim();
-    let detail = payload.get("detail").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let summary = payload
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let detail = payload
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
     let mut tail = if !summary.is_empty() {
         format!("：{summary}")
     } else {
@@ -864,8 +991,14 @@ fn format_member_event_rust(payload: &Map<String, Value>) -> String {
     format!("- {name} {label}{elapsed_text}{tail}")
 }
 
-pub fn sub_agent_migrate_pending_member_events_to_wake(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+pub fn sub_agent_migrate_pending_member_events_to_wake(
+    engine: &DbEngine,
+    req: &Value,
+) -> Result<Value, DbError> {
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let res = engine.write_tx(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id,parent_thread_id,name,payload,event_key FROM sub_agent_events
@@ -874,13 +1007,7 @@ pub fn sub_agent_migrate_pending_member_events_to_wake(engine: &DbEngine, req: &
         let mut rows = stmt.query([])?;
         let mut items: Vec<(String, String, String, String, String)> = Vec::new();
         while let Some(r) = rows.next()? {
-            items.push((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-            ));
+            items.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
         }
         drop(rows);
         let mut migrated = 0_i64;
@@ -906,7 +1033,10 @@ pub fn sub_agent_migrate_pending_member_events_to_wake(engine: &DbEngine, req: &
             if inserted > 0 {
                 migrated += 1;
             }
-            conn.execute("UPDATE sub_agent_events SET delivered_at=?1 WHERE id=?2", params![now, id])?;
+            conn.execute(
+                "UPDATE sub_agent_events SET delivered_at=?1 WHERE id=?2",
+                params![now, id],
+            )?;
         }
         Ok(migrated)
     });
@@ -918,9 +1048,15 @@ pub fn sub_agent_migrate_pending_member_events_to_wake(engine: &DbEngine, req: &
 }
 
 pub fn sub_agent_auto_release_unanswered(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(2);
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let body = "未获答复，按合理默认继续。";
     let digest = sha256_hex(body.as_bytes());
     let res = engine.write_tx(|conn| {
@@ -958,7 +1094,10 @@ pub fn sub_agent_auto_release_unanswered(engine: &DbEngine, req: &Value) -> Resu
 }
 
 pub fn sub_agent_peek_member_events(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let parent_tid = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_tid = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let res = engine.read(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id,payload,event_key FROM sub_agent_events
@@ -989,7 +1128,10 @@ pub fn sub_agent_peek_member_events(engine: &DbEngine, req: &Value) -> Result<Va
     }
 }
 
-pub fn sub_agent_mark_member_events_delivered(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
+pub fn sub_agent_mark_member_events_delivered(
+    engine: &DbEngine,
+    req: &Value,
+) -> Result<Value, DbError> {
     let ids: Vec<String> = req
         .get("ids")
         .and_then(|v| v.as_array())
@@ -1002,7 +1144,10 @@ pub fn sub_agent_mark_member_events_delivered(engine: &DbEngine, req: &Value) ->
     if ids.is_empty() {
         return Ok(json!({ "ok": true }));
     }
-    let now = req.get("now").and_then(|v| v.as_f64()).unwrap_or_else(now_unix_secs);
+    let now = req
+        .get("now")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(now_unix_secs);
     let res = engine.write_tx(|conn| {
         let placeholders = vec!["?"; ids.len()].join(",");
         let sql = format!(

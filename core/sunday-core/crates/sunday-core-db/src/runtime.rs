@@ -178,8 +178,14 @@ pub fn runtime_save(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
         .ok_or_else(|| DbError::Invalid("session_id required".into()))?;
     let expected_revision = req.get("expected_revision").and_then(|v| v.as_i64());
     let adopt_revision = req.get("adopt_revision").and_then(|v| v.as_i64());
-    let state_payload = req.get("state_payload").cloned().unwrap_or_else(|| json!({}));
-    let pending_payload = req.get("pending_payload").cloned().unwrap_or_else(|| json!({}));
+    let state_payload = req
+        .get("state_payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let pending_payload = req
+        .get("pending_payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let last_event_seq = req
         .get("last_event_seq")
         .and_then(|v| v.as_i64())
@@ -198,14 +204,8 @@ pub fn runtime_save(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
         .get("workspace_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let change_id = req
-        .get("change_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let now_str = req
-        .get("now_str")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let change_id = req.get("change_id").and_then(|v| v.as_str()).unwrap_or("");
+    let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     let updated_iso = req
         .get("updated_iso")
         .and_then(|v| v.as_str())
@@ -359,8 +359,14 @@ pub fn runtime_cas_patch(engine: &DbEngine, req: &Value) -> Result<Value, DbErro
         .get("expected_revision")
         .and_then(|v| v.as_i64())
         .ok_or_else(|| DbError::Invalid("expected_revision required".into()))?;
-    let state_payload = req.get("state_payload").cloned().unwrap_or_else(|| json!({}));
-    let pending_payload = req.get("pending_payload").cloned().unwrap_or_else(|| json!({}));
+    let state_payload = req
+        .get("state_payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let pending_payload = req
+        .get("pending_payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let last_event_seq = req
         .get("last_event_seq")
         .and_then(|v| v.as_i64())
@@ -373,14 +379,8 @@ pub fn runtime_cas_patch(engine: &DbEngine, req: &Value) -> Result<Value, DbErro
         .get("workspace_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let change_id = req
-        .get("change_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let now_str = req
-        .get("now_str")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let change_id = req.get("change_id").and_then(|v| v.as_str()).unwrap_or("");
+    let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     let updated_iso = req
         .get("updated_iso")
         .and_then(|v| v.as_str())
@@ -437,14 +437,12 @@ pub fn runtime_append_history(engine: &DbEngine, req: &Value) -> Result<Value, D
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let now_str = req
-        .get("now_str")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     if messages.is_empty() {
         return Ok(json!({ "assigned_seqs": [] }));
     }
-    let assigned = engine.write_tx(|conn| append_history_rows_tx(conn, session_id, &messages, now_str))?;
+    let assigned =
+        engine.write_tx(|conn| append_history_rows_tx(conn, session_id, &messages, now_str))?;
     Ok(json!({ "assigned_seqs": assigned }))
 }
 
@@ -458,10 +456,7 @@ pub fn runtime_replace_history(engine: &DbEngine, req: &Value) -> Result<Value, 
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let now_str = req
-        .get("now_str")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     engine.write_tx(|conn| {
         conn.execute(
             "DELETE FROM core_history_entries WHERE thread_id = ?1",
@@ -488,7 +483,11 @@ pub fn runtime_replace_history(engine: &DbEngine, req: &Value) -> Result<Value, 
     })
 }
 
-pub fn runtime_get_history(engine: &DbEngine, session_id: &str, after_seq: i64) -> Result<Value, DbError> {
+pub fn runtime_get_history(
+    engine: &DbEngine,
+    session_id: &str,
+    after_seq: i64,
+) -> Result<Value, DbError> {
     engine.read(|conn| {
         let mut rows_out: Vec<Value> = Vec::new();
         if after_seq > 0 {
@@ -655,7 +654,10 @@ pub fn runtime_append_dialogue_record(engine: &DbEngine, req: &Value) -> Result<
     })
 }
 
-pub fn runtime_list_dialogue_records(engine: &DbEngine, session_id: &str) -> Result<Value, DbError> {
+pub fn runtime_list_dialogue_records(
+    engine: &DbEngine,
+    session_id: &str,
+) -> Result<Value, DbError> {
     engine.read(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT COALESCE(seq, 0), COALESCE(kind, ''), COALESCE(branch_epoch, 0), \
@@ -684,7 +686,10 @@ pub fn runtime_list_dialogue_records(engine: &DbEngine, session_id: &str) -> Res
     })
 }
 
-pub fn runtime_dialogue_record_epoch(engine: &DbEngine, session_id: &str) -> Result<Value, DbError> {
+pub fn runtime_dialogue_record_epoch(
+    engine: &DbEngine,
+    session_id: &str,
+) -> Result<Value, DbError> {
     engine.read(|conn| {
         let epoch: i64 = conn.query_row(
             "SELECT COALESCE(MAX(branch_epoch), 0) FROM core_dialogue_records WHERE thread_id = ?1",
@@ -791,22 +796,58 @@ pub fn agent_run_upsert(engine: &DbEngine, req: &Value) -> Result<Value, DbError
         .get("agent_run_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| DbError::Invalid("agent_run_id required".into()))?;
-    let parent_thread_id = req.get("parent_thread_id").and_then(|v| v.as_str()).unwrap_or("");
-    let parent_turn_id = req.get("parent_turn_id").and_then(|v| v.as_str()).unwrap_or("");
-    let parent_run_id = req.get("parent_run_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_thread_id = req
+        .get("parent_thread_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let parent_turn_id = req
+        .get("parent_turn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let parent_run_id = req
+        .get("parent_run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let run_type = req.get("type").and_then(|v| v.as_str()).unwrap_or("execute");
+    let run_type = req
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("execute");
     let model_id = req.get("model_id").and_then(|v| v.as_str()).unwrap_or("");
-    let reasoning_level = req.get("reasoning_level").and_then(|v| v.as_str()).unwrap_or("");
+    let reasoning_level = req
+        .get("reasoning_level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let status = req.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
-    let lease_until_ms = req.get("lease_until_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    let sub_session_id = req.get("sub_session_id").and_then(|v| v.as_str()).unwrap_or("");
-    let source_call_id = req.get("source_call_id").and_then(|v| v.as_str()).unwrap_or("");
-    let source_run_id = req.get("source_run_id").and_then(|v| v.as_str()).unwrap_or("");
-    let source_turn_id = req.get("source_turn_id").and_then(|v| v.as_str()).unwrap_or("");
+    let lease_until_ms = req
+        .get("lease_until_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let sub_session_id = req
+        .get("sub_session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source_call_id = req
+        .get("source_call_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source_run_id = req
+        .get("source_run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source_turn_id = req
+        .get("source_turn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let summary = req.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-    let started_at_ms = req.get("started_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    let completed_at_ms = req.get("completed_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+    let started_at_ms = req
+        .get("started_at_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let completed_at_ms = req
+        .get("completed_at_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let elapsed_ms = req.get("elapsed_ms").and_then(|v| v.as_i64()).unwrap_or(0);
     let payload_json = req.get("metadata").cloned().unwrap_or_else(|| json!({}));
     let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
@@ -942,8 +983,10 @@ pub fn agent_run_list(
             "SELECT {AGENT_RUN_COLS} FROM core_agent_runs {where_sql} ORDER BY started_at_ms ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            bind_vals.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> = bind_vals
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
         let mut rows = stmt.query(params_refs.as_slice())?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {

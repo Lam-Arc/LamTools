@@ -184,10 +184,15 @@ fn load_metadata_inner_impl(
     {
         let mut cache = engine.cache.write().unwrap_or_else(|e| e.into_inner());
         if let Some(hit) = cache.get_metadata(thread_id, revision, snapshot_seq) {
-            engine.stats.snapshot_cache_hits.fetch_add(1, Ordering::Relaxed);
+            engine
+                .stats
+                .snapshot_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
             let mut state = hit.state;
             drop(cache);
-            if hydrate_usage && hydrate_usage_in_place_conn(conn, &mut state, thread_id, snapshot_seq)? {
+            if hydrate_usage
+                && hydrate_usage_in_place_conn(conn, &mut state, thread_id, snapshot_seq)?
+            {
                 let mut wcache = engine.cache.write().unwrap_or_else(|e| e.into_inner());
                 wcache.put_metadata_sized(
                     thread_id.to_string(),
@@ -208,7 +213,10 @@ fn load_metadata_inner_impl(
         }
     }
 
-    engine.stats.snapshot_cache_misses.fetch_add(1, Ordering::Relaxed);
+    engine
+        .stats
+        .snapshot_cache_misses
+        .fetch_add(1, Ordering::Relaxed);
     let raw_json: Option<String> = conn.query_row(
         "SELECT snapshot_json FROM core_thread_snapshots WHERE thread_id = ?1",
         [thread_id],
@@ -394,7 +402,10 @@ pub(crate) fn hydrate_body_refs_conn(
             .filter(|s| !s.is_empty())
             .unwrap_or(map_id.as_str())
             .to_string();
-        let ref_seq = ref_obj.get("last_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let ref_seq = ref_obj
+            .get("last_seq")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         if ref_seq > 0 {
             max_seq = max_seq.max(ref_seq);
         } else {
@@ -414,7 +425,11 @@ pub(crate) fn hydrate_body_refs_conn(
         }
     }
 
-    let seq_bound = if unbounded || max_seq <= 0 { i64::MAX } else { max_seq };
+    let seq_bound = if unbounded || max_seq <= 0 {
+        i64::MAX
+    } else {
+        max_seq
+    };
     let mut recon_state = crate::projector::empty_core_snapshot(thread_id);
     for chunk in unique_iids.chunks(200) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -438,7 +453,9 @@ pub(crate) fn hydrate_body_refs_conn(
             let row_eid: String = row.get(1)?;
             let raw_payload: Option<String> = row.get(2)?;
             let mut payload: Value = match raw_payload {
-                Some(ref s) if !s.is_empty() => serde_json::from_str(s).unwrap_or_else(|_| json!({})),
+                Some(ref s) if !s.is_empty() => {
+                    serde_json::from_str(s).unwrap_or_else(|_| json!({}))
+                }
                 _ => json!({}),
             };
             if let Some(obj) = payload.as_object_mut() {
@@ -450,7 +467,11 @@ pub(crate) fn hydrate_body_refs_conn(
                     obj.insert("event_id".into(), json!(row_eid));
                 }
             }
-            crate::projector::apply_run_item_event_in_place_core(&mut recon_state, &payload, row_seq);
+            crate::projector::apply_run_item_event_in_place_core(
+                &mut recon_state,
+                &payload,
+                row_seq,
+            );
         }
     }
 
@@ -670,7 +691,8 @@ pub(crate) fn hydrate_snapshot_turns_conn(
                 }
             } else {
                 let ids: Vec<String> = tids.iter().cloned().collect();
-                let mut seen_tids: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut seen_tids: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 for chunk in ids.chunks(200) {
                     let placeholders = vec!["?"; chunk.len()].join(",");
                     let sql = format!(
@@ -679,7 +701,8 @@ pub(crate) fn hydrate_snapshot_turns_conn(
                          WHERE thread_id = ? AND turn_id IN ({placeholders})"
                     );
                     let mut stmt = conn.prepare(&sql)?;
-                    let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+                    let mut params_vec: Vec<&dyn rusqlite::ToSql> =
+                        Vec::with_capacity(chunk.len() + 1);
                     params_vec.push(&thread_id);
                     for id in chunk {
                         params_vec.push(id);
@@ -744,7 +767,9 @@ pub(crate) fn hydrate_snapshot_turns_conn(
             .entry("core".to_string())
             .or_insert_with(|| empty_thread_snapshot(thread_id));
         if let Some(core_obj) = core.as_object_mut() {
-            let turns = core_obj.entry("turns".to_string()).or_insert_with(|| json!({}));
+            let turns = core_obj
+                .entry("turns".to_string())
+                .or_insert_with(|| json!({}));
             if let Some(map) = turns.as_object_mut() {
                 for (tid, val) in core_entries {
                     map.entry(tid).or_insert(val);
@@ -876,10 +901,15 @@ pub fn load_snapshot_page(
             )
             .unwrap_or(0);
 
-        let mut turn_ids_in_page: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut turn_ids_in_page: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut has_turnless_item = false;
         for v in loaded_items.values() {
-            if let Some(tid) = v.get("turn_id").and_then(|s| s.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(tid) = v
+                .get("turn_id")
+                .and_then(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 turn_ids_in_page.insert(tid.to_string());
             } else {
                 has_turnless_item = true;
@@ -903,7 +933,11 @@ pub fn load_snapshot_page(
             conn,
             thread_id,
             &mut state,
-            if has_turnless_item { None } else { Some(&turn_ids_in_page) },
+            if has_turnless_item {
+                None
+            } else {
+                Some(&turn_ids_in_page)
+            },
         )?;
         let mut out = finish_assembled(
             conn,

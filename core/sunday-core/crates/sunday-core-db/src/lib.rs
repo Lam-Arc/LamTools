@@ -55,7 +55,9 @@ fn err_response(code: &str, msg: &str) -> Vec<u8> {
         "error": code,
         "message": msg,
     }))
-    .unwrap_or_else(|_| b"{\"ok\":false,\"error\":\"internal\",\"message\":\"serialize error\"}".to_vec())
+    .unwrap_or_else(|_| {
+        b"{\"ok\":false,\"error\":\"internal\",\"message\":\"serialize error\"}".to_vec()
+    })
 }
 
 fn ok_response(data: Value) -> Vec<u8> {
@@ -128,11 +130,9 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
                 .get("thread_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| DbError::Invalid("thread_id required".into()))?;
-            let item_id = req
-                .get("item_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let seq = engine.read(|conn| snapshots::resolve_item_seq_value(conn, engine, tid, item_id))?;
+            let item_id = req.get("item_id").and_then(|v| v.as_str()).unwrap_or("");
+            let seq = engine
+                .read(|conn| snapshots::resolve_item_seq_value(conn, engine, tid, item_id))?;
             Ok(json!({ "seq": seq }))
         }
         "load_page_around" => {
@@ -140,10 +140,7 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
                 .get("thread_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| DbError::Invalid("thread_id required".into()))?;
-            let item_id = req
-                .get("item_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let item_id = req.get("item_id").and_then(|v| v.as_str()).unwrap_or("");
             let item_byte_budget = req
                 .get("item_byte_budget")
                 .and_then(|v| v.as_i64())
@@ -218,7 +215,10 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
         "agent_run_list" => {
             let parent_turn_id = req.get("parent_turn_id").and_then(|v| v.as_str());
             let parent_thread_id = req.get("parent_thread_id").and_then(|v| v.as_str());
-            let live_only = req.get("live_only").and_then(|v| v.as_bool()).unwrap_or(false);
+            let live_only = req
+                .get("live_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             runtime::agent_run_list(engine, parent_turn_id, parent_thread_id, live_only)
         }
         "events_list_after" => {
@@ -278,7 +278,9 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
         "session_update" => session_writes::session_update(engine, req),
         "session_patch" => session_writes::session_patch(engine, req),
         "session_delete" => session_writes::session_delete(engine, req),
-        "session_persist_legacy_metadata" => session_writes::session_persist_legacy_metadata(engine, req),
+        "session_persist_legacy_metadata" => {
+            session_writes::session_persist_legacy_metadata(engine, req)
+        }
         "sub_agent_init_db" => sub_agents::sub_agent_init_db(engine),
         "sub_agent_load" => sub_agents::sub_agent_load(engine, req),
         "sub_agent_list" => sub_agents::sub_agent_list(engine, req),
@@ -286,9 +288,13 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
         "sub_agent_save" => sub_agents::sub_agent_save(engine, req),
         "sub_agent_save_if_current" => sub_agents::sub_agent_save_if_current(engine, req),
         "sub_agent_delete_member" => sub_agents::sub_agent_delete_member(engine, req),
-        "sub_agent_recover_mark_interrupted" => sub_agents::sub_agent_recover_mark_interrupted(engine, req),
+        "sub_agent_recover_mark_interrupted" => {
+            sub_agents::sub_agent_recover_mark_interrupted(engine, req)
+        }
         "sub_agent_mail_insert" => sub_agents::sub_agent_mail_insert(engine, req),
-        "sub_agent_mail_mark_delivered_by_key" => sub_agents::sub_agent_mail_mark_delivered_by_key(engine, req),
+        "sub_agent_mail_mark_delivered_by_key" => {
+            sub_agents::sub_agent_mail_mark_delivered_by_key(engine, req)
+        }
         "sub_agent_pending_guidance" => sub_agents::sub_agent_pending_guidance(engine, req),
         "sub_agent_ack_guidance" => sub_agents::sub_agent_ack_guidance(engine, req),
         "sub_agent_drain_parent_mailbox" => sub_agents::sub_agent_drain_parent_mailbox(engine, req),
@@ -297,13 +303,21 @@ fn dispatch(engine: &DbEngine, op: &str, req: &Value) -> Result<Value, DbError> 
         "sub_agent_pending_event_count" => sub_agents::sub_agent_pending_event_count(engine, req),
         "sub_agent_write_event" => sub_agents::sub_agent_write_event(engine, req),
         "sub_agent_drain_member_events" => sub_agents::sub_agent_drain_member_events(engine, req),
-        "sub_agent_list_threads_with_pending_wakes" => sub_agents::sub_agent_list_threads_with_pending_wakes(engine),
+        "sub_agent_list_threads_with_pending_wakes" => {
+            sub_agents::sub_agent_list_threads_with_pending_wakes(engine)
+        }
         "sub_agent_peek_wake_messages" => sub_agents::sub_agent_peek_wake_messages(engine, req),
         "sub_agent_bump_wake_counts" => sub_agents::sub_agent_bump_wake_counts(engine, req),
-        "sub_agent_migrate_pending_member_events_to_wake" => sub_agents::sub_agent_migrate_pending_member_events_to_wake(engine, req),
-        "sub_agent_auto_release_unanswered" => sub_agents::sub_agent_auto_release_unanswered(engine, req),
+        "sub_agent_migrate_pending_member_events_to_wake" => {
+            sub_agents::sub_agent_migrate_pending_member_events_to_wake(engine, req)
+        }
+        "sub_agent_auto_release_unanswered" => {
+            sub_agents::sub_agent_auto_release_unanswered(engine, req)
+        }
         "sub_agent_peek_member_events" => sub_agents::sub_agent_peek_member_events(engine, req),
-        "sub_agent_mark_member_events_delivered" => sub_agents::sub_agent_mark_member_events_delivered(engine, req),
+        "sub_agent_mark_member_events_delivered" => {
+            sub_agents::sub_agent_mark_member_events_delivered(engine, req)
+        }
         "load_wire_page" => wire_page::load_wire_page(engine, req),
         "build_thread_outline" => wire_page::build_thread_outline_native(engine, req),
         "sync_run" => sync_ops::sync_run(engine, req),
@@ -387,7 +401,10 @@ pub extern "C" fn sunday_core_db_call(
 
     match result {
         Ok(bytes) => alloc_out(bytes, out_len),
-        Err(_) => alloc_out(err_response("panic", "unexpected panic in sunday-core-db"), out_len),
+        Err(_) => alloc_out(
+            err_response("panic", "unexpected panic in sunday-core-db"),
+            out_len,
+        ),
     }
 }
 

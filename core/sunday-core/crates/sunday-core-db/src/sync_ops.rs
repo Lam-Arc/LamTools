@@ -34,7 +34,11 @@ fn row_to_sync_dict(
     created_at_raw: String,
     fallback_iso: &str,
 ) -> Value {
-    let ws = if row_ws.is_empty() { fallback_ws.to_string() } else { row_ws };
+    let ws = if row_ws.is_empty() {
+        fallback_ws.to_string()
+    } else {
+        row_ws
+    };
     let ev_type = if event_type.is_empty() {
         format!("{entity_type}.{operation}")
     } else {
@@ -68,7 +72,11 @@ fn row_to_sync_dict(
 
 fn query_current_cursor(conn: &Connection, workspace_id: &str) -> Result<i64, DbError> {
     let val: i64 = if workspace_id.is_empty() {
-        conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM core_sync_changes", [], |r| r.get(0))?
+        conn.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM core_sync_changes",
+            [],
+            |r| r.get(0),
+        )?
     } else {
         conn.query_row(
             "SELECT COALESCE(MAX(seq), 0) FROM core_sync_changes WHERE workspace_id = ?1",
@@ -94,7 +102,11 @@ fn query_oldest_cursor(conn: &Connection, workspace_id: &str) -> Result<Option<i
 
 fn query_snapshot_revision(conn: &Connection) -> Result<i64, DbError> {
     let val: i64 = conn
-        .query_row("SELECT COALESCE(MAX(revision), 0) FROM core_thread_snapshots", [], |r| r.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(revision), 0) FROM core_thread_snapshots",
+            [],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
     Ok(val)
 }
@@ -148,10 +160,17 @@ fn query_list_after(
 }
 
 pub fn sync_prune(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let limit = req.get("keep").and_then(|v| v.as_i64()).unwrap_or(50_000).max(1);
+    let limit = req
+        .get("keep")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(50_000)
+        .max(1);
     let deleted = engine.write_tx(|conn| {
-        let newest: i64 = conn
-            .query_row("SELECT COALESCE(MAX(seq), 0) FROM core_sync_changes", [], |r| r.get(0))?;
+        let newest: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM core_sync_changes",
+            [],
+            |r| r.get(0),
+        )?;
         let cutoff = newest - limit;
         if cutoff <= 0 {
             return Ok(0_i64);
@@ -163,7 +182,10 @@ pub fn sync_prune(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
 }
 
 pub fn sync_cursors(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let ws = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let ws = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     engine.read(|conn| {
         let current = query_current_cursor(conn, ws)?;
         let oldest = query_oldest_cursor(conn, ws)?;
@@ -177,7 +199,10 @@ pub fn sync_cursors(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
 }
 
 pub fn sync_list_after(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let ws = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let ws = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let cursor = req.get("cursor").and_then(|v| v.as_i64()).unwrap_or(0);
     let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(500);
     let now_iso = req.get("now_iso").and_then(|v| v.as_str()).unwrap_or("");
@@ -186,12 +211,18 @@ pub fn sync_list_after(engine: &DbEngine, req: &Value) -> Result<Value, DbError>
 }
 
 pub fn sync_get_change(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let ws = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let ws = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let change_id = req
         .get("change_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| DbError::Invalid("change_id required".into()))?;
-    let header_only = req.get("header_only").and_then(|v| v.as_bool()).unwrap_or(false);
+    let header_only = req
+        .get("header_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let now_iso = req.get("now_iso").and_then(|v| v.as_str()).unwrap_or("");
 
     engine.read(|conn| {
@@ -272,8 +303,13 @@ pub fn sync_get_change(engine: &DbEngine, req: &Value) -> Result<Value, DbError>
 }
 
 pub fn sync_run(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
-    let ws = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
-    let cursor_opt = req.get("cursor").and_then(|v| if v.is_null() { None } else { v.as_i64() });
+    let ws = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let cursor_opt = req
+        .get("cursor")
+        .and_then(|v| if v.is_null() { None } else { v.as_i64() });
     let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(500);
     let now_iso = req.get("now_iso").and_then(|v| v.as_str()).unwrap_or("");
 

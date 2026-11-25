@@ -101,7 +101,13 @@ impl EngineCache {
         }
     }
 
-    pub fn put_summary(&mut self, thread_id: String, revision: i64, updated_at: String, summary: Value) {
+    pub fn put_summary(
+        &mut self,
+        thread_id: String,
+        revision: i64,
+        updated_at: String,
+        summary: Value,
+    ) {
         if let Some(pos) = self.summaries_lru.iter().position(|id| id == &thread_id) {
             self.summaries_lru.remove(pos);
         } else {
@@ -123,7 +129,12 @@ impl EngineCache {
         );
     }
 
-    pub fn get_metadata(&mut self, thread_id: &str, revision: i64, snapshot_seq: i64) -> Option<CachedSnapshotMeta> {
+    pub fn get_metadata(
+        &mut self,
+        thread_id: &str,
+        revision: i64,
+        snapshot_seq: i64,
+    ) -> Option<CachedSnapshotMeta> {
         let entry = self.metadata.get(thread_id)?.clone();
         if entry.revision == revision && entry.snapshot_seq == snapshot_seq {
             if let Some(pos) = self.metadata_lru.iter().position(|id| id == thread_id) {
@@ -191,7 +202,13 @@ impl EngineCache {
         );
     }
 
-    pub fn get_outline(&self, thread_id: &str, char_limit: i64, revision: i64, snapshot_seq: i64) -> Option<Value> {
+    pub fn get_outline(
+        &self,
+        thread_id: &str,
+        char_limit: i64,
+        revision: i64,
+        snapshot_seq: i64,
+    ) -> Option<Value> {
         let key = (thread_id.to_string(), char_limit);
         let entry = self.outlines.get(&key)?;
         if entry.revision == revision && entry.snapshot_seq == snapshot_seq {
@@ -201,7 +218,14 @@ impl EngineCache {
         }
     }
 
-    pub fn put_outline(&mut self, thread_id: String, char_limit: i64, revision: i64, snapshot_seq: i64, outline: Value) {
+    pub fn put_outline(
+        &mut self,
+        thread_id: String,
+        char_limit: i64,
+        revision: i64,
+        snapshot_seq: i64,
+        outline: Value,
+    ) {
         let key = (thread_id, char_limit);
         if let Some(pos) = self.outlines_lru.iter().position(|k| k == &key) {
             self.outlines_lru.remove(pos);
@@ -319,7 +343,10 @@ impl ReadPool {
                     }
                 }
             }
-            guard = self.available.wait(guard).unwrap_or_else(|e| e.into_inner());
+            guard = self
+                .available
+                .wait(guard)
+                .unwrap_or_else(|e| e.into_inner());
         }
     }
 
@@ -477,7 +504,9 @@ impl DbEngine {
                             if let Err(err) = conn.execute_batch("COMMIT") {
                                 let _ = conn.execute_batch("ROLLBACK");
                                 if is_busy_err(&err) && attempt < WRITE_RETRY_MS.len() {
-                                    std::thread::sleep(Duration::from_millis(WRITE_RETRY_MS[attempt]));
+                                    std::thread::sleep(Duration::from_millis(
+                                        WRITE_RETRY_MS[attempt],
+                                    ));
                                     continue;
                                 }
                                 return Err(DbError::Sqlite(err));
@@ -488,7 +517,9 @@ impl DbEngine {
                             let _ = conn.execute_batch("ROLLBACK");
                             if let DbError::Sqlite(ref sq_err) = err {
                                 if is_busy_err(sq_err) && attempt < WRITE_RETRY_MS.len() {
-                                    std::thread::sleep(Duration::from_millis(WRITE_RETRY_MS[attempt]));
+                                    std::thread::sleep(Duration::from_millis(
+                                        WRITE_RETRY_MS[attempt],
+                                    ));
                                     continue;
                                 }
                             }
@@ -524,10 +555,20 @@ impl DbEngine {
 
     pub fn stats_json(&self) -> Value {
         let (meta_len, meta_bytes, outline_len, summary_len) = match self.cache.read() {
-            Ok(c) => (c.metadata.len(), c.metadata_bytes, c.outlines.len(), c.summaries.len()),
+            Ok(c) => (
+                c.metadata.len(),
+                c.metadata_bytes,
+                c.outlines.len(),
+                c.summaries.len(),
+            ),
             Err(e) => {
                 let c = e.into_inner();
-                (c.metadata.len(), c.metadata_bytes, c.outlines.len(), c.summaries.len())
+                (
+                    c.metadata.len(),
+                    c.metadata_bytes,
+                    c.outlines.len(),
+                    c.summaries.len(),
+                )
             }
         };
         serde_json::json!({
@@ -609,7 +650,7 @@ fn ensure_hotpath_schema(conn: &Connection) -> Result<(), DbError> {
             PRIMARY KEY (thread_id, turn_id)
         );
         CREATE INDEX IF NOT EXISTS idx_core_snapshot_turns_status
-            ON core_thread_snapshot_turns (thread_id, status);"
+            ON core_thread_snapshot_turns (thread_id, status);",
     )?;
     let has_events_table: bool = conn
         .query_row(

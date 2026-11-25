@@ -13,7 +13,8 @@ use std::sync::atomic::Ordering;
 pub(crate) const CORE_RUN_ITEM_METHOD: &str = "core/runItem";
 const TERMINAL_TURN_STATUSES: &[&str] = &["completed", "failed", "cancelled", "skipped"];
 const TERMINAL_ERROR_STATUSES: &[&str] = &["failed", "cancelled", "error"];
-const TERMINAL_ITEM_STATUSES: &[&str] = &["completed", "done", "ok", "failed", "error", "cancelled"];
+const TERMINAL_ITEM_STATUSES: &[&str] =
+    &["completed", "done", "ok", "failed", "error", "cancelled"];
 const ACTIVE_TURN_STATUSES: &[&str] = &["queued", "running", "waiting", "stopping", "interrupting"];
 const APPROVAL_REQUEST_FACTS: &[&str] = &[
     "request_id",
@@ -51,7 +52,13 @@ const CONTEXT_METRIC_KEYS: &[&str] = &[
 const SLIM_ITEM_THRESHOLD_BYTES: usize = 1024;
 
 // user:“继续”+(超过阈值的条目若在 core_app_events 中有完整源事件，则快照条目表只存轻量元数据与 _body_ref 引用，读时批量回填，消灭 2-3 倍写放大)
-fn maybe_slim_snapshot_item(conn: &Connection, thread_id: &str, item_id: &str, item_val: &Value, raw_str: &str) -> String {
+fn maybe_slim_snapshot_item(
+    conn: &Connection,
+    thread_id: &str,
+    item_id: &str,
+    item_val: &Value,
+    raw_str: &str,
+) -> String {
     if raw_str.len() <= SLIM_ITEM_THRESHOLD_BYTES {
         return raw_str.to_string();
     }
@@ -134,7 +141,10 @@ pub(crate) fn empty_projection_state(thread_id: &str, member_defaults: Option<&V
         "core": empty_core_snapshot(thread_id),
         "status": "idle",
     });
-    if let (Some(dst), Some(src)) = (state.as_object_mut(), member_defaults.and_then(|v| v.as_object())) {
+    if let (Some(dst), Some(src)) = (
+        state.as_object_mut(),
+        member_defaults.and_then(|v| v.as_object()),
+    ) {
         for (k, v) in src {
             dst.insert(k.clone(), v.clone());
         }
@@ -190,16 +200,61 @@ impl Envelope {
         obj.insert("method".into(), json!(self.method));
         obj.insert("payload".into(), self.payload.clone());
         obj.insert("created_at".into(), json!(self.created_at_iso));
-        obj.insert("turn_id".into(), match &self.turn_id { Some(s) => json!(s), None => Value::Null });
-        obj.insert("item_id".into(), match &self.item_id { Some(s) => json!(s), None => Value::Null });
-        obj.insert("parent_item_id".into(), match &self.parent_item_id { Some(s) => json!(s), None => Value::Null });
-        obj.insert("client_message_id".into(), match &self.client_message_id { Some(s) => json!(s), None => Value::Null });
+        obj.insert(
+            "turn_id".into(),
+            match &self.turn_id {
+                Some(s) => json!(s),
+                None => Value::Null,
+            },
+        );
+        obj.insert(
+            "item_id".into(),
+            match &self.item_id {
+                Some(s) => json!(s),
+                None => Value::Null,
+            },
+        );
+        obj.insert(
+            "parent_item_id".into(),
+            match &self.parent_item_id {
+                Some(s) => json!(s),
+                None => Value::Null,
+            },
+        );
+        obj.insert(
+            "client_message_id".into(),
+            match &self.client_message_id {
+                Some(s) => json!(s),
+                None => Value::Null,
+            },
+        );
         obj.insert("workspace_id".into(), json!(self.workspace_id));
         obj.insert("entity_type".into(), json!(self.entity_type));
-        obj.insert("entity_id".into(), json!(if self.entity_id.is_empty() { &self.thread_id } else { &self.entity_id }));
-        obj.insert("event_seq".into(), json!(if self.event_seq != 0 { self.event_seq } else { self.seq }));
+        obj.insert(
+            "entity_id".into(),
+            json!(if self.entity_id.is_empty() {
+                &self.thread_id
+            } else {
+                &self.entity_id
+            }),
+        );
+        obj.insert(
+            "event_seq".into(),
+            json!(if self.event_seq != 0 {
+                self.event_seq
+            } else {
+                self.seq
+            }),
+        );
         obj.insert("revision".into(), json!(self.revision));
-        obj.insert("event_type".into(), json!(if self.event_type.is_empty() { &self.method } else { &self.event_type }));
+        obj.insert(
+            "event_type".into(),
+            json!(if self.event_type.is_empty() {
+                &self.method
+            } else {
+                &self.event_type
+            }),
+        );
         if self.seq != 0 {
             obj.insert("seq".into(), json!(self.seq));
         }
@@ -250,7 +305,10 @@ fn already_projected(state: &Value, event_id: &str, seq: i64) -> bool {
     if core_seen {
         return true;
     }
-    let snap_seq = state.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    let snap_seq = state
+        .get("snapshot_seq")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let core_seq = state
         .get("core")
         .and_then(|c| c.get("snapshot_seq"))
@@ -306,7 +364,8 @@ fn merge_dict_values(current: Option<&Value>, incoming: &Map<String, Value>) -> 
             .unwrap_or(0.0);
         denom += inp;
     }
-    if incoming.contains_key("cached_tokens") || result.contains_key("cache_reported_input_tokens") {
+    if incoming.contains_key("cached_tokens") || result.contains_key("cache_reported_input_tokens")
+    {
         if let Some(n) = serde_json::Number::from_f64(denom) {
             result.insert("cache_reported_input_tokens".into(), Value::Number(n));
         }
@@ -336,17 +395,33 @@ fn typed_input_parts_text(parts: &[Value]) -> String {
     pieces.trim().to_string()
 }
 
-fn is_context_metrics_event(kind: &str, payload: &Map<String, Value>, usage: &Map<String, Value>) -> bool {
+fn is_context_metrics_event(
+    kind: &str,
+    payload: &Map<String, Value>,
+    usage: &Map<String, Value>,
+) -> bool {
     if payload.get("replace").and_then(|v| v.as_bool()) == Some(true) {
         return true;
     }
-    if kind == "status" && payload.get("runtime_metrics").map(|v| !v.is_null()).unwrap_or(false) {
+    if kind == "status"
+        && payload
+            .get("runtime_metrics")
+            .map(|v| !v.is_null())
+            .unwrap_or(false)
+    {
         return true;
     }
-    !usage.is_empty() && usage.keys().any(|k| CONTEXT_METRIC_KEYS.contains(&k.as_str()))
+    !usage.is_empty()
+        && usage
+            .keys()
+            .any(|k| CONTEXT_METRIC_KEYS.contains(&k.as_str()))
 }
 
-fn is_terminal_error_event(item_id: &str, payload: &Map<String, Value>, metadata: &Map<String, Value>) -> bool {
+fn is_terminal_error_event(
+    item_id: &str,
+    payload: &Map<String, Value>,
+    metadata: &Map<String, Value>,
+) -> bool {
     let payload_type = payload
         .get("type")
         .and_then(|v| v.as_str())
@@ -380,9 +455,8 @@ fn has_open_request(state: &Value) -> bool {
         .get("requests")
         .and_then(|r| r.as_object())
         .map(|reqs| {
-            reqs.values().any(|r| {
-                r.get("status").and_then(|s| s.as_str()) == Some("open")
-            })
+            reqs.values()
+                .any(|r| r.get("status").and_then(|s| s.as_str()) == Some("open"))
         })
         .unwrap_or(false)
 }
@@ -418,12 +492,23 @@ fn reconcile_terminal_requests_core(state: &mut Value) {
         if req_obj.get("status").and_then(|s| s.as_str()) != Some("open") {
             continue;
         }
-        if req_obj.get("sub_agent").map(|v| v.is_object()).unwrap_or(false) {
+        if req_obj
+            .get("sub_agent")
+            .map(|v| v.is_object())
+            .unwrap_or(false)
+        {
             continue;
         }
-        let tid = req_obj.get("turn_id").and_then(|v| v.as_str()).unwrap_or("");
+        let tid = req_obj
+            .get("turn_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if let Some(term_st) = terminal_statuses.get(tid) {
-            let new_st = if term_st == "cancelled" { "cancelled" } else { "resolved" };
+            let new_st = if term_st == "cancelled" {
+                "cancelled"
+            } else {
+                "resolved"
+            };
             req_obj.insert("status".into(), json!(new_st));
             req_obj.insert("terminal_turn_status".into(), json!(term_st));
         }
@@ -533,7 +618,10 @@ fn upsert_core_turn<'a>(
     if turn_id.is_empty() {
         return None;
     }
-    let snap_seq = state.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    let snap_seq = state
+        .get("snapshot_seq")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let root = state.as_object_mut()?;
     let turns = root
         .entry("turns".to_string())
@@ -548,7 +636,10 @@ fn upsert_core_turn<'a>(
     });
     let turn = entry.as_object_mut()?;
     turn.insert("last_kind".into(), json!(kind));
-    turn.insert("last_seq".into(), json!(if seq != 0 { seq } else { snap_seq }));
+    turn.insert(
+        "last_seq".into(),
+        json!(if seq != 0 { seq } else { snap_seq }),
+    );
     if !run_id.is_empty() {
         turn.insert("run_id".into(), json!(run_id));
     }
@@ -572,10 +663,17 @@ fn upsert_core_item(
     let item_id = if !raw_item_id.is_empty() {
         raw_item_id.to_string()
     } else {
-        let scope = if !turn_id.is_empty() { turn_id } else { thread_id };
+        let scope = if !turn_id.is_empty() {
+            turn_id
+        } else {
+            thread_id
+        };
         format!("{scope}:{kind}:{event_id}")
     };
-    let snap_seq = state.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    let snap_seq = state
+        .get("snapshot_seq")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
 
     // Duplicate approval_request on a terminal item does not demote it.
     if kind == "approval_request" {
@@ -584,9 +682,15 @@ fn upsert_core_item(
             .and_then(|i| i.get(&item_id))
             .and_then(|i| i.as_object())
         {
-            let cur_st = existing.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            let cur_st = existing
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
             if TERMINAL_ITEM_STATUSES.contains(&cur_st) {
-                let prev_seq = existing.get("last_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+                let prev_seq = existing
+                    .get("last_seq")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 if let Some(mut_existing) = state
                     .get_mut("items")
                     .and_then(|i| i.get_mut(&item_id))
@@ -603,7 +707,10 @@ fn upsert_core_item(
         return item_id;
     };
     let item_seq = seq;
-    let is_server_req = matches!(kind, "approval_request" | "approval_response" | "interaction_update");
+    let is_server_req = matches!(
+        kind,
+        "approval_request" | "approval_response" | "interaction_update"
+    );
 
     {
         let items = root
@@ -632,7 +739,10 @@ fn upsert_core_item(
                     }
                 }
                 item.insert("last_kind".into(), json!(kind));
-                item.insert("last_seq".into(), json!(if seq != 0 { seq } else { snap_seq }));
+                item.insert(
+                    "last_seq".into(),
+                    json!(if seq != 0 { seq } else { snap_seq }),
+                );
                 item.insert("status".into(), json!(status));
 
                 if !payload.is_empty() {
@@ -672,7 +782,8 @@ fn upsert_core_item(
                         {
                             deltas.push(Value::String(delta.to_string()));
                         }
-                        let cur_content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        let cur_content =
+                            item.get("content").and_then(|v| v.as_str()).unwrap_or("");
                         item.insert("content".into(), json!(format!("{cur_content}{delta}")));
                     }
                 } else if let Some(c) = payload
@@ -723,7 +834,11 @@ fn upsert_core_item(
             .and_then(|v| v.as_object())
             .map(|m| {
                 m.iter()
-                    .filter_map(|(k, v)| v.get("seq").and_then(|s| s.as_i64()).map(|n| (k.clone(), n)))
+                    .filter_map(|(k, v)| {
+                        v.get("seq")
+                            .and_then(|s| s.as_i64())
+                            .map(|n| (k.clone(), n))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -748,7 +863,10 @@ fn upsert_core_item(
             }
             order.insert(pos, Value::String(item_id.clone()));
         }
-        if let Some(sm) = root.get_mut("_item_seq_map").and_then(|v| v.as_object_mut()) {
+        if let Some(sm) = root
+            .get_mut("_item_seq_map")
+            .and_then(|v| v.as_object_mut())
+        {
             sm.insert(item_id.clone(), json!(item_seq));
         }
     } else if let Some(item) = root
@@ -756,7 +874,8 @@ fn upsert_core_item(
         .and_then(|i| i.get_mut(&item_id))
         .and_then(|i| i.as_object_mut())
     {
-        item.entry("seq".to_string()).or_insert_with(|| json!(item_seq));
+        item.entry("seq".to_string())
+            .or_insert_with(|| json!(item_seq));
     }
 
     item_id
@@ -784,16 +903,29 @@ fn close_turn_items(state: &mut Value, turn_id: &str, status: &str) {
         if is_sub_agent_child_item(item_obj) {
             continue;
         }
-        let cur = item_obj.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        let cur = item_obj
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
         if !TERMINAL_ITEM_STATUSES.contains(&cur) {
             item_obj.insert("status".into(), json!(status));
         }
     }
 }
 
-fn interaction_matches(item: &Map<String, Value>, request_id: &str, payload: &Map<String, Value>) -> bool {
-    let p_int = payload.get("interaction_id").and_then(|v| v.as_str()).unwrap_or("");
-    let p_tc = payload.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+fn interaction_matches(
+    item: &Map<String, Value>,
+    request_id: &str,
+    payload: &Map<String, Value>,
+) -> bool {
+    let p_int = payload
+        .get("interaction_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let p_tc = payload
+        .get("tool_call_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     for key in ["interaction_id", "request_id", "tool_call_id"] {
         let val = item.get(key).and_then(|v| v.as_str()).unwrap_or("");
         if val == request_id || val == p_int || val == p_tc {
@@ -803,8 +935,15 @@ fn interaction_matches(item: &Map<String, Value>, request_id: &str, payload: &Ma
     false
 }
 
-fn remove_interaction_from_pools(state: &mut Value, request_id: &str, payload: &Map<String, Value>) {
-    for target in [Some(state as *mut Value), state.get_mut("core").map(|v| v as *mut Value)] {
+fn remove_interaction_from_pools(
+    state: &mut Value,
+    request_id: &str,
+    payload: &Map<String, Value>,
+) {
+    for target in [
+        Some(state as *mut Value),
+        state.get_mut("core").map(|v| v as *mut Value),
+    ] {
         if let Some(ptr) = target {
             let container = unsafe { &mut *ptr };
             if let Some(pool) = container
@@ -822,7 +961,11 @@ fn remove_interaction_from_pools(state: &mut Value, request_id: &str, payload: &
     }
 }
 
-fn apply_approval_response_core(state: &mut Value, payload: &Map<String, Value>, raw_item_id: &str) {
+fn apply_approval_response_core(
+    state: &mut Value,
+    payload: &Map<String, Value>,
+    raw_item_id: &str,
+) {
     let request_id = payload
         .get("request_id")
         .and_then(|v| v.as_str())
@@ -838,10 +981,11 @@ fn apply_approval_response_core(state: &mut Value, payload: &Map<String, Value>,
         .filter(|s| !s.is_empty())
         .unwrap_or("resolved")
         .to_string();
-    if let Some(requests) = state
-        .as_object_mut()
-        .and_then(|r| r.entry("requests".to_string()).or_insert_with(|| json!({})).as_object_mut())
-    {
+    if let Some(requests) = state.as_object_mut().and_then(|r| {
+        r.entry("requests".to_string())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    }) {
         let req_val = requests
             .entry(request_id.clone())
             .or_insert_with(|| json!({ "request_id": request_id }));
@@ -887,7 +1031,11 @@ fn apply_approval_response_core(state: &mut Value, payload: &Map<String, Value>,
     remove_interaction_from_pools(state, &request_id, payload);
 }
 
-fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>, raw_item_id: &str) {
+fn apply_interaction_update_core(
+    state: &mut Value,
+    payload: &Map<String, Value>,
+    raw_item_id: &str,
+) {
     let interaction_id = payload
         .get("interaction_id")
         .or_else(|| payload.get("request_id"))
@@ -898,8 +1046,14 @@ fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>
     if interaction_id.is_empty() {
         return;
     }
-    let req_id_str = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
-    let int_id_str = payload.get("interaction_id").and_then(|v| v.as_str()).unwrap_or("");
+    let req_id_str = payload
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let int_id_str = payload
+        .get("interaction_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if let Some(existing_reqs) = state.get("requests").and_then(|v| v.as_object()) {
         for key in [interaction_id.as_str(), req_id_str, int_id_str] {
             if key.is_empty() {
@@ -921,8 +1075,16 @@ fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>
         .or_else(|| payload.get("lifecycle"))
         .and_then(|v| v.as_str())
         .unwrap_or("appearing");
-    let status = if lifecycle == "processing" { "processing" } else { "open" };
-    let request_id = if req_id_str.is_empty() { interaction_id.clone() } else { req_id_str.to_string() };
+    let status = if lifecycle == "processing" {
+        "processing"
+    } else {
+        "open"
+    };
+    let request_id = if req_id_str.is_empty() {
+        interaction_id.clone()
+    } else {
+        req_id_str.to_string()
+    };
     let item = json!({
         "interaction_id": interaction_id,
         "request_id": request_id,
@@ -942,13 +1104,17 @@ fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>
         "project_id": payload.get("project_id").and_then(|v| v.as_str()).unwrap_or(""),
     });
 
-    for ptr in [Some(state as *mut Value), state.get_mut("core").map(|v| v as *mut Value)] {
+    for ptr in [
+        Some(state as *mut Value),
+        state.get_mut("core").map(|v| v as *mut Value),
+    ] {
         if let Some(p) = ptr {
             let container = unsafe { &mut *p };
-            if let Some(pool) = container
-                .as_object_mut()
-                .and_then(|m| m.entry("interactions".to_string()).or_insert_with(|| json!([])).as_array_mut())
-            {
+            if let Some(pool) = container.as_object_mut().and_then(|m| {
+                m.entry("interactions".to_string())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+            }) {
                 let mut replaced = false;
                 for existing in pool.iter_mut() {
                     if let Some(ex_obj) = existing.as_object() {
@@ -959,7 +1125,9 @@ fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>
                                     merged.insert(k.clone(), v.clone());
                                 }
                                 if !item_obj.get("options").map(is_truthy_json).unwrap_or(false) {
-                                    if let Some(old_opts) = ex_obj.get("options").filter(|v| is_truthy_json(v)) {
+                                    if let Some(old_opts) =
+                                        ex_obj.get("options").filter(|v| is_truthy_json(v))
+                                    {
                                         merged.insert("options".into(), old_opts.clone());
                                     }
                                 }
@@ -977,10 +1145,11 @@ fn apply_interaction_update_core(state: &mut Value, payload: &Map<String, Value>
         }
     }
 
-    if let Some(requests) = state
-        .as_object_mut()
-        .and_then(|r| r.entry("requests".to_string()).or_insert_with(|| json!({})).as_object_mut())
-    {
+    if let Some(requests) = state.as_object_mut().and_then(|r| {
+        r.entry("requests".to_string())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    }) {
         let req = requests
             .entry(request_id.clone())
             .or_insert_with(|| json!({ "request_id": request_id }))
@@ -1012,10 +1181,11 @@ fn apply_artifact_core(
         Vec::new()
     };
     let has_event_artifacts = !artifacts.is_empty();
-    let Some(reg) = state
-        .as_object_mut()
-        .and_then(|r| r.entry("artifacts".to_string()).or_insert_with(|| json!({})).as_object_mut())
-    else {
+    let Some(reg) = state.as_object_mut().and_then(|r| {
+        r.entry("artifacts".to_string())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    }) else {
         return;
     };
     for art in fallback {
@@ -1027,7 +1197,11 @@ fn apply_artifact_core(
             .or_else(|| art_obj.get("id"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(if !item_id.is_empty() { item_id } else { event_id })
+            .unwrap_or(if !item_id.is_empty() {
+                item_id
+            } else {
+                event_id
+            })
             .to_string();
         let mut copy = art_obj.clone();
         if let Some(meta) = copy.get_mut("metadata").and_then(|m| m.as_object_mut()) {
@@ -1040,7 +1214,11 @@ fn apply_artifact_core(
     }
 }
 
-pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val: &Value, env_seq: i64) {
+pub(crate) fn apply_run_item_event_in_place_core(
+    state: &mut Value,
+    payload_val: &Value,
+    env_seq: i64,
+) {
     let Some(ev) = payload_val.as_object() else {
         return;
     };
@@ -1055,7 +1233,10 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     let seq = ev.get("seq").and_then(|v| v.as_i64()).unwrap_or(env_seq);
     if let Some(root) = state.as_object_mut() {
         root.insert("thread_id".into(), json!(thread_id));
-        let prev = root.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let prev = root
+            .get("snapshot_seq")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let mut next_seq = prev.max(seq);
         if seq == 0 {
             next_seq += 1;
@@ -1064,11 +1245,17 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     }
 
     let kind = ev.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let status = ev.get("status").and_then(|v| v.as_str()).unwrap_or("running");
+    let status = ev
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("running");
     let turn_id = ev.get("turn_id").and_then(|v| v.as_str()).unwrap_or("");
     let run_id = ev.get("run_id").and_then(|v| v.as_str()).unwrap_or("");
     let item_id = ev.get("item_id").and_then(|v| v.as_str()).unwrap_or("");
-    let parent_item_id = ev.get("parent_item_id").and_then(|v| v.as_str()).unwrap_or("");
+    let parent_item_id = ev
+        .get("parent_item_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let inner_payload = ev
         .get("payload")
         .and_then(|v| v.as_object())
@@ -1115,7 +1302,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
                     .and_then(|ts| ts.get_mut(turn_id))
                     .and_then(|t| t.as_object_mut())
                 {
-                    let mut merged = t.get("usage").and_then(|u| u.as_object()).cloned().unwrap_or_default();
+                    let mut merged = t
+                        .get("usage")
+                        .and_then(|u| u.as_object())
+                        .cloned()
+                        .unwrap_or_default();
                     for (k, v) in &usage {
                         merged.insert(k.clone(), v.clone());
                     }
@@ -1143,7 +1334,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
                 .and_then(|ts| ts.get_mut(turn_id))
                 .and_then(|t| t.as_object_mut())
             {
-                let mut merged = t.get("usage").and_then(|u| u.as_object()).cloned().unwrap_or_default();
+                let mut merged = t
+                    .get("usage")
+                    .and_then(|u| u.as_object())
+                    .cloned()
+                    .unwrap_or_default();
                 for (k, v) in &usage {
                     merged.insert(k.clone(), v.clone());
                 }
@@ -1166,12 +1361,28 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             }
         }
         if matches!(st, "failed" | "cancelled" | "error")
-            && (inner_payload.get("message").map(is_truthy_json).unwrap_or(false)
-                || inner_payload.get("raw_end_reason").map(is_truthy_json).unwrap_or(false))
+            && (inner_payload
+                .get("message")
+                .map(is_truthy_json)
+                .unwrap_or(false)
+                || inner_payload
+                    .get("raw_end_reason")
+                    .map(is_truthy_json)
+                    .unwrap_or(false))
         {
             let iid = upsert_core_item(
-                state, event_id, thread_id, turn_id, parent_item_id, item_id, kind, status, seq,
-                &inner_payload, &artifacts, &usage,
+                state,
+                event_id,
+                thread_id,
+                turn_id,
+                parent_item_id,
+                item_id,
+                kind,
+                status,
+                seq,
+                &inner_payload,
+                &artifacts,
+                &usage,
             );
             if let Some(items_arr) = state
                 .get_mut("turns")
@@ -1203,12 +1414,28 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     if kind == "approval_response" {
         apply_approval_response_core(state, &inner_payload, item_id);
         let nested_child = !parent_item_id.is_empty()
-            || inner_payload.get("sub_agent").map(|v| v.is_object()).unwrap_or(false);
+            || inner_payload
+                .get("sub_agent")
+                .map(|v| v.is_object())
+                .unwrap_or(false);
         upsert_core_item(
-            state, event_id, thread_id, turn_id, parent_item_id, item_id, kind, status, seq,
-            &inner_payload, &artifacts, &usage,
+            state,
+            event_id,
+            thread_id,
+            turn_id,
+            parent_item_id,
+            item_id,
+            kind,
+            status,
+            seq,
+            &inner_payload,
+            &artifacts,
+            &usage,
         );
-        let snap_seq = state.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let snap_seq = state
+            .get("snapshot_seq")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         if let Some(t) = state
             .get_mut("turns")
             .and_then(|ts| ts.get_mut(turn_id))
@@ -1226,7 +1453,10 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
                 }
             }
             t.insert("last_kind".into(), json!(kind));
-            t.insert("last_seq".into(), json!(if seq != 0 { seq } else { snap_seq }));
+            t.insert(
+                "last_seq".into(),
+                json!(if seq != 0 { seq } else { snap_seq }),
+            );
             if !run_id.is_empty() {
                 t.insert("run_id".into(), json!(run_id));
             }
@@ -1240,7 +1470,10 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     }
 
     if kind == "usage" {
-        let snap_seq = state.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let snap_seq = state
+            .get("snapshot_seq")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let Some(turn) = upsert_core_turn(state, turn_id, kind, seq, run_id) else {
             return;
         };
@@ -1261,7 +1494,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             return;
         }
         if !usage.is_empty() {
-            let call_id = if !item_id.is_empty() { item_id } else { event_id };
+            let call_id = if !item_id.is_empty() {
+                item_id
+            } else {
+                event_id
+            };
             let call_seq = if seq != 0 { seq } else { snap_seq };
             let mut call = json!({
                 "id": call_id,
@@ -1313,12 +1550,18 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     if inner_payload.get("type").and_then(|v| v.as_str()) == Some("subAgentStatus") {
         if let Some(sa) = inner_payload.get("sub_agent").and_then(|v| v.as_object()) {
             if sa.get("status").and_then(|v| v.as_str()) == Some("deleted") {
-                if let Some(deleted) = state
-                    .as_object_mut()
-                    .and_then(|r| r.entry("deleted_agents".to_string()).or_insert_with(|| json!({})).as_object_mut())
-                {
+                if let Some(deleted) = state.as_object_mut().and_then(|r| {
+                    r.entry("deleted_agents".to_string())
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                }) {
                     for k in ["name", "agent", "session_id", "sub_session_id"] {
-                        if let Some(v) = sa.get(k).and_then(|s| s.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+                        if let Some(v) = sa
+                            .get(k)
+                            .and_then(|s| s.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
                             deleted.insert(v.to_string(), json!(true));
                         }
                     }
@@ -1336,14 +1579,21 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
         .unwrap_or("")
         .to_string();
     let nested_child = !parent_item_id.is_empty()
-        || inner_payload.get("sub_agent").map(|v| v.is_object()).unwrap_or(false);
+        || inner_payload
+            .get("sub_agent")
+            .map(|v| v.is_object())
+            .unwrap_or(false);
 
     if kind == "approval_request" {
         let req_id = inner_payload
             .get("request_id")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(if !item_id.is_empty() { item_id } else { event_id });
+            .unwrap_or(if !item_id.is_empty() {
+                item_id
+            } else {
+                event_id
+            });
         if let Some(st) = state
             .get("requests")
             .and_then(|r| r.get(req_id))
@@ -1357,8 +1607,18 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
     }
 
     let upserted_item_id = upsert_core_item(
-        state, event_id, thread_id, turn_id, parent_item_id, item_id, kind, status, seq,
-        &inner_payload, &artifacts, &usage,
+        state,
+        event_id,
+        thread_id,
+        turn_id,
+        parent_item_id,
+        item_id,
+        kind,
+        status,
+        seq,
+        &inner_payload,
+        &artifacts,
+        &usage,
     );
 
     if !terminal_turn_status.is_empty() && !nested_child {
@@ -1371,7 +1631,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
         }
         if let Some(t) = upsert_core_turn(state, turn_id, kind, seq, run_id) {
             if !item_id.is_empty() {
-                if let Some(arr) = t.entry("items".to_string()).or_insert_with(|| json!([])).as_array_mut() {
+                if let Some(arr) = t
+                    .entry("items".to_string())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                {
                     if !arr.iter().any(|x| x.as_str() == Some(item_id)) {
                         arr.push(Value::String(item_id.to_string()));
                     }
@@ -1399,12 +1663,17 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             .get("request_id")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(if !item_id.is_empty() { item_id } else { event_id })
+            .unwrap_or(if !item_id.is_empty() {
+                item_id
+            } else {
+                event_id
+            })
             .to_string();
-        if let Some(reqs) = state
-            .as_object_mut()
-            .and_then(|r| r.entry("requests".to_string()).or_insert_with(|| json!({})).as_object_mut())
-        {
+        if let Some(reqs) = state.as_object_mut().and_then(|r| {
+            r.entry("requests".to_string())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        }) {
             let mut rec = reqs
                 .get(&req_id)
                 .and_then(|v| v.as_object())
@@ -1425,7 +1694,10 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             rec.insert("turn_id".into(), json!(turn_id));
             let rec_val = Value::Object(rec);
             reqs.insert(req_id.clone(), rec_val.clone());
-            let tc_id = inner_payload.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+            let tc_id = inner_payload
+                .get("tool_call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if !tc_id.is_empty() && tc_id != req_id {
                 reqs.insert(tc_id.to_string(), rec_val);
             }
@@ -1499,7 +1771,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             return;
         };
         if !item_id.is_empty() {
-            if let Some(arr) = t.entry("items".to_string()).or_insert_with(|| json!([])).as_array_mut() {
+            if let Some(arr) = t
+                .entry("items".to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+            {
                 if !arr.iter().any(|x| x.as_str() == Some(item_id)) {
                     arr.push(Value::String(item_id.to_string()));
                 }
@@ -1513,7 +1789,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
 
     if kind == "approval_request" {
         if !nested_child {
-            if let Some(t) = state.get_mut("turns").and_then(|ts| ts.get_mut(turn_id)).and_then(|t| t.as_object_mut()) {
+            if let Some(t) = state
+                .get_mut("turns")
+                .and_then(|ts| ts.get_mut(turn_id))
+                .and_then(|t| t.as_object_mut())
+            {
                 t.insert("status".into(), json!("waiting"));
             }
             if let Some(root) = state.as_object_mut() {
@@ -1524,13 +1804,21 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
         && kind == "error"
         && is_terminal_error_event(item_id, &inner_payload, &metadata)
     {
-        if let Some(t) = state.get_mut("turns").and_then(|ts| ts.get_mut(turn_id)).and_then(|t| t.as_object_mut()) {
+        if let Some(t) = state
+            .get_mut("turns")
+            .and_then(|ts| ts.get_mut(turn_id))
+            .and_then(|t| t.as_object_mut())
+        {
             t.insert("status".into(), json!(status));
         }
         reconcile_terminal_requests_core(state);
         recompute_thread_status_core(state);
     } else if status == "waiting" {
-        if let Some(t) = state.get_mut("turns").and_then(|ts| ts.get_mut(turn_id)).and_then(|t| t.as_object_mut()) {
+        if let Some(t) = state
+            .get_mut("turns")
+            .and_then(|ts| ts.get_mut(turn_id))
+            .and_then(|t| t.as_object_mut())
+        {
             t.insert("status".into(), json!("waiting"));
         }
         if let Some(root) = state.as_object_mut() {
@@ -1544,7 +1832,11 @@ pub(crate) fn apply_run_item_event_in_place_core(state: &mut Value, payload_val:
             .and_then(|s| s.as_str())
             .unwrap_or("");
         if !TERMINAL_TURN_STATUSES.contains(&cur_turn_st) && cur_turn_st != "paused" {
-            if let Some(t) = state.get_mut("turns").and_then(|ts| ts.get_mut(turn_id)).and_then(|t| t.as_object_mut()) {
+            if let Some(t) = state
+                .get_mut("turns")
+                .and_then(|ts| ts.get_mut(turn_id))
+                .and_then(|t| t.as_object_mut())
+            {
                 t.insert("status".into(), json!("running"));
             }
             recompute_thread_status_core(state);
@@ -1561,10 +1853,11 @@ pub(crate) fn sync_turns_from_core(state: &mut Value, only_turn_id: Option<&str>
     else {
         return;
     };
-    let Some(turns) = state
-        .as_object_mut()
-        .and_then(|r| r.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut())
-    else {
+    let Some(turns) = state.as_object_mut().and_then(|r| {
+        r.entry("turns".to_string())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    }) else {
         return;
     };
     for (tid, ct_val) in core_turns {
@@ -1592,7 +1885,11 @@ pub(crate) fn sync_turns_from_core(state: &mut Value, only_turn_id: Option<&str>
                 .unwrap_or(0);
             t.insert("status".into(), json!(status));
             t.insert("last_seq".into(), json!(last_seq));
-            if let Some(run_id) = ct.get("run_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(run_id) = ct
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 t.insert("run_id".into(), json!(run_id));
             }
             if let Some(u) = ct.get("usage").filter(|v| v.is_object()) {
@@ -1659,7 +1956,13 @@ fn apply_queue_item(state: &mut Value, env: &Envelope, forced_status: Option<&st
         .item_id
         .as_deref()
         .filter(|s| !s.is_empty())
-        .or_else(|| payload.and_then(|p| p.get("queue_item_id").or_else(|| p.get("queueItemId")).and_then(|v| v.as_str())))
+        .or_else(|| {
+            payload.and_then(|p| {
+                p.get("queue_item_id")
+                    .or_else(|| p.get("queueItemId"))
+                    .and_then(|v| v.as_str())
+            })
+        })
         .map(str::trim)
         .unwrap_or("")
         .to_string();
@@ -1688,14 +1991,31 @@ fn apply_queue_item(state: &mut Value, env: &Envelope, forced_status: Option<&st
     }
     let status = forced_status
         .map(str::to_string)
-        .or_else(|| payload.and_then(|p| p.get("status")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string))
-        .or_else(|| current.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string))
+        .or_else(|| {
+            payload
+                .and_then(|p| p.get("status"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            current
+                .get("status")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "queued".into());
     let mode = payload
         .and_then(|p| p.get("mode"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .or_else(|| current.get("mode").and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
+        .or_else(|| {
+            current
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or("next_turn")
         .to_string();
     let input_val = payload
@@ -1711,7 +2031,10 @@ fn apply_queue_item(state: &mut Value, env: &Envelope, forced_status: Option<&st
     current.insert("seq".into(), json!(env.seq));
     current.insert("last_method".into(), json!(env.method));
 
-    if matches!(status.as_str(), "cancelled" | "deleted" | "dispatched" | "sent") {
+    if matches!(
+        status.as_str(),
+        "cancelled" | "deleted" | "dispatched" | "sent"
+    ) {
         queue.retain(|x| x.get("queue_item_id").and_then(|v| v.as_str()) != Some(qid.as_str()));
     } else if let Some(idx) = existing_idx {
         queue[idx] = Value::Object(current);
@@ -1729,14 +2052,21 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
     }
     if let Some(root) = state.as_object_mut() {
         root.insert("thread_id".into(), json!(env.thread_id));
-        let prev = root.get("snapshot_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let prev = root
+            .get("snapshot_seq")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         root.insert("snapshot_seq".into(), json!(prev.max(env.seq)));
     }
 
     match env.method.as_str() {
         "thread/started" => {
             let payload = env.payload.as_object();
-            let cur_status = state.get("status").and_then(|s| s.as_str()).unwrap_or("idle").to_string();
+            let cur_status = state
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("idle")
+                .to_string();
             let st = payload
                 .and_then(|p| p.get("status").and_then(|v| v.as_str()))
                 .filter(|s| !s.is_empty())
@@ -1765,7 +2095,13 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .turn_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("turn_id").or_else(|| p.get("turnId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("turn_id")
+                            .or_else(|| p.get("turnId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
@@ -1773,7 +2109,10 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 return;
             }
             if let Some(root) = state.as_object_mut() {
-                let turns = root.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut();
+                let turns = root
+                    .entry("turns".to_string())
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut();
                 if let Some(turns_map) = turns {
                     let mut turn = turns_map
                         .get(&turn_id)
@@ -1785,7 +2124,11 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                         .filter(|s| !s.is_empty())
                         .unwrap_or("running");
                     let work_root = payload
-                        .and_then(|p| p.get("work_root").or_else(|| p.get("workRoot")).and_then(|v| v.as_str()))
+                        .and_then(|p| {
+                            p.get("work_root")
+                                .or_else(|| p.get("workRoot"))
+                                .and_then(|v| v.as_str())
+                        })
                         .unwrap_or("");
                     turn.insert("turn_id".into(), json!(turn_id));
                     turn.insert("status".into(), json!(st));
@@ -1795,10 +2138,16 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                     turn.insert("created_at".into(), json!(env.created_at_iso));
                     turn.insert(
                         "input".into(),
-                        payload.and_then(|p| p.get("input")).cloned().unwrap_or(Value::Null),
+                        payload
+                            .and_then(|p| p.get("input"))
+                            .cloned()
+                            .unwrap_or(Value::Null),
                     );
                     turn.insert("work_root".into(), json!(work_root));
-                    if let Some(rs) = payload.and_then(|p| p.get("runtime_snapshot")).filter(|v| v.is_object()) {
+                    if let Some(rs) = payload
+                        .and_then(|p| p.get("runtime_snapshot"))
+                        .filter(|v| v.is_object())
+                    {
                         turn.insert("runtime_snapshot".into(), rs.clone());
                     }
                     if let Some(origin) = payload
@@ -1812,7 +2161,9 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                     turns_map.insert(turn_id, Value::Object(turn));
                 }
                 root.insert("status".into(), json!("running"));
-                let sess = root.entry("session".to_string()).or_insert_with(|| json!({}));
+                let sess = root
+                    .entry("session".to_string())
+                    .or_insert_with(|| json!({}));
                 if !sess.is_object() {
                     *sess = json!({});
                 }
@@ -1833,7 +2184,13 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .turn_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("turn_id").or_else(|| p.get("turnId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("turn_id")
+                            .or_else(|| p.get("turnId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
@@ -1841,10 +2198,14 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 return;
             }
             if let Some(root) = state.as_object_mut() {
-                if let Some(turns_map) = root.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut() {
-                    let entry = turns_map
-                        .entry(turn_id.clone())
-                        .or_insert_with(|| json!({ "turn_id": turn_id, "status": "running", "items": [] }));
+                if let Some(turns_map) = root
+                    .entry("turns".to_string())
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                {
+                    let entry = turns_map.entry(turn_id.clone()).or_insert_with(
+                        || json!({ "turn_id": turn_id, "status": "running", "items": [] }),
+                    );
                     if let Some(t) = entry.as_object_mut() {
                         t.entry("items".to_string()).or_insert_with(|| json!([]));
                         if let Some(p) = payload {
@@ -1868,7 +2229,11 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                         .entry("core".to_string())
                         .or_insert_with(|| empty_core_snapshot(&env.thread_id));
                     if let Some(core_obj) = core.as_object_mut() {
-                        if let Some(cturns) = core_obj.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut() {
+                        if let Some(cturns) = core_obj
+                            .entry("turns".to_string())
+                            .or_insert_with(|| json!({}))
+                            .as_object_mut()
+                        {
                             let ct = cturns
                                 .entry(turn_id.clone())
                                 .or_insert_with(|| json!({ "turn_id": turn_id, "items": [] }));
@@ -1876,7 +2241,10 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                                 ct_obj.insert("status".into(), json!("running"));
                                 ct_obj.insert(
                                     "run_id".into(),
-                                    payload.and_then(|p| p.get("run_id")).cloned().unwrap_or(Value::Null),
+                                    payload
+                                        .and_then(|p| p.get("run_id"))
+                                        .cloned()
+                                        .unwrap_or(Value::Null),
                                 );
                                 ct_obj.insert("last_seq".into(), json!(env.seq));
                             }
@@ -1893,7 +2261,13 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .item_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("item_id").or_else(|| p.get("itemId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("item_id")
+                            .or_else(|| p.get("itemId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
@@ -1904,67 +2278,113 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .turn_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("turn_id").or_else(|| p.get("turnId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("turn_id")
+                            .or_else(|| p.get("turnId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
             if let Some(root) = state.as_object_mut() {
-                if let Some(items_map) = root.entry("items".to_string()).or_insert_with(|| json!({})).as_object_mut() {
+                if let Some(items_map) = root
+                    .entry("items".to_string())
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                {
                     let mut item = items_map
                         .get(&item_id)
                         .and_then(|v| v.as_object())
                         .cloned()
                         .unwrap_or_default();
                     let prev_seq = item.get("seq").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let min_seq = if prev_seq > 0 { prev_seq.min(env.seq) } else { env.seq };
+                    let min_seq = if prev_seq > 0 {
+                        prev_seq.min(env.seq)
+                    } else {
+                        env.seq
+                    };
                     let content_val = payload
                         .and_then(|p| p.get("content"))
                         .cloned()
                         .or_else(|| item.get("content").cloned())
                         .unwrap_or_else(|| json!(""));
                     item.insert("item_id".into(), json!(item_id));
-                    item.insert("turn_id".into(), if turn_id.is_empty() { Value::Null } else { json!(turn_id) });
+                    item.insert(
+                        "turn_id".into(),
+                        if turn_id.is_empty() {
+                            Value::Null
+                        } else {
+                            json!(turn_id)
+                        },
+                    );
                     item.insert(
                         "parent_item_id".into(),
-                        match &env.parent_item_id { Some(s) => json!(s), None => Value::Null },
+                        match &env.parent_item_id {
+                            Some(s) => json!(s),
+                            None => Value::Null,
+                        },
                     );
                     item.insert(
                         "type".into(),
-                        json!(payload.and_then(|p| p.get("type").and_then(|v| v.as_str())).filter(|s| !s.is_empty()).unwrap_or("item")),
+                        json!(payload
+                            .and_then(|p| p.get("type").and_then(|v| v.as_str()))
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("item")),
                     );
                     item.insert(
                         "status".into(),
-                        json!(payload.and_then(|p| p.get("status").and_then(|v| v.as_str())).filter(|s| !s.is_empty()).unwrap_or("running")),
+                        json!(payload
+                            .and_then(|p| p.get("status").and_then(|v| v.as_str()))
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("running")),
                     );
                     item.insert("content".into(), content_val);
                     item.insert("seq".into(), json!(min_seq));
                     item.insert("last_seq".into(), json!(env.seq));
                     item.insert("last_method".into(), json!(env.method));
-                    item.entry("deltas".to_string()).or_insert_with(|| json!([]));
+                    item.entry("deltas".to_string())
+                        .or_insert_with(|| json!([]));
                     if let Some(origin) = payload
                         .and_then(|p| p.get("origin").and_then(|v| v.as_str()))
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
                         item.insert("origin".into(), json!(origin));
-                        if let Some(role) = payload.and_then(|p| p.get("role").and_then(|v| v.as_str())).filter(|s| !s.is_empty()) {
+                        if let Some(role) = payload
+                            .and_then(|p| p.get("role").and_then(|v| v.as_str()))
+                            .filter(|s| !s.is_empty())
+                        {
                             item.insert("role".into(), json!(role));
                         }
                     }
                     items_map.insert(item_id.clone(), Value::Object(item));
                 }
-                if let Some(order) = root.entry("item_order".to_string()).or_insert_with(|| json!([])).as_array_mut() {
+                if let Some(order) = root
+                    .entry("item_order".to_string())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                {
                     if !order.iter().any(|x| x.as_str() == Some(item_id.as_str())) {
                         order.push(Value::String(item_id.clone()));
                     }
                 }
                 if !turn_id.is_empty() {
-                    if let Some(turns_map) = root.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut() {
-                        let entry = turns_map
-                            .entry(turn_id.clone())
-                            .or_insert_with(|| json!({ "turn_id": turn_id, "status": "running", "items": [] }));
+                    if let Some(turns_map) = root
+                        .entry("turns".to_string())
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                    {
+                        let entry = turns_map.entry(turn_id.clone()).or_insert_with(
+                            || json!({ "turn_id": turn_id, "status": "running", "items": [] }),
+                        );
                         if let Some(t) = entry.as_object_mut() {
-                            if let Some(arr) = t.entry("items".to_string()).or_insert_with(|| json!([])).as_array_mut() {
+                            if let Some(arr) = t
+                                .entry("items".to_string())
+                                .or_insert_with(|| json!([]))
+                                .as_array_mut()
+                            {
                                 if !arr.iter().any(|x| x.as_str() == Some(item_id.as_str())) {
                                     arr.push(Value::String(item_id));
                                 }
@@ -1981,7 +2401,13 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .turn_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("turn_id").or_else(|| p.get("turnId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("turn_id")
+                            .or_else(|| p.get("turnId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
@@ -2005,13 +2431,14 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                     recompute_thread_status_core(state);
                     return;
                 }
-                if let Some(turns_map) = state
-                    .as_object_mut()
-                    .and_then(|r| r.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut())
-                {
-                    let entry = turns_map
-                        .entry(turn_id.clone())
-                        .or_insert_with(|| json!({ "turn_id": turn_id, "status": "running", "items": [] }));
+                if let Some(turns_map) = state.as_object_mut().and_then(|r| {
+                    r.entry("turns".to_string())
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                }) {
+                    let entry = turns_map.entry(turn_id.clone()).or_insert_with(
+                        || json!({ "turn_id": turn_id, "status": "running", "items": [] }),
+                    );
                     if let Some(t) = entry.as_object_mut() {
                         t.entry("items".to_string()).or_insert_with(|| json!([]));
                         if let Some(p) = payload {
@@ -2035,14 +2462,23 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .turn_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("turn_id").or_else(|| p.get("turnId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("turn_id")
+                            .or_else(|| p.get("turnId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
             if turn_id.is_empty() {
                 return;
             }
-            let existing = state.get("turns").and_then(|ts| ts.get(&turn_id)).and_then(|t| t.as_object());
+            let existing = state
+                .get("turns")
+                .and_then(|ts| ts.get(&turn_id))
+                .and_then(|t| t.as_object());
             let Some(ex) = existing else {
                 return;
             };
@@ -2070,17 +2506,22 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
         "serverRequest/resolved" => {
             let payload = env.payload.as_object();
             let request_id = payload
-                .and_then(|p| p.get("request_id").or_else(|| p.get("requestId")).and_then(|v| v.as_str()))
+                .and_then(|p| {
+                    p.get("request_id")
+                        .or_else(|| p.get("requestId"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
             if request_id.is_empty() {
                 return;
             }
-            if let Some(reqs) = state
-                .as_object_mut()
-                .and_then(|r| r.entry("requests".to_string()).or_insert_with(|| json!({})).as_object_mut())
-            {
+            if let Some(reqs) = state.as_object_mut().and_then(|r| {
+                r.entry("requests".to_string())
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+            }) {
                 let entry = reqs
                     .entry(request_id.clone())
                     .or_insert_with(|| json!({ "request_id": request_id }));
@@ -2091,12 +2532,16 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                         }
                     }
                     req.insert("status".into(), json!("resolved"));
-                    req.entry("turn_id".to_string()).or_insert_with(|| {
-                        match &env.turn_id { Some(s) => json!(s), None => Value::Null }
-                    });
-                    req.entry("item_id".to_string()).or_insert_with(|| {
-                        match &env.item_id { Some(s) => json!(s), None => Value::Null }
-                    });
+                    req.entry("turn_id".to_string())
+                        .or_insert_with(|| match &env.turn_id {
+                            Some(s) => json!(s),
+                            None => Value::Null,
+                        });
+                    req.entry("item_id".to_string())
+                        .or_insert_with(|| match &env.item_id {
+                            Some(s) => json!(s),
+                            None => Value::Null,
+                        });
                 }
             }
             recompute_thread_status_core(state);
@@ -2110,13 +2555,21 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 .item_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .or_else(|| payload.and_then(|p| p.get("queue_item_id").or_else(|| p.get("queueItemId")).and_then(|v| v.as_str())))
+                .or_else(|| {
+                    payload.and_then(|p| {
+                        p.get("queue_item_id")
+                            .or_else(|| p.get("queueItemId"))
+                            .and_then(|v| v.as_str())
+                    })
+                })
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
             if !qid.is_empty() {
                 if let Some(queue) = state.get_mut("queue").and_then(|q| q.as_array_mut()) {
-                    queue.retain(|x| x.get("queue_item_id").and_then(|v| v.as_str()) != Some(qid.as_str()));
+                    queue.retain(|x| {
+                        x.get("queue_item_id").and_then(|v| v.as_str()) != Some(qid.as_str())
+                    });
                 }
             }
         }
@@ -2137,7 +2590,10 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                 for item in queue.iter_mut() {
                     if let Some(obj) = item.as_object_mut() {
                         obj.remove("position");
-                        let qid = obj.get("queue_item_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let qid = obj
+                            .get("queue_item_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         if let Some(&pos) = pos_by_id.get(qid) {
                             obj.insert("position".into(), json!(pos));
                         }
@@ -2151,8 +2607,16 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
             let Some(pobj) = payload.as_object_mut() else {
                 return;
             };
-            let has_kind = pobj.get("kind").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-            let has_tid = pobj.get("thread_id").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+            let has_kind = pobj
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let has_tid = pobj
+                .get("thread_id")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
             if !has_kind || !has_tid {
                 return;
             }
@@ -2199,13 +2663,14 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        if let Some(turns_map) = state
-                            .as_object_mut()
-                            .and_then(|r| r.entry("turns".to_string()).or_insert_with(|| json!({})).as_object_mut())
-                        {
-                            let entry = turns_map
-                                .entry(wt_tid.to_string())
-                                .or_insert_with(|| json!({ "turn_id": wt_tid, "status": "running", "items": [] }));
+                        if let Some(turns_map) = state.as_object_mut().and_then(|r| {
+                            r.entry("turns".to_string())
+                                .or_insert_with(|| json!({}))
+                                .as_object_mut()
+                        }) {
+                            let entry = turns_map.entry(wt_tid.to_string()).or_insert_with(
+                                || json!({ "turn_id": wt_tid, "status": "running", "items": [] }),
+                            );
                             if let Some(t) = entry.as_object_mut() {
                                 t.insert("waiting_on_members".into(), json!(waiting));
                                 t.insert("running_members".into(), Value::Array(members));
@@ -2222,8 +2687,16 @@ fn projector_apply_in_place(state: &mut Value, env: &Envelope) {
 
 pub(crate) fn latest_active_turn_id(snapshot: &Value) -> Option<String> {
     let core = snapshot.get("core");
-    let has_status = snapshot.get("status").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)
-        || core.and_then(|c| c.get("status")).and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+    let has_status = snapshot
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        || core
+            .and_then(|c| c.get("status"))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
     if has_status && !ACTIVE_TURN_STATUSES.contains(&effective_thread_status(snapshot).as_str()) {
         return None;
     }
@@ -2233,12 +2706,17 @@ pub(crate) fn latest_active_turn_id(snapshot: &Value) -> Option<String> {
             merged.insert(k.clone(), v.clone());
         }
     }
-    if let Some(ct) = core.and_then(|c| c.get("turns")).and_then(|t| t.as_object()) {
+    if let Some(ct) = core
+        .and_then(|c| c.get("turns"))
+        .and_then(|t| t.as_object())
+    {
         for (k, v) in ct {
             merged.insert(k.clone(), v.clone());
         }
     }
-    let core_turns = core.and_then(|c| c.get("turns")).and_then(|t| t.as_object());
+    let core_turns = core
+        .and_then(|c| c.get("turns"))
+        .and_then(|t| t.as_object());
     let outer_turns = snapshot.get("turns").and_then(|t| t.as_object());
     let mut best_seq: i64 = -1;
     let mut best_id: Option<String> = None;
@@ -2304,7 +2782,12 @@ fn touched_item_ids(events: &[Envelope], core: &Value) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for env in events {
-        if let Some(iid) = env.payload.get("item_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(iid) = env
+            .payload
+            .get("item_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             if seen.insert(iid.to_string()) {
                 out.push(iid.to_string());
             }
@@ -2392,12 +2875,27 @@ pub fn append_and_project_batch(engine: &DbEngine, req: &Value) -> Result<Value,
         .unwrap_or(true);
     let expected_revision = req.get("expected_revision").and_then(|v| v.as_i64());
     let revision_thread_id = req.get("revision_thread_id").and_then(|v| v.as_str());
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
-    let emit_sync = req.get("emit_sync").and_then(|v| v.as_bool()).unwrap_or(true);
-    let return_state = req.get("return_state").and_then(|v| v.as_bool()).unwrap_or(false);
-    let require_new = req.get("require_new").and_then(|v| v.as_bool()).unwrap_or(false);
+    let workspace_id = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let emit_sync = req
+        .get("emit_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let return_state = req
+        .get("return_state")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let require_new = req
+        .get("require_new")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     // user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(支持 only_new 仅返回真正新写入的事件，并对已存在且已投影的重复事件短路跳过快照重写)
-    let only_new = req.get("only_new").and_then(|v| v.as_bool()).unwrap_or(false);
+    let only_new = req
+        .get("only_new")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let member_defaults = req.get("member_defaults");
     let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     let now_iso = format_iso_from_sqlite(now_str);

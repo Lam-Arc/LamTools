@@ -108,7 +108,10 @@ pub fn prune_orphan_turns(state: &mut Value) {
         .into_iter()
         .filter_map(|(tid, ev)| {
             if ev.statuses.is_empty()
-                || ev.statuses.iter().any(|s| !LIVE_RUNTIME_STATUSES.contains(&s.as_str()))
+                || ev
+                    .statuses
+                    .iter()
+                    .any(|s| !LIVE_RUNTIME_STATUSES.contains(&s.as_str()))
                 || ev.items > 0
                 || ev.kinds.len() != 1
                 || !ev.kinds.contains("approval_response")
@@ -182,14 +185,14 @@ pub fn prune_orphan_turns(state: &mut Value) {
 }
 
 fn reconcile_terminal_requests(container: &mut Map<String, Value>) {
-    let turns = container
-        .get("turns")
-        .and_then(|t| t.as_object())
-        .cloned();
+    let turns = container.get("turns").and_then(|t| t.as_object()).cloned();
     let Some(turns_map) = turns else {
         return;
     };
-    let Some(requests) = container.get_mut("requests").and_then(|r| r.as_object_mut()) else {
+    let Some(requests) = container
+        .get_mut("requests")
+        .and_then(|r| r.as_object_mut())
+    else {
         return;
     };
     for req in requests.values_mut() {
@@ -200,7 +203,10 @@ fn reconcile_terminal_requests(container: &mut Map<String, Value>) {
         if status != "open" && status != "pending" {
             continue;
         }
-        let turn_id = req_obj.get("turn_id").and_then(|t| t.as_str()).unwrap_or("");
+        let turn_id = req_obj
+            .get("turn_id")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
         if let Some(turn_status) = turns_map
             .get(turn_id)
             .and_then(|t| t.get("status"))

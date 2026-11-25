@@ -42,7 +42,12 @@ fn format_iso_timestamp(raw: &str) -> String {
 
 fn build_summary_from_snapshot(conn: &Connection, header: &RowHeader, mut state: Value) -> Value {
     if session_needs_repair(&state, &header.active_turn_id) {
-        let _ = crate::snapshots::hydrate_snapshot_turns_conn(conn, &header.thread_id, &mut state, None);
+        let _ = crate::snapshots::hydrate_snapshot_turns_conn(
+            conn,
+            &header.thread_id,
+            &mut state,
+            None,
+        );
         prune_orphan_turns(&mut state);
     }
     let session = state.get("session").and_then(|s| s.as_object());

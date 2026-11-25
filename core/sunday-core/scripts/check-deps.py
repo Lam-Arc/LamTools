@@ -59,6 +59,10 @@ ALLOWED = {
         "sunday-extensions",
         "sunday-host",
     },
+    # Native SQLite store for the Python host: the backend loads the cdylib
+    # directly, so it sits beside the core chain instead of inside it — no
+    # internal edges, and no core crate may link it as a library dependency.
+    "sunday-core-db": set(),
 }
 
 # Tokens that must never appear in a core crate.

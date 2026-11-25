@@ -4,7 +4,8 @@
 
 use crate::pool::{next_hex_id, DbEngine, DbError};
 use crate::projector::{
-    empty_projection_state, format_iso_from_sqlite, latest_active_turn_id, slim_registry_inline_images,
+    empty_projection_state, format_iso_from_sqlite, latest_active_turn_id,
+    slim_registry_inline_images,
 };
 use crate::repair::{effective_thread_status, prune_orphan_turns, session_needs_repair};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -97,16 +98,37 @@ pub fn session_create(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
         .get("session_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| DbError::Invalid("session_id required".into()))?;
-    let member_id = req.get("member_id").and_then(|v| v.as_str()).unwrap_or("core");
-    let title = req.get("title").and_then(|v| v.as_str()).unwrap_or("New Session");
+    let member_id = req
+        .get("member_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("core");
+    let title = req
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("New Session");
     let status = req.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
     let metadata = req.get("metadata").cloned().unwrap_or_else(|| json!({}));
-    let created_at_iso = req.get("created_at_iso").and_then(|v| v.as_str()).unwrap_or("");
-    let updated_at_str = req.get("updated_at_str").and_then(|v| v.as_str()).unwrap_or("");
+    let created_at_iso = req
+        .get("created_at_iso")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let updated_at_str = req
+        .get("updated_at_str")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let updated_at_iso = format_iso_from_sqlite(updated_at_str);
-    let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or(updated_at_str);
-    let emit_sync = req.get("emit_sync").and_then(|v| v.as_bool()).unwrap_or(false);
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let now_str = req
+        .get("now_str")
+        .and_then(|v| v.as_str())
+        .unwrap_or(updated_at_str);
+    let emit_sync = req
+        .get("emit_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let workspace_id = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let mut state = empty_projection_state(session_id, None);
     if let Some(root) = state.as_object_mut() {
@@ -121,7 +143,8 @@ pub fn session_create(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
                 "created_at": created_at_iso,
             }),
         );
-        root.entry("revision".to_string()).or_insert_with(|| json!(0));
+        root.entry("revision".to_string())
+            .or_insert_with(|| json!(0));
     }
     let revision = state.get("revision").and_then(|v| v.as_i64()).unwrap_or(0);
     let state_str = serde_json::to_string(&state)?;
@@ -186,7 +209,11 @@ fn build_repaired_state_fields(
     if session_needs_repair(&state, active_turn_id) {
         prune_orphan_turns(&mut state);
     }
-    let session_obj = state.get("session").and_then(|s| s.as_object()).cloned().unwrap_or_default();
+    let session_obj = state
+        .get("session")
+        .and_then(|s| s.as_object())
+        .cloned()
+        .unwrap_or_default();
     let member_id = session_obj
         .get("member_id")
         .and_then(|v| v.as_str())
@@ -199,7 +226,10 @@ fn build_repaired_state_fields(
         .unwrap_or("")
         .to_string();
     let status = effective_thread_status(&state);
-    let metadata = session_obj.get("metadata").cloned().unwrap_or_else(|| json!({}));
+    let metadata = session_obj
+        .get("metadata")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let created_at = session_obj
         .get("created_at")
         .and_then(|v| v.as_str())
@@ -208,7 +238,10 @@ fn build_repaired_state_fields(
     (state, member_id, title, status, metadata, created_at)
 }
 
-fn canonicalize_project_metadata(existing: &Map<String, Value>, requested: &Map<String, Value>) -> Result<Map<String, Value>, DbError> {
+fn canonicalize_project_metadata(
+    existing: &Map<String, Value>,
+    requested: &Map<String, Value>,
+) -> Result<Map<String, Value>, DbError> {
     let work_root = existing
         .get("work_root")
         .and_then(|v| v.as_str())
@@ -226,7 +259,10 @@ fn canonicalize_project_metadata(existing: &Map<String, Value>, requested: &Map<
     Ok(out)
 }
 
-fn merge_runtime_preferences(existing: &Map<String, Value>, requested: &Map<String, Value>) -> Map<String, Value> {
+fn merge_runtime_preferences(
+    existing: &Map<String, Value>,
+    requested: &Map<String, Value>,
+) -> Map<String, Value> {
     if requested.contains_key("runtime_preferences") {
         return requested.clone();
     }
@@ -250,7 +286,10 @@ pub fn session_update(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
         .get("session_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| DbError::Invalid("session_id required".into()))?;
-    let member_id = req.get("member_id").and_then(|v| v.as_str()).unwrap_or("core");
+    let member_id = req
+        .get("member_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("core");
     let title = req.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let status = req.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
     let req_metadata = req
@@ -258,12 +297,21 @@ pub fn session_update(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
-    let created_at_iso = req.get("created_at_iso").and_then(|v| v.as_str()).unwrap_or("");
+    let created_at_iso = req
+        .get("created_at_iso")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let expected_revision = req.get("expected_revision").and_then(|v| v.as_i64());
     let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     let now_iso = format_iso_from_sqlite(now_str);
-    let emit_sync = req.get("emit_sync").and_then(|v| v.as_bool()).unwrap_or(false);
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let emit_sync = req
+        .get("emit_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let workspace_id = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let (final_rev, final_seq, final_active, final_state, final_meta, change_id) = engine.write_tx(|conn| {
         let row: Option<(i64, i64, Option<String>, Option<String>)> = conn
@@ -366,7 +414,13 @@ pub fn session_update(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
     {
         let mut cache = engine.cache.write().unwrap_or_else(|e| e.into_inner());
         cache.invalidate_thread(Some(session_id));
-        cache.put_metadata(session_id.to_string(), final_rev, final_seq, final_active, final_state);
+        cache.put_metadata(
+            session_id.to_string(),
+            final_rev,
+            final_seq,
+            final_active,
+            final_state,
+        );
     }
 
     let change_ids: Vec<Value> = change_id.into_iter().map(Value::String).collect();
@@ -394,8 +448,14 @@ pub fn session_patch(engine: &DbEngine, req: &Value) -> Result<Value, DbError> {
     let expected_revision = req.get("expected_revision").and_then(|v| v.as_i64());
     let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
     let now_iso = format_iso_from_sqlite(now_str);
-    let emit_sync = req.get("emit_sync").and_then(|v| v.as_bool()).unwrap_or(false);
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let emit_sync = req
+        .get("emit_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let workspace_id = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let result = engine.write_tx(|conn| {
         let row: Option<(i64, i64, Option<String>, Option<String>, Option<String>)> = conn
@@ -573,14 +633,20 @@ fn active_turn_from_table_conn(conn: &Connection, thread_id: &str) -> Option<Str
     .filter(|s| !s.is_empty())
 }
 
-fn delete_where_in(conn: &Connection, table: &str, col: &str, ids: &[String]) -> Result<(), DbError> {
+fn delete_where_in(
+    conn: &Connection,
+    table: &str,
+    col: &str,
+    ids: &[String],
+) -> Result<(), DbError> {
     if ids.is_empty() {
         return Ok(());
     }
     for chunk in ids.chunks(400) {
         let placeholders = vec!["?"; chunk.len()].join(",");
         let sql = format!("DELETE FROM {table} WHERE {col} IN ({placeholders})");
-        let p: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let p: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         conn.execute(&sql, p.as_slice())?;
     }
     Ok(())
@@ -593,8 +659,14 @@ pub fn session_delete(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
         .ok_or_else(|| DbError::Invalid("session_id required".into()))?;
     let expected_revision = req.get("expected_revision").and_then(|v| v.as_i64());
     let now_str = req.get("now_str").and_then(|v| v.as_str()).unwrap_or("");
-    let emit_sync = req.get("emit_sync").and_then(|v| v.as_bool()).unwrap_or(false);
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
+    let emit_sync = req
+        .get("emit_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let workspace_id = req
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let out = engine.write_tx(|conn| {
         let row: Option<(i64, Option<String>)> = conn

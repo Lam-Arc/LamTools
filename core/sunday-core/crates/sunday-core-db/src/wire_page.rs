@@ -19,7 +19,10 @@ const DEFAULT_OUTLINE_CHAR_LIMIT: usize = 240;
 const MAX_OUTLINE_CHAR_LIMIT: usize = 4_096;
 
 fn is_active_turn_status(s: &str) -> bool {
-    matches!(s, "queued" | "running" | "waiting" | "stopping" | "interrupting")
+    matches!(
+        s,
+        "queued" | "running" | "waiting" | "stopping" | "interrupting"
+    )
 }
 
 fn page_item_byte_budget(page_bytes: i64) -> i64 {
@@ -94,16 +97,17 @@ fn artifact_reference(art: &Map<String, Value>) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let mut size: Option<i64> = art.get("size_bytes").and_then(|v| {
-        if v.is_boolean() { None } else { v.as_i64() }
-    });
+    let mut size: Option<i64> =
+        art.get("size_bytes")
+            .and_then(|v| if v.is_boolean() { None } else { v.as_i64() });
     let mut inline_bytes: i64 = 0;
 
     if size.is_none() {
         if let Some(meta) = art.get("metadata").and_then(|v| v.as_object()) {
-            if let Some(declared) = meta.get("size_bytes").and_then(|v| {
-                if v.is_boolean() { None } else { v.as_i64() }
-            }) {
+            if let Some(declared) =
+                meta.get("size_bytes")
+                    .and_then(|v| if v.is_boolean() { None } else { v.as_i64() })
+            {
                 size = Some(declared);
             }
         }
@@ -236,7 +240,11 @@ fn slice_wire_page(
 
     let mut turn_index_opt: Option<HashMap<String, String>> = None;
     let mut turn_id_of = |item_id: &str, item: &Value| -> String {
-        if let Some(direct) = item.get("turn_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(direct) = item
+            .get("turn_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             return direct.to_string();
         }
         let idx = turn_index_opt.get_or_insert_with(|| {
@@ -276,8 +284,7 @@ fn slice_wire_page(
 
     let has_seqless_item = [raw_top_items, raw_core_items].iter().any(|src| {
         src.values().any(|item| {
-            item.is_object()
-                && int_param(item.get("seq").or_else(|| item.get("last_seq")), 0) == 0
+            item.is_object() && int_param(item.get("seq").or_else(|| item.get("last_seq")), 0) == 0
         })
     });
 
@@ -295,7 +302,10 @@ fn slice_wire_page(
                 let Some(item) = raw_items.get(iid).filter(|v| v.is_object()) else {
                     continue;
                 };
-                let seq = int_param(item.get("seq").or_else(|| item.get("last_seq")), index as i64);
+                let seq = int_param(
+                    item.get("seq").or_else(|| item.get("last_seq")),
+                    index as i64,
+                );
                 let tid = turn_id_of(iid, item);
                 match ordered_by_id.get_mut(iid) {
                     None => {
@@ -342,8 +352,12 @@ fn slice_wire_page(
 
     let mut full_order: Vec<TimelineEntry> = ordered_by_id.into_values().collect();
     full_order.sort_by(|a, b| {
-        (a.seq, a.source_rank, a.order_index, &a.item_id)
-            .cmp(&(b.seq, b.source_rank, b.order_index, &b.item_id))
+        (a.seq, a.source_rank, a.order_index, &a.item_id).cmp(&(
+            b.seq,
+            b.source_rank,
+            b.order_index,
+            &b.item_id,
+        ))
     });
 
     let total_items: i64 = if let Some(pt) = core_obj
@@ -365,38 +379,47 @@ fn slice_wire_page(
         union_ids.len() as i64
     };
 
-    let ordered_slice: &[TimelineEntry] = if let Some(bid) = before_item_id.filter(|s| !s.is_empty()) {
-        if let Some(pos) = full_order.iter().position(|e| e.item_id == bid) {
-            &full_order[..pos]
+    let ordered_slice: &[TimelineEntry] =
+        if let Some(bid) = before_item_id.filter(|s| !s.is_empty()) {
+            if let Some(pos) = full_order.iter().position(|e| e.item_id == bid) {
+                &full_order[..pos]
+            } else {
+                &full_order
+            }
+        } else if let Some(bseq) = before_seq {
+            let end = full_order.iter().take_while(|e| e.seq < bseq).count();
+            // When items aren't strictly monotonic only filter like Python
+            if end == full_order.len() || full_order[end..].iter().all(|e| e.seq >= bseq) {
+                &full_order[..end]
+            } else {
+                &full_order
+            }
         } else {
             &full_order
-        }
-    } else if let Some(bseq) = before_seq {
-        let end = full_order.iter().take_while(|e| e.seq < bseq).count();
-        // When items aren't strictly monotonic only filter like Python
-        if end == full_order.len() || full_order[end..].iter().all(|e| e.seq >= bseq) {
-            &full_order[..end]
-        } else {
-            &full_order
-        }
-    } else {
-        &full_order
-    };
+        };
     let ordered_owned: Vec<TimelineEntry>;
-    let ordered: &[TimelineEntry] = if before_item_id.is_none() || ordered_slice.len() == full_order.len() {
-        if let Some(bseq) = before_seq {
-            if before_item_id.filter(|bid| full_order.iter().any(|e| &e.item_id == bid)).is_none() {
-                ordered_owned = full_order.iter().filter(|e| e.seq < bseq).cloned().collect();
-                &ordered_owned
+    let ordered: &[TimelineEntry] =
+        if before_item_id.is_none() || ordered_slice.len() == full_order.len() {
+            if let Some(bseq) = before_seq {
+                if before_item_id
+                    .filter(|bid| full_order.iter().any(|e| &e.item_id == bid))
+                    .is_none()
+                {
+                    ordered_owned = full_order
+                        .iter()
+                        .filter(|e| e.seq < bseq)
+                        .cloned()
+                        .collect();
+                    &ordered_owned
+                } else {
+                    ordered_slice
+                }
             } else {
                 ordered_slice
             }
         } else {
             ordered_slice
-        }
-    } else {
-        ordered_slice
-    };
+        };
 
     let mut wired_top: HashMap<String, Value> = HashMap::new();
     let mut wired_core: HashMap<String, Value> = HashMap::new();
@@ -496,7 +519,9 @@ fn slice_wire_page(
         if let Some(item) = raw_core_items.get(&e.item_id).and_then(|v| v.as_object()) {
             let tid = item.get("turn_id").and_then(|v| v.as_str()).unwrap_or("");
             if !tid.is_empty() {
-                let cur = selected_turn_max_seq.entry(tid.to_string()).or_insert(e.seq);
+                let cur = selected_turn_max_seq
+                    .entry(tid.to_string())
+                    .or_insert(e.seq);
                 if e.seq > *cur {
                     *cur = e.seq;
                 }
@@ -640,7 +665,10 @@ fn slice_wire_page(
     page_core.remove("_page_has_older_items");
     page_core.remove("_page_total_items");
     page_core.insert("items".into(), Value::Object(page_core_items));
-    page_core.insert("turns".into(), filtered_turns(core_obj.and_then(|c| c.get("turns"))));
+    page_core.insert(
+        "turns".into(),
+        filtered_turns(core_obj.and_then(|c| c.get("turns"))),
+    );
     page_core.insert("artifacts".into(), json!({}));
     page_core.insert("seen_event_ids".into(), json!([]));
     page_core.insert("item_order".into(), Value::Array(page_core_order));
@@ -648,7 +676,10 @@ fn slice_wire_page(
     let mut page = snap_obj.cloned().unwrap_or_default();
     page.insert("core".into(), Value::Object(page_core));
     page.insert("items".into(), Value::Object(page_top_items));
-    page.insert("turns".into(), filtered_turns(snap_obj.and_then(|s| s.get("turns"))));
+    page.insert(
+        "turns".into(),
+        filtered_turns(snap_obj.and_then(|s| s.get("turns"))),
+    );
     page.insert("artifacts".into(), json!({}));
     page.insert("seen_event_ids".into(), json!([]));
     page.insert("item_order".into(), Value::Array(page_top_order));
@@ -706,7 +737,10 @@ pub fn load_wire_page(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
         .get("thread_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| DbError::Invalid("thread_id required".into()))?;
-    let before_item_id = req.get("before_item_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let before_item_id = req
+        .get("before_item_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
     let before_seq = req.get("before_seq").and_then(|v| v.as_i64());
     let char_limit = req
         .get("char_limit")
@@ -723,7 +757,10 @@ pub fn load_wire_page(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
             .and_then(|v| v.as_i64())
             .unwrap_or(DEFAULT_PAGE_BYTES),
     );
-    let anchor_item_id = req.get("anchor_item_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let anchor_item_id = req
+        .get("anchor_item_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
 
     let item_byte_budget = page_item_byte_budget(byte_limit);
 
@@ -741,7 +778,8 @@ pub fn load_wire_page(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
             let page_res = around.get("page").cloned().unwrap_or(Value::Null);
             (page_res, Some(aseq + 1), None, Some(aseq))
         } else {
-            let page_res = load_snapshot_page(engine, tid, before_seq, before_item_id, item_byte_budget)?;
+            let page_res =
+                load_snapshot_page(engine, tid, before_seq, before_item_id, item_byte_budget)?;
             let eff_before_seq = page_res
                 .get("resolved_before_seq")
                 .and_then(|v| v.as_i64())
@@ -786,7 +824,12 @@ pub fn load_wire_page(engine: &DbEngine, req: &Value) -> Result<Value, DbError> 
 }
 
 fn outline_item_type(item: &Map<String, Value>) -> String {
-    if let Some(s) = item.get("type").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(s) = item
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return s.to_string();
     }
     item.get("payload")
@@ -819,12 +862,22 @@ fn outline_is_child_owned(item: &Map<String, Value>) -> bool {
     let Some(payload) = item.get("payload").and_then(|v| v.as_object()) else {
         return false;
     };
-    if payload.get("sub_agent").map(|v| v.is_object()).unwrap_or(false) {
+    if payload
+        .get("sub_agent")
+        .map(|v| v.is_object())
+        .unwrap_or(false)
+    {
         return true;
     }
     if let Some(meta) = payload.get("metadata").and_then(|v| v.as_object()) {
-        let sa = meta.get("sub_agent").map(|v| !v.is_null() && v != &json!(false) && v != &json!("")).unwrap_or(false);
-        let ss = meta.get("sub_session_id").map(|v| !v.is_null() && v != &json!(false) && v != &json!("")).unwrap_or(false);
+        let sa = meta
+            .get("sub_agent")
+            .map(|v| !v.is_null() && v != &json!(false) && v != &json!(""))
+            .unwrap_or(false);
+        let ss = meta
+            .get("sub_session_id")
+            .map(|v| !v.is_null() && v != &json!(false) && v != &json!(""))
+            .unwrap_or(false);
         if sa || ss {
             return true;
         }
@@ -884,9 +937,14 @@ fn outline_input_text(item: &Map<String, Value>) -> String {
                 .filter_map(|e| {
                     let typ = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if typ == "image" || typ == "attachment" {
-                        e.get("name").or_else(|| e.get("path")).and_then(|v| v.as_str()).map(|s| s.trim().to_string())
+                        e.get("name")
+                            .or_else(|| e.get("path"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.trim().to_string())
                     } else {
-                        e.get("text").and_then(|v| v.as_str()).map(|s| s.trim().to_string())
+                        e.get("text")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.trim().to_string())
                     }
                 })
                 .filter(|s| !s.is_empty())
@@ -1052,9 +1110,14 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
     };
 
     let state_obj = state.as_object();
-    let core_obj = state_obj.and_then(|s| s.get("core")).and_then(|c| c.as_object());
+    let core_obj = state_obj
+        .and_then(|s| s.get("core"))
+        .and_then(|c| c.as_object());
     let empty_map = Map::new();
-    let outer_items = state_obj.and_then(|s| s.get("items")).and_then(|i| i.as_object()).unwrap_or(&empty_map);
+    let outer_items = state_obj
+        .and_then(|s| s.get("items"))
+        .and_then(|i| i.as_object())
+        .unwrap_or(&empty_map);
 
     struct OutlineRow {
         is_outer: bool,
@@ -1069,8 +1132,16 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
     let mut rows: Vec<OutlineRow> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (source_rank, (is_outer, items, raw_order)) in [
-        (true, outer_items, state_obj.and_then(|s| s.get("item_order"))),
-        (false, &core_items, core_obj.and_then(|c| c.get("item_order"))),
+        (
+            true,
+            outer_items,
+            state_obj.and_then(|s| s.get("item_order")),
+        ),
+        (
+            false,
+            &core_items,
+            core_obj.and_then(|c| c.get("item_order")),
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -1163,22 +1234,32 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
                 let iid_key = if !row.item_id.is_empty() {
                     row.item_id.clone()
                 } else {
-                    row.item.get("item_id").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                    row.item
+                        .get("item_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
                 };
                 turn_by_id
                     .iter()
                     .find_map(|(tid, tobj)| {
-                        tobj.get("items").and_then(|v| v.as_array()).and_then(|arr| {
-                            if arr.iter().any(|x| x.as_str() == Some(iid_key.as_str())) {
-                                Some(tid.clone())
-                            } else {
-                                None
-                            }
-                        })
+                        tobj.get("items")
+                            .and_then(|v| v.as_array())
+                            .and_then(|arr| {
+                                if arr.iter().any(|x| x.as_str() == Some(iid_key.as_str())) {
+                                    Some(tid.clone())
+                                } else {
+                                    None
+                                }
+                            })
                     })
                     .unwrap_or_default()
             };
-            let turn_opt = if turn_id.is_empty() { None } else { turn_by_id.get(&turn_id) };
+            let turn_opt = if turn_id.is_empty() {
+                None
+            } else {
+                turn_by_id.get(&turn_id)
+            };
             let ts_val: Value = [
                 row.item.get("timestamp"),
                 row.item.get("created_at"),
@@ -1199,7 +1280,10 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
             obj.insert("turn_id".into(), json!(turn_id));
             obj.insert("seq".into(), json!(row.seq));
             obj.insert("timestamp".into(), ts_val);
-            obj.insert("prompt".into(), json!(bound_text_chars(&outline_input_text(&row.item), char_limit)));
+            obj.insert(
+                "prompt".into(),
+                json!(bound_text_chars(&outline_input_text(&row.item), char_limit)),
+            );
             obj.insert("response_excerpt".into(), json!(""));
             let is_queued = row.item.get("status").and_then(|v| v.as_str()) == Some("queued");
             current = Some((obj, is_queued));
@@ -1220,7 +1304,10 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
         if text.is_empty() || is_protocol_envelope_text(&text) {
             continue;
         }
-        cur_obj.insert("response_excerpt".into(), json!(bound_text_chars(&text, char_limit)));
+        cur_obj.insert(
+            "response_excerpt".into(),
+            json!(bound_text_chars(&text, char_limit)),
+        );
     }
 
     if let Some((cur, _)) = current.take() {
@@ -1232,7 +1319,13 @@ pub fn build_thread_outline_native(engine: &DbEngine, req: &Value) -> Result<Val
         "items": outlines,
     });
     if let Ok(mut wcache) = engine.cache.write() {
-        wcache.put_outline(tid.to_string(), char_limit_i64, db_rev, db_seq, outline.clone());
+        wcache.put_outline(
+            tid.to_string(),
+            char_limit_i64,
+            db_rev,
+            db_seq,
+            outline.clone(),
+        );
     }
     if let Ok(outline_str) = serde_json::to_string(&outline) {
         let now = now_unix_secs();
