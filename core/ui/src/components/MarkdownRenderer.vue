@@ -50,16 +50,33 @@ import { relativeLuminance } from '@/helpers/theme.ts'
 const referenceActions = useReferenceActions()
 defineOptions({ name: 'MarkdownRenderer' })
 
-// KaTeX 自带样式随模块一起到达，只挂一次。样式注入后其中的 url() 按文档地址解析，
-// 所以字体统一指向随应用一起发布的 /katex-fonts/（public/katex-fonts，打包后落在 dist 根）。
-// 这样公式的排版和字形都不再依赖任何一次独立的样式表或字体散请求。
-const KATEX_INLINE_STYLE_ID = 'sunday-katex-inline-styles'
+// KaTeX 自带样式随模块一起到达，只挂一次。样式里的 url() 按文档地址解析，
+// 字体统一指向随应用一起发布的 /katex-fonts/（public/katex-fonts，打包后落在 dist 根）。
+// user:“装完了，依旧失败”+(打包版窗口的 CSP 里 style-src 带了 nonce，按规范 nonce 一出现
+// 'unsafe-inline' 就作废，插入的 <style> 会被静默丢弃——元素在、样式表却为空，
+// 公式因此既没有 KaTeX 排版也没有隐藏 MathML。脚本构造的样式表不受这条限制，优先用它，
+// 只有在不支持的环境中才回退到 <style>。)
+const KATEX_STYLE_ELEMENT_ID = 'sunday-katex-inline-styles'
+const KATEX_SHEET_FLAG = '__sundayKatexStyleSheetMounted'
 const KATEX_STYLES = String(katexStylesSource).replace(/url\((['"]?)fonts\//g, 'url($1/katex-fonts/')
-if (typeof document !== 'undefined' && !document.getElementById(KATEX_INLINE_STYLE_ID)) {
-  const style = document.createElement('style')
-  style.id = KATEX_INLINE_STYLE_ID
-  style.textContent = KATEX_STYLES
-  document.head.appendChild(style)
+type KatexMountFlag = { [KATEX_SHEET_FLAG]?: boolean }
+if (typeof document !== 'undefined' && !(document as unknown as KatexMountFlag)[KATEX_SHEET_FLAG]) {
+  ;(document as unknown as KatexMountFlag)[KATEX_SHEET_FLAG] = true
+  let mounted = false
+  try {
+    const sheet = new CSSStyleSheet()
+    sheet.replaceSync(KATEX_STYLES)
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+    mounted = true
+  } catch {
+    mounted = false
+  }
+  if (!mounted) {
+    const style = document.createElement('style')
+    style.id = KATEX_STYLE_ELEMENT_ID
+    style.textContent = KATEX_STYLES
+    document.head.appendChild(style)
+  }
 }
 
 // Force every rendered anchor to open externally with safe rel attributes.

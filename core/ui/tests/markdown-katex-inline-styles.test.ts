@@ -7,12 +7,12 @@ const source = readFileSync(resolve(root, 'src/components/MarkdownRenderer.vue')
 const katexCss = readFileSync(resolve(root, 'node_modules/katex/dist/katex.min.css'), 'utf8')
 
 /**
- * user:“还是坏的，我刚才说正常了指的是你那会开的 dev 内正常了。我现在打包版更新到 36 依旧无法正常显示”+
- * (打包版主窗口走 Tauri 内嵌协议，那里这份独立的 KaTeX 样式表请求没有送达；dev 走 vite 的 http 所以正常。
- *  验收标准：KaTeX 样式必须由源码里的一份字符串随模块带进来，注入后不再依赖任何独立样式表请求，
- *  字体指向随应用发布的固定路径。)
+ * user:“装完了，依旧失败，直接排查可能原因：dev 显示正常，打包显示异常”+
+ * (打包版窗口的 CSP 给 style-src 配了 nonce，按规范 nonce 存在时 'unsafe-inline' 失效，
+ *  插入的 <style> 会被静默丢弃：元素在文档里、sheet 却是 null，公式因此散架。
+ *  验收标准：KaTeX 样式以脚本构造的样式表挂到文档上，不依赖 <style>；字体指向随包发布的固定路径。)
  */
-describe('KaTeX 样式随模块内联注入', () => {
+describe('KaTeX 样式随模块挂载', () => {
   test('KaTeX 自带样式包含决定公式布局与字形的规则', () => {
     expect(katexCss.length).toBeGreaterThan(20000)
     expect(katexCss).toContain('.katex-mathml')
@@ -31,8 +31,14 @@ describe('KaTeX 样式随模块内联注入', () => {
     expect(source).toContain("'url($1/katex-fonts/'")
   })
 
-  test('组件在模块加载时把样式挂到 document.head，且只挂一次', () => {
-    expect(source).toContain('document.getElementById(KATEX_INLINE_STYLE_ID)')
+  test('优先用脚本构造的样式表挂载，绕开 style-src 的 nonce 限制', () => {
+    expect(source).toContain('new CSSStyleSheet()')
+    expect(source).toMatch(/replaceSync\(\s*KATEX_STYLES\s*\)/)
+    expect(source).toContain('document.adoptedStyleSheets')
+  })
+
+  test('只挂一次，并在不支持的环境回退到 <style>', () => {
+    expect(source).toContain('__sundayKatexStyleSheetMounted')
     expect(source).toContain('document.head.appendChild(style)')
     expect(source).toMatch(/style\.textContent\s*=\s*KATEX_STYLES/)
   })
