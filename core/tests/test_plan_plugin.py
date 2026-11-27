@@ -40,6 +40,7 @@ def test_the_plugin_ships_three_skills_and_no_tool(tmp_path):
     assert sorted(skill.name for skill in plan_skills) == [
         "draft-plan",
         "execute-plan",
+        "plan-docs",
         "refine-plan",
     ]
     # Plans are files: the plugin declares no tool of its own any more.
@@ -53,11 +54,13 @@ def test_every_plan_skill_parses_and_declares_its_platform(tmp_path):
         assert body.startswith("---"), f"{path} has no frontmatter"
         modules[path.parent.name] = body
 
-    assert set(modules) == {"draft-plan", "refine-plan", "execute-plan"}
+    assert set(modules) == {"draft-plan", "refine-plan", "execute-plan", "plan-docs"}
     # Executing needs the repository, so the phone must not offer that one.
     assert "platforms: universal" in modules["draft-plan"].split("---")[1]
     assert "platforms: universal" in modules["refine-plan"].split("---")[1]
     assert "platforms: desktop" in modules["execute-plan"].split("---")[1]
+    # The type index is pure vocabulary: it must work on every platform.
+    assert "platforms: universal" in modules["plan-docs"].split("---")[1]
     # A description is the whole trigger: an empty one means the skill never fires.
     for name, body in modules.items():
         description = next(
@@ -140,8 +143,8 @@ def test_every_plan_skill_ships_a_complete_eval_suite(tmp_path):
                 assert payload["case_id"] == f"{name}-{int(case['id']):02d}"
             case_count += 1
 
-    assert seen == {"draft-plan", "refine-plan", "execute-plan"}
-    assert case_count == 24
+    assert seen == {"draft-plan", "refine-plan", "execute-plan", "plan-docs"}
+    assert case_count == 32
 
 
 def test_plan_eval_manifest_reports_wiring_not_behavior(tmp_path):
@@ -156,10 +159,11 @@ def test_plan_eval_manifest_reports_wiring_not_behavior(tmp_path):
         "draft-plan",
         "refine-plan",
         "execute-plan",
+        "plan-docs",
     ]
     assert report["host_smoke"]["behavioral_claim"] is False
     assert report["host_smoke"]["reference_links_checked"] >= 1
-    assert report["behavioral_summary"] == {"total": 24, "run": 0, "not_run": 24}
+    assert report["behavioral_summary"] == {"total": 32, "run": 0, "not_run": 32}
     assert [case["case_id"] for case in report["cases"]][:2] == [
         "draft-plan:1",
         "draft-plan:2",

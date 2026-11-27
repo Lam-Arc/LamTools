@@ -1,9 +1,9 @@
 """Validate the plan plugin's eval wiring without claiming model behavior was tested.
 
 It uses the same bundled-plugin assembly and skill runtime as Core: it checks
-that the plan plugin exposes its three skills, that every reference a skill
-links exists, and that all eval fixtures parse, then emits one NOT_RUN record
-per behavioral case. A separate runner with an explicitly configured production
+that the plan plugin exposes its four skills (the type index plus drafting,
+refining and executing), that every reference a skill links exists, and that
+all eval fixtures parse, then emits one NOT_RUN record per behavioral case. A separate runner with an explicitly configured production
 model must replace those records with real outputs and traces; this module
 never asserts that a case passed.
 """
@@ -23,7 +23,7 @@ from lamtools_core.skill_runtime import create_skill_runtime
 
 PLUGIN_ID = "plan"
 PLAN_MODE = "execute"
-ACTIVE_SKILLS = ("draft-plan", "refine-plan", "execute-plan")
+ACTIVE_SKILLS = ("draft-plan", "refine-plan", "execute-plan", "plan-docs")
 # What an executing turn must be able to see: the file tools that write and
 # edit plans in 「方案/」, the live checklist it installs, the skill loader,
 # and file reads for the plan and its documents.

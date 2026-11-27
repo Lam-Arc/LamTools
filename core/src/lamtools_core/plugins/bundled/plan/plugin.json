@@ -1,7 +1,7 @@
 {
   "name": "plan",
-  "version": "0.2.0",
-  "description": "方案：把一次需求变成可交付的方案，包括需求与边界、取舍、文档、分步清单、目标与风险",
+  "version": "0.3.0",
+  "description": "方案：把一次需求变成可交付的方案 — 统一分类（PRD / SPEC / DESIGN / RESEARCH / EXP / PLAN / AUDIT / REPORT 及扩展）、按类型编写、讨论、审查、修订、实施与验收，方案就是项目「方案/」里的普通 Markdown",
   "skills": [
     "./skills"
   ]

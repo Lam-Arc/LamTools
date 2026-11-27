@@ -15,6 +15,12 @@ const entry = (overrides: Partial<CorePlanLibraryEntry> = {}): CorePlanLibraryEn
   folder: '',
   title: '导出显示进度',
   status: 'draft',
+  design_status: 'draft',
+  impl_status: 'none',
+  type: '',
+  type_label: '未分类',
+  topic: '',
+  related: [],
   summary: '导出长报告时让用户看见进度',
   favorite: false,
   size: 120,
@@ -82,7 +88,7 @@ describe('PlanLibraryView', () => {
     expect(cards).toHaveLength(1)
     expect(cards[0].text()).toContain('导出显示进度')
     expect(cards[0].text()).toContain('导出长报告时让用户看见进度')
-    expect(cards[0].text()).toContain('草稿')
+    expect(cards[0].text()).toContain('草案')
 
     await cards[0].trigger('click')
     await settled()
@@ -122,7 +128,7 @@ describe('PlanLibraryView', () => {
 
     await wrapper.findAll('[data-library-view-toggle] button')[1].trigger('click')
     expect(root.find('.library-row').exists()).toBe(true)
-    expect(wrapper.get('.library-row .library-status').text()).toBe('草稿')
+    expect(wrapper.get('.library-row .library-status').text()).toBe('草案')
 
     wrapper.unmount()
   })
@@ -275,7 +281,7 @@ describe('PlanLibraryView', () => {
     await input.setValue('新的迭代方案')
     await wrapper.get('[data-library-dialog-submit]').trigger('click')
     await settled()
-    expect(client.createPlanLibraryFile).toHaveBeenCalledWith('proj-1', '新的迭代方案', '')
+    expect(client.createPlanLibraryFile).toHaveBeenCalledWith('proj-1', '新的迭代方案', '', '', '')
     expect(wrapper.find('[data-library-reader]').exists()).toBe(true)
     wrapper.unmount()
   })

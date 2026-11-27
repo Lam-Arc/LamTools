@@ -8,6 +8,8 @@ metadata:
 
 # Refine a plan (方案)
 
+> 修订不换类型：保持 frontmatter 的 `类型`、`专题` 与 `关联`，只改用户要求的部分。类型判断见 `plan-docs`；不同写法的骨架见 `references/plan-types.md`。
+
 In one sentence: change exactly what the user asked for, keep the rest — the file is the whole story, so what you leave alone stays as it was.
 
 A refinement is still a conversation. The user's new sentence is often thinner than it sounds, and the fastest way to spoil a plan is to widen it with your own guesses.

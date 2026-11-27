@@ -35,21 +35,24 @@ from lamtools_core.runtime.arrange import ArrangeManager, InMemoryArrangeStore
 from lamtools_core.runtime.goal import GoalManager, InMemoryGoalStore
 
 # --- The "开工" prompt, copied verbatim from the UI -------------------------
-# If these drift from LamToolsApp.vue the guard below fails, so the test cannot
+# If these drift from planLaunch.ts the guard below fails, so the test cannot
 # keep passing against a prompt the product no longer sends.
 _VUE_PLAN_PROMPT_FRAGMENTS = (
-    "执行方案《${plan.title}》（${plan.path}）。",
-    "先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；",
+    "处理方案《{0}》。",
+    "先用 read_file 读回这份方案（{0}）。",
     "然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。",
+    "方案文件的修改写回它原来的位置，不要另建一份。",
 )
 
-_PROMPT_HEAD = "执行方案《{title}》（{path}）。"
+_PROMPT_HEAD = "处理方案《{title}》。"
 _PROMPT_BODY = (
-    "先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；"
+    "先用 read_file 读回这份方案（{path}）。"
+    "对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；"
     "然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。"
+    "方案文件的修改写回它原来的位置，不要另建一份。"
 )
 
-_UI_SOURCE = Path(__file__).resolve().parents[1] / "ui" / "src" / "app" / "LamToolsApp.vue"
+_UI_SOURCE = Path(__file__).resolve().parents[1] / "ui" / "src" / "app" / "planLaunch.ts"
 
 THREAD_ID = "thread-plan-start"
 WORK_FOLDER = "work"
@@ -102,8 +105,8 @@ _PLAN_DOCUMENT = """---
 def _ui_plan_start_prompt(plan: dict[str, Any]) -> str:
     """The text the library hands to the session, built the way the UI builds it."""
 
-    head = _PROMPT_HEAD.format(title=plan["title"], path=plan["path"])
-    return head + _PROMPT_BODY
+    head = _PROMPT_HEAD.format(title=plan["title"])
+    return head + _PROMPT_BODY.format(path=plan["path"])
 
 
 def _write_ready_plan(work_root: Path) -> Path:

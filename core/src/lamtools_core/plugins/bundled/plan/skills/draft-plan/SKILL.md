@@ -8,6 +8,8 @@ metadata:
 
 # Draft a plan (方案)
 
+> 先定类型：这份文档是 PRD、SPEC、EXP、审查、报告还是实施方案？类型的词表与每类的核心内容见 `plan-docs` 技能与 `references/plan-types.md`；本技能下面的六节形状是 PLAN 类型的完整写法，其它类型按对应骨架裁剪。
+
 In one sentence: turn what the user said into a document someone else can start from without asking you anything, and save it as a file — not a chat answer that scrolls away.
 
 The plan you write is a **document with a life**: it lives in the project's `方案/` folder, gets edited as the work evolves, and is later executed on a machine that can see files you cannot see. Write for that reader.

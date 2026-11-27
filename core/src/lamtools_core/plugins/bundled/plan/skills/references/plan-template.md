@@ -6,8 +6,11 @@ Read this file when you are about to write a plan: load it with `read_file` at `
 
 ## The plan file — `方案/<标题>.md`
 
+`类型` 决定这份文档按哪一类的核心内容写（PRD / SPEC / DESIGN / RESEARCH / EXP / PLAN / AUDIT / REPORT，扩展类型见 plan-types.md）；下面这个六节形状是 PLAN 类型的完整实例，其它类型按 `references/plan-types.md` 的骨架写。`状态` 是设计状态（草稿 → 就绪 → 已归档 / 已废弃），`实施` 是独立的实施轴（未实施 / 实施中 / 待验收 / 已验收），研究、审查、报告可以省略 `实施`。资料库把「草稿」显示为「草案」、「就绪」显示为「生效」，旧词与新词都读得懂。
+
 ```markdown
 ---
+类型: PLAN
 状态: 草稿
 摘要: 一句话，列表里能显示的那种
 ---
