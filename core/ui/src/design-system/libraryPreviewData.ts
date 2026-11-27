@@ -6,7 +6,7 @@ export function createLibraryPreviewData() {
     { path: '示例记忆.md', is_dir: false, size: 12, modified: '', summary: '本地示例', content: '# 示例记忆\n\n本地预览内容。' },
     { path: '示例目录', is_dir: true, size: 0, modified: '', summary: '', content: '' },
   ]
-  let entries = [{ name: '示例方案.md', path: '方案/示例方案.md', folder: '', title: '示例方案', status: 'draft', summary: '本地预览内容', favorite: false, size: 12, updated_at: 0 }]
+  let entries = [{ name: '示例方案.md', path: '方案/示例方案.md', folder: '', title: '示例方案', status: 'draft', design_status: 'draft', impl_status: 'none', type: '', type_label: '未分类', topic: '', related: [], summary: '本地预览内容', favorite: false, size: 12, updated_at: 0 }]
   let folders = [{ name: '示例目录', path: '方案/示例目录', dir: '示例目录', parent: '', count: 0 }]
   const contents = new Map([['方案/示例方案.md', '# 示例方案\n\n本地预览内容。']])
   const clone = <T>(value: T): T => structuredClone(value)
@@ -48,11 +48,35 @@ export function createLibraryPreviewData() {
     listPlanLibrary: async () => ({ dir: '方案', entries: clone(entries), folders: clone(folders.map(folder => ({ ...folder, count: entries.filter(entry => entry.folder === folder.dir || entry.folder.startsWith(`${folder.dir}/`)).length }))) }),
     readFile: async (_project: string, path: string) => { getEntry(path); return { path, content: contents.get(path) ?? '' } },
     writeFile: async (_project: string, path: string, content: string) => { getEntry(path); contents.set(path, content); return { path, content } },
-    createPlanLibraryFile: async (_project: string, title: string, folder = '') => {
+    createPlanLibraryFile: async (_project: string, title: string, folder = '', type = '', topic = '') => {
       const name = markdownName(title); const path = pathFor(folder, name)
       if (entries.some(entry => entry.path === path)) throw new Error('示例名称已存在')
-      const entry = { name, path, folder, title: name.replace(/\.md$/i, ''), status: 'draft', summary: '', favorite: false, size: 0, updated_at: 0 }
+      const entry = { name, path, folder, title: name.replace(/\.md$/i, ''), status: 'draft', design_status: 'draft', impl_status: 'none', type, type_label: type || '未分类', topic, related: [] as string[], summary: '', favorite: false, size: 0, updated_at: 0 }
       entries.push(entry); contents.set(path, ''); return { entry: clone(entry) }
+    },
+    setPlanLibraryMeta: async (_project: string, path: string, patch: Record<string, unknown>) => {
+      const entry = getEntry(path)
+      Object.assign(entry, patch)
+      if (typeof patch.type === 'string') {
+        entry.type = patch.type
+        entry.type_label = patch.type || '未分类'
+      }
+      if (typeof patch.design_status === 'string') {
+        entry.design_status = patch.design_status
+        entry.status = patch.design_status === 'active' ? (entry.impl_status === 'accepted' ? 'done' : entry.impl_status === 'doing' || entry.impl_status === 'review' ? 'executing' : 'ready') : patch.design_status
+      }
+      if (typeof patch.impl_status === 'string') {
+        entry.impl_status = patch.impl_status
+        entry.status = entry.design_status === 'active' ? (entry.impl_status === 'accepted' ? 'done' : entry.impl_status === 'doing' || entry.impl_status === 'review' ? 'executing' : 'ready') : entry.design_status
+      }
+      return { entry: clone(entry) }
+    },
+    importPlanLibraryFile: async (_project: string, source: string, folder = '') => {
+      const base = source.split(/[\/]/).pop() || '导入的方案.md'
+      const name = markdownName(base.replace(/\.md$/i, '')); const path = pathFor(folder, name)
+      if (entries.some(entry => entry.path === path)) throw new Error('示例名称已存在')
+      const entry = { name, path, folder, title: name.replace(/\.md$/i, ''), status: 'draft', design_status: 'draft', impl_status: 'none', type: '', type_label: '未分类', topic: '', related: [] as string[], summary: '', favorite: false, size: 0, updated_at: 0 }
+      entries.push(entry); contents.set(path, '# 导入的示例'); return { entry: clone(entry) }
     },
     createPlanLibraryFolder: async (_project: string, dir: string) => {
       if (folders.some(folder => folder.dir === dir)) throw new Error('示例名称已存在')

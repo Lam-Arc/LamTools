@@ -8,6 +8,7 @@
           <span>{{ fieldLabel }}</span>
           <input ref="inputEl" v-bind="inputAttrs" type="text" :value="modelValue" :placeholder="placeholder" @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)" @keydown.enter.prevent="submit" />
         </label>
+        <slot name="extra" />
         <p v-if="error" class="dialog-error" role="alert">{{ error }}</p>
       </div>
       <div class="dialog-actions">

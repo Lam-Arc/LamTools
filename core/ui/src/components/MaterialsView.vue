@@ -10,6 +10,19 @@
     <header class="materials-head">
       <h1 class="materials-title">{{ t("资料库") }}</h1>
       <div class="materials-tools">
+        <!-- user:“库本身的全局与项目划分也仅是一个文件划分”+(库默认看全部项目；项目只是筛选与归属，
+             不要求先选中项目才能看库)。 -->
+        <select
+          v-if="projectOptions.length > 1"
+          v-model="projectFilter"
+          class="materials-project-filter"
+          :aria-label="t('按项目筛选')"
+          :title="t('按项目筛选')"
+          data-materials-project-filter
+        >
+          <option value="">{{ t("全部项目") }}</option>
+          <option v-for="project in projectOptions" :key="project.id" :value="project.id">{{ project.name }}</option>
+        </select>
         <button class="icon-button" type="button" :aria-label="sortLabel" :title="sortLabel" data-materials-sort @click="toggleSort">
           <ArrowDownWideNarrow :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
@@ -17,7 +30,7 @@
         <LibraryViewToggle v-model="view" data-materials-view-toggle />
         <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享搜索框并保留本页查询和无障碍标签)。 -->
         <LibrarySearchField v-model="query" :label="t('搜索资料库')" :input-attrs="{ 'data-materials-search': '' }" class="materials-search" />
-        <button class="library-button library-button--primary materials-new" type="button" :disabled="!projectId || uploading" data-materials-new @click="uploadHere">
+        <button class="library-button library-button--primary materials-new" type="button" :disabled="!projectId || uploading" :title="projectId ? t('上传到当前项目') : t('先进入一个项目')" data-materials-new @click="uploadHere">
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
           {{ uploading ? t("上传中…") : t("新建") }}
         </button>
@@ -37,7 +50,7 @@
     <!-- ── 药丸筛选页签 ── -->
     <div class="filter-tabs" role="group" :aria-label="t('筛选资料')" data-materials-tabs>
       <button
-        v-for="tab in TABS"
+        v-for="tab in tabs"
         :key="tab.id"
         type="button"
         :class="{ active: activeTab === tab.id }"
@@ -96,7 +109,7 @@
       </button>
     </nav>
 
-    <p v-if="!projectId" class="full-area-note">{{ t("先在左侧选择一个项目 — 资料库跟随项目。") }}</p>
+    <p v-if="!projectId && !projectOptions.length" class="full-area-note">{{ t("还没有项目 — 先建一个项目，资料库会把文件归到它下面。") }}</p>
     <p v-else-if="loading && !items.length" class="full-area-note" role="status">{{ t("正在读取资料库…") }}</p>
     <p v-else-if="error" class="full-area-note full-area-note--error" role="alert">
       {{ error }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
@@ -135,7 +148,7 @@
       <!-- 空态：只有这一层既没有直属文件、也没有子层时才算空 -->
       <div v-else-if="!visible.length && !childFolders.length" class="full-area-empty" data-materials-empty>
         <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
-        <h2 class="full-area-empty-title">{{ openFolder ? t("这一层还没有文件") : t("资料库还是空的") }}</h2>
+        <h2 class="full-area-empty-title">{{ emptyTitle }}</h2>
         <p class="full-area-empty-hint">{{ t("上传文件，或让助手把要留存的产出归入资料库。") }}</p>
         <button class="library-button library-button--primary" type="button" data-materials-empty-upload @click="uploadHere">{{ t("上传文件") }}</button>
       </div>
@@ -268,6 +281,7 @@
               @click.stop="setFavorite(item, false)"
             ><Star :size="12" :stroke-width="1.8" aria-hidden="true" /></button>
             <span>{{ t("修改于") }}{{ shortDate(item.updated_at) }}</span>
+            <span v-if="projectName(item)" class="material-project" data-material-project>{{ projectName(item) }}</span>
             <span v-if="item.usage_count" class="material-used" data-material-used>{{ t("用过 {0} 次", { 0: item.usage_count }) }}</span>
           </p>
         </article>
@@ -295,6 +309,7 @@
               <span class="library-status" :data-artifact-status="artifactStatus(item)">{{ statusLabel(item) }}</span>
             </div>
             <div class="library-item-bottom">
+              <span v-if="projectName(item)" class="material-project">{{ projectName(item) }}</span>
               <span class="library-item-summary">{{ kindLabel(item.kind, item.name) }} · {{ roleLabel(item.role) }}</span>
               <span class="library-item-time">{{ t("修改于") }}{{ shortDate(item.updated_at) }}</span>
             </div>
@@ -480,6 +495,8 @@ const props = defineProps<{
   uploadFiles?: (folder: string) => Promise<void>
   /** user:“交互测试”+(展厅可接管复制，正常应用继续使用系统剪贴板)。 */
   copyPath?: (path: string) => Promise<void>
+  /** 全部项目（id/name）：库默认跨项目展示，项目只作为筛选与归属标签。 */
+  projects?: Array<{ id: string; name: string }>
 }>()
 
 const TABS = [
@@ -492,6 +509,14 @@ const TABS = [
   { id: 'folders', get label() { return t("文件夹") } },
 ] as const
 type TabId = (typeof TABS)[number]['id']
+
+/** 宿主给了项目清单就进入全局库：默认全部项目；文件夹页签要选中项目后才出现。 */
+const projectOptions = computed(() => props.projects ?? [])
+const projectFilter = ref('')
+const scopedProjectId = computed(() => projectFilter.value || (projectOptions.value.length ? '' : (props.projectId ?? '')))
+const tabs = computed(() => (projectOptions.value.length && !projectFilter.value)
+  ? TABS.filter(tab => tab.id !== 'folders')
+  : TABS)
 
 const items = ref<ProjectArtifact[]>([])
 /** 选中的标签；空串 = 不筛。 */
@@ -552,28 +577,23 @@ function toggleSort(): void {
 
 /* ---- 取数 ---- */
 async function reload(): Promise<void> {
-  const projectId = props.projectId
-  if (!projectId) {
-    items.value = []
-    stats.value = { count: 0, bytes: 0 }
-    return
-  }
+  const projectId = scopedProjectId.value
+  // user:“库本身的全局与项目划分也仅是一个文件划分”+(没有选中项目时列全部项目的资料，
+  // 不再因为当前项目为空就把整个库显示成空的)。
+  const scope = projectId ? { project_id: projectId } : { all_projects: true }
   const revision = ++fetchRevision
   loading.value = true
   error.value = ''
   try {
-    const [listed, counted] = await Promise.all([
-      props.requestRpc('artifact.list', { project_id: projectId, include_deleted: false }),
-      props.requestRpc('artifact.stats', { project_id: projectId }).catch(() => ({ count: 0, bytes: 0 })),
-    ])
+    const listed = await props.requestRpc('artifact.list', { ...scope, include_deleted: false })
     if (revision !== fetchRevision) return
     items.value = extractArtifactRows(listed)
       .map(normalizeArtifact)
       .filter((item): item is ProjectArtifact => item !== null)
-    const total = counted as { count?: number; bytes?: number }
-    stats.value = { count: Number(total.count || 0), bytes: Number(total.bytes || 0) }
     if (openFolder.value && !folderExists(openFolder.value)) openFolder.value = ''
     void loadThumbs()
+    // 占用统计要逐个看磁盘大小：先让文件出现，数字稍后补上，别让它挡住整面墙。
+    void loadStats(scope, revision)
   } catch (cause) {
     if (revision !== fetchRevision) return
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -582,17 +602,31 @@ async function reload(): Promise<void> {
   }
 }
 
+/** 占用统计单独跑：列表先出来，条数与字节数到了再更新那一行。 */
+async function loadStats(scope: Record<string, unknown>, revision: number): Promise<void> {
+  try {
+    const counted = await props.requestRpc('artifact.stats', scope)
+    if (revision !== fetchRevision) return
+    const total = counted as { count?: number; bytes?: number }
+    stats.value = { count: Number(total.count || 0), bytes: Number(total.bytes || 0) }
+  } catch {
+    if (revision !== fetchRevision) return
+    stats.value = { count: 0, bytes: 0 }
+  }
+}
+
 /* ---- 缩略图：图片直接取字节，视频解出首帧；都只在实体存在时取一次，卸载时全部释放 ---- */
 async function loadThumbs(): Promise<void> {
-  const projectId = props.projectId
   const transport = props.transport
-  if (!projectId || !transport) return
+  if (!transport) return
   const revision = thumbRevision
   for (const item of items.value) {
     if (revision !== thumbRevision) return
     if (thumbs.value.has(item.artifact_id)) continue
     const video = isVideoArtifact(item)
     if (!video && !isThumbnailable(item)) continue
+    const projectId = projectIdOf(item)
+    if (!projectId) continue
     const path = artifactHttpPath(projectId, item)
     if (!path) continue
     try {
@@ -655,8 +689,27 @@ onMounted(() => { void reload() })
 onUnmounted(() => { releaseThumbs() })
 
 watch(() => props.projectId, () => {
+  // 全局库里当前项目只决定上传落到哪里，不改变正在看的范围。
+  if (projectOptions.value.length) return
   openFolder.value = ''
   activeTab.value = 'all'
+  selectedSet.value = new Set()
+  releaseThumbs()
+  void reload()
+})
+
+watch(projectFilter, () => {
+  openFolder.value = ''
+  if (activeTab.value === 'folders' && !projectFilter.value && projectOptions.value.length) activeTab.value = 'all'
+  selectedSet.value = new Set()
+  releaseThumbs()
+  void reload()
+})
+
+// 宿主异步给出项目清单：从单项目口径切到全局库，并重新取数。
+watch(() => props.projects, () => {
+  openFolder.value = ''
+  if (activeTab.value === 'folders' && projectOptions.value.length && !projectFilter.value) activeTab.value = 'all'
   selectedSet.value = new Set()
   releaseThumbs()
   void reload()
@@ -699,8 +752,26 @@ function folderExists(path: string): boolean {
   return folders.value.includes(path)
 }
 
+function projectNameById(id: string): string {
+  return projectOptions.value.find(project => project.id === id)?.name ?? ''
+}
+
+/** 条目的项目归属：全局库里每条资料都带自己的 project_id，操作用它而不是当前项目。 */
+function projectIdOf(item: ProjectArtifact): string {
+  return String(item.project_id || props.projectId || '')
+}
+
+function projectName(item: ProjectArtifact): string {
+  return projectNameById(String(item.project_id || ''))
+}
+
+function workRootOf(item: ProjectArtifact): string {
+  return String(item.work_root || props.workRoot || '')
+}
+
 /** 有没有正在生效的筛选（关键词 / 标签 / 非「全部」页签）——空态据此区分“没匹配”与“库是空的”。 */
 const hasFilter = computed(() => Boolean(query.value.trim()) || Boolean(activeTag.value)
+  || (projectOptions.value.length > 0 && Boolean(projectFilter.value))
   || (activeTab.value !== 'all' && activeTab.value !== 'folders'))
 
 /** 搜索时「文件夹」页签让位给文件结果，而不是继续摆着没被过滤的文件夹。 */
@@ -748,7 +819,16 @@ const visible = computed(() => {
 const statsLine = computed(() => {
   const count = stats.value.count
   const label = t("{0} 个文件 · {1}", { 0: count, 1: formatBytes(stats.value.bytes) })
-  return count ? label : t("资料库还是空的")
+  // 没有项目清单时保持单项目口径（展厅/旧调用）；有清单就说明当前看的是哪个范围。
+  if (!projectOptions.value.length) return count ? label : t("资料库还是空的")
+  if (!count) return projectFilter.value ? t("这个项目还没有资料") : t("资料库还是空的")
+  return `${projectFilter.value ? projectNameById(projectFilter.value) : t("全部项目")} · ${label}`
+})
+
+const emptyTitle = computed(() => {
+  if (openFolder.value) return t("这一层还没有文件")
+  if (projectOptions.value.length && projectFilter.value) return t("这个项目还没有资料")
+  return t("资料库还是空的")
 })
 
 function formatBytes(bytes: number): string {
@@ -897,6 +977,8 @@ async function toggleTag(item: ProjectArtifact, tag: string): Promise<void> {
 }
 
 function selectTab(tab: TabId): void {
+  // 全局库里归档文件夹属于某个项目：先选项目，再进它的归档。
+  if (tab === 'folders' && projectOptions.value.length && !projectFilter.value) return
   activeTab.value = tab
   if (tab !== 'folders') openFolder.value = ''
 }
@@ -906,6 +988,7 @@ function clearFilters(): void {
   query.value = ''
   activeTag.value = ''
   activeTab.value = 'all'
+  if (projectOptions.value.length) projectFilter.value = ''
 }
 
 function goToFolder(dir: string): void {
@@ -943,7 +1026,7 @@ async function resolveActualPath(item: ProjectArtifact): Promise<string> {
   const reference = item.path || item.uri || ''
   if (!reference) return ''
   try {
-    if (!reference.startsWith('attachment://')) return absoluteArtifactPath(item, props.workRoot)
+    if (!reference.startsWith('attachment://')) return absoluteArtifactPath(item, workRootOf(item))
     const attachmentId = reference.slice('attachment://'.length)
     const response = await props.transport?.request<TransportHttpResponse>({
       kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(attachmentId)}/preview`,
@@ -960,7 +1043,7 @@ async function openInSplit(item: ProjectArtifact): Promise<boolean> {
   const actual = await resolveActualPath(item)
   if (!actual) return false
   try {
-    return Boolean(openFileInSplit(splitWorkspace, actual, { workRoot: props.workRoot || '', projectId: props.projectId || undefined }))
+    return Boolean(openFileInSplit(splitWorkspace, actual, { workRoot: workRootOf(item), projectId: projectIdOf(item) || undefined }))
   } catch { return false }
 }
 
@@ -974,7 +1057,7 @@ async function previewItem(item: ProjectArtifact): Promise<void> {
   const actual = await resolveActualPath(item)
   if (!actual) { actionError.value = '拿不到这个文件的真实路径，无法预览'; return }
   if (!previewLightboxAvailable()) { actionError.value = '预览器还没就绪，稍后再试'; return }
-  openInLightbox(filePreviewTarget(actual, { workRoot: props.workRoot || '', projectId: props.projectId || undefined }))
+  openInLightbox(filePreviewTarget(actual, { workRoot: workRootOf(item), projectId: projectIdOf(item) || undefined }))
 }
 
 /** 后端失败时尽量把它那句人话取出来，取不到再退回可读的兜底。 */
@@ -1002,8 +1085,8 @@ async function convertItem(item: ProjectArtifact): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: new TextEncoder().encode(JSON.stringify({
         path: actual,
-        work_root: props.workRoot || '',
-        project_id: props.projectId || '',
+        work_root: workRootOf(item),
+        project_id: projectIdOf(item),
       })),
     })
     if (response.status < 200 || response.status >= 300) throw new Error(failureDetail(response.body, '转换失败'))
@@ -1017,7 +1100,7 @@ async function convertItem(item: ProjectArtifact): Promise<void> {
 
 /** 引用给人看的形态：workspace:// 展开成磁盘绝对路径，其余原样。 */
 function displayPath(item: ProjectArtifact): string {
-  return absoluteArtifactPath(item, props.workRoot)
+  return absoluteArtifactPath(item, workRootOf(item))
 }
 
 /**
@@ -1038,7 +1121,7 @@ async function openWithSystem(item: ProjectArtifact): Promise<void> {
       }
     } else {
       await props.requestRpc('artifact.open', {
-        project_id: props.projectId,
+        project_id: projectIdOf(item),
         artifact_id: item.artifact_id,
         path: reference,
       })
@@ -1158,7 +1241,7 @@ const compareItems = computed(() => selectedItems.value.slice(0, 4))
 async function patch(item: ProjectArtifact, method: string, params: Record<string, unknown>): Promise<void> {
   error.value = ''
   try {
-    const result = await props.requestRpc(method, { project_id: props.projectId, artifact_id: item.artifact_id, ...params })
+    const result = await props.requestRpc(method, { project_id: projectIdOf(item), artifact_id: item.artifact_id, ...params })
     const fresh = normalizeArtifact((result as { artifact?: unknown }).artifact)
     if (fresh) items.value = items.value.map(entry => entry.artifact_id === fresh.artifact_id ? fresh : entry)
   } catch (cause) {
@@ -1199,10 +1282,15 @@ async function confirmRemove(): Promise<void> {
   if (!victims.length) return
   error.value = ''
   try {
-    await props.requestRpc('artifact.delete', {
-      project_id: props.projectId,
-      artifact_ids: victims.map(item => item.artifact_id),
-    })
+    // 跨项目选中时按项目分组：删除只作用在每条资料自己的项目里。
+    const groups = new Map<string, string[]>()
+    for (const item of victims) {
+      const projectId = projectIdOf(item)
+      groups.set(projectId, [...(groups.get(projectId) ?? []), item.artifact_id])
+    }
+    for (const [projectId, artifactIds] of groups) {
+      await props.requestRpc('artifact.delete', { project_id: projectId, artifact_ids: artifactIds })
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
     return

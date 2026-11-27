@@ -24,6 +24,7 @@
       :work-root="workRoot"
       :artifact-signal="artifactSignal"
       :upload-files="uploadFiles"
+      :projects="projects"
     />
     <!-- user:“全盘文件自动可搜索，不需要手动导入”+(本机文件与项目资料并列：搜索、浏览、预览、收藏共用一份文件身份)。 -->
     <LocalFilesView
@@ -48,10 +49,13 @@
       :root-label="t('方案')"
       :client="client"
       :project-id="projectId"
+      :projects="projects"
       :refresh-signal="refreshSignal"
       :band-actions="bandActions"
+      :import-plan-file="importPlanFile"
       @back="emit('back')"
       @start-plan="emit('start-plan', $event)"
+      @plan-action="emit('plan-action', $event)"
       @heading="onChildHeading"
     />
     <WikiView
@@ -91,7 +95,7 @@ import { onManualTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
  *
  * 分区切换只在最外层；每一项内部的层级（记忆的项目层与档位、方案的状态筛选）各自管自己。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { CoreProjectClient } from '@/projects/client.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 // user:“该修修”+(Wiki 分区使用真实组件，避免未注册标签导致空白)。
@@ -100,7 +104,7 @@ import MaterialsView from '@/components/MaterialsView.vue'
 import LocalFilesView from '@/components/LocalFilesView.vue'
 import MemoryView from '@/components/MemoryView.vue'
 import PlanLibraryView from '@/components/PlanLibraryView.vue'
-import type { PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import type { PlanAction, PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
 import CoreSplitFileTree from '@/components/CoreSplitFileTree.vue'
 import type { SplitFileEntry } from '@/split/native'
 
@@ -119,6 +123,8 @@ const props = defineProps<{
   artifactSignal?: unknown
   /** 上传文件到资料库的当前层（选文件与传字节都由宿主负责）。 */
   uploadFiles?: (folder: string) => Promise<void>
+  /** 从现有文件导入方案（桌面给路径，其它环境给内容）。 */
+  importPlanFile?: () => Promise<{ path?: string; name?: string; text?: string } | null>
   /** Bumped by the host when a turn finishes — the cue to rescan. */
   refreshSignal?: number
   /** Desktop sends actions into the header band; phones render them in place. */
@@ -132,6 +138,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   'start-plan': [entry: PlanLibraryEntry]
+  'plan-action': [payload: { entry: PlanLibraryEntry; action: PlanAction }]
   /** 顶部条标题跟随分区与分区内的子页。 */
   heading: [payload: { title: string; subtitle: string }]
 }>()
@@ -147,6 +154,16 @@ const SECTIONS: Array<{ id: SectionId; label: string }> = [
 ]
 
 const section = ref<SectionId>('materials')
+/** 全部项目（id/name）：资料、记忆、方案都用它跨项目展示，项目只是文件位置。 */
+const projects = ref<Array<{ id: string; name: string }>>([])
+async function loadProjects(): Promise<void> {
+  try {
+    projects.value = (await props.client.list()).map(project => ({ id: project.id, name: project.name }))
+  } catch {
+    projects.value = []
+  }
+}
+onMounted(() => { void loadProjects() })
 const sections = computed(() => SECTIONS.filter(item => (item.id !== 'files' || Boolean(props.openProjectFile && props.platform !== 'mobile')) && (item.id !== 'local' || props.platform !== 'mobile')))
 const filesVisited = ref(false)
 const childHeading = ref<{ title: string; subtitle: string } | null>(null)
@@ -168,6 +185,8 @@ function openFile(path: string) {
 watch(() => props.projectId, () => {
   section.value = 'materials'
   childHeading.value = null
+  // 项目可能新建/改名：重新取一次清单，资料与方案的项目筛选才能跟上。
+  void loadProjects()
 })
 
 function onChildHeading(payload: { title: string; subtitle: string }): void {

@@ -384,6 +384,16 @@ class ArtifactStore:
             rows = list((await db.execute(query.order_by(CoreArtifact.created_at, CoreArtifact.id))).scalars())
             return [_artifact_record(row) for row in rows]
 
+    async def list_all(self, *, include_deleted: bool = False) -> list[ArtifactRecord]:
+        # user:“库本身的全局与项目划分也仅是一个文件划分”+(库是全局的：一次列出所有项目的资料，
+        # 项目只是条目的归属；不再要求先选中项目才能看到库)。
+        async with self.session_factory() as db:
+            query = select(CoreArtifact)
+            if not include_deleted:
+                query = query.where(CoreArtifact.deleted.is_(False))
+            rows = list((await db.execute(query.order_by(CoreArtifact.created_at, CoreArtifact.id))).scalars())
+            return [_artifact_record(row) for row in rows]
+
     async def resolve_project_id(self, work_root: str | Path) -> str:
         """按工作根定位项目；当前运行时没有对应项目就返回空串。"""
         async with self.session_factory() as db:
@@ -554,7 +564,13 @@ class ArtifactStore:
 
     async def stats(self, project_id: str) -> dict[str, int]:
         """资料库的占用：成果条数，以及各成果当前文件的字节合计。"""
-        records = await self.list(project_id)
+        return await self._stats_for(await self.list(project_id))
+
+    async def stats_all(self) -> dict[str, int]:
+        """全库占用：跨所有项目的条数与字节合计。"""
+        return await self._stats_for(await self.list_all())
+
+    async def _stats_for(self, records: list[ArtifactRecord]) -> dict[str, int]:
         total = 0
         for record in records:
             path = await self.current_content_path(record)

@@ -364,3 +364,27 @@ async def test_artifact_preview_cli_prints_plain_text(tmp_path: Path, capsys: py
 
     assert result == 0
     assert capsys.readouterr().out == "print('hello')\n"
+
+@pytest.mark.asyncio
+async def test_library_lists_and_counts_across_projects(tmp_path: Path) -> None:
+    """库是全局的：all_projects 一次给出所有项目的资料，项目只是归属。"""
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    project_a, _ = await db.project_store.create(root_a)
+    project_b, _ = await db.project_store.create(root_b)
+    (root_a / "a.txt").write_text("aaa", encoding="utf-8")
+    (root_b / "b.txt").write_text("bbbb", encoding="utf-8")
+    await db.artifact_store.register(project_id=project_a.id, work_root=root_a, path="a.txt", kind="file_change")
+    await db.artifact_store.register(project_id=project_b.id, work_root=root_b, path="b.txt", kind="file_change")
+
+    # 单项目仍然只看自己的；全库一次给出两边，项目归属随条目一起返回。
+    assert len(await db.artifact_store.list(project_a.id)) == 1
+    all_records = await db.artifact_store.list_all()
+    assert {record.project_id for record in all_records} == {project_a.id, project_b.id}
+    stats = await db.artifact_store.stats_all()
+    assert stats["count"] == 2
+    assert stats["bytes"] == 7
+    await db.close()

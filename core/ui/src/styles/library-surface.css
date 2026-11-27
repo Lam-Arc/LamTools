@@ -51,6 +51,19 @@
 }
 .library-surface .materials-search { flex: 1 1 240px; max-width: 360px; }
 .library-surface .materials-new { flex: 0 0 auto; }
+/* 项目筛选：库默认看全部项目；项目只是文件的归属。 */
+.library-surface .materials-project-filter {
+  flex: 0 0 auto;
+  max-width: 150px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-background) 82%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
 /* 一句占用实话：安静一行，不是警报。 */
 .library-surface .materials-usage {
   margin: 0 0 var(--space-4);
@@ -217,6 +230,19 @@ body.library-drag-selecting .library-surface .library-row { cursor: crosshair; }
   font-size: 11.5px;
   color: color-mix(in srgb, var(--text) 45%, transparent);
   font-variant-numeric: tabular-nums;
+}
+/* 归属标签：这张资料属于哪个项目；全局库里用来认路，不是第二套导航。 */
+.library-surface .material-project {
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 11px;
 }
 .library-surface .material-star {
   display: inline-flex;
@@ -977,4 +1003,147 @@ body.library-drag-selecting .library-surface .library-row { cursor: crosshair; }
 
 .library-surface .materials-send-menu {
   position: fixed;
+}
+
+/* ── 方案体系：类型徽章、筛选行、阅读页目录 / 关联 / Agent 动作 ──
+   user:“保留 Library 中现有的「方案」入口，把它改造成管理各类方案文档的工作区域”
+   “避免把方案模块设计成复杂的 Jira / Notion”+(筛选与动作贴着文档本身，
+   不引入新的侧栏或项目管理面板)。 */
+.library-surface .library-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.library-surface .library-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+.library-surface .library-filter select {
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text);
+  font-size: 12px;
+}
+.library-surface .plan-type-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .02em;
+  color: color-mix(in srgb, var(--blue) 82%, var(--text));
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  flex: 0 0 auto;
+}
+.library-surface .plan-type-badge[data-plan-type='none'] {
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.library-surface .plan-type-badge--small { min-height: 18px; padding: 0 6px; font-size: 10px; }
+.library-surface .plan-topic-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.library-surface .plan-card-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
+.library-surface .plan-topic { font-size: 12px; }
+.library-surface .plan-agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+.library-surface .plan-actions-gap { flex: 1 1 auto; }
+.library-surface .plan-meta-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  margin: 0 0 14px;
+}
+.library-surface .plan-meta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+}
+.library-surface .plan-meta-field select,
+.library-surface .plan-meta-field input {
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+.library-surface .plan-meta-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.library-surface .plan-toc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  border-left: 2px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.library-surface .plan-toc-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+}
+.library-surface .plan-toc-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+  cursor: pointer;
+}
+.library-surface .plan-toc-link:hover { color: var(--text); }
+.library-surface .plan-relations { margin: 18px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.library-surface .plan-relation-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.library-surface .plan-relation {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.library-surface .plan-relation:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover, 5%), transparent); }
+.library-surface .plan-relation--session { cursor: default; color: color-mix(in srgb, var(--text) 62%, transparent); }
+.library-surface .library-status[data-plan-impl='review'] { background: color-mix(in srgb, var(--orange) 16%, transparent); color: var(--orange); }
+.library-surface .library-status[data-plan-impl='accepted'] { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+.library-surface .library-status[data-plan-status='archived'],
+.library-surface .library-status[data-plan-status='deprecated'] {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: color-mix(in srgb, var(--text) 55%, transparent);
 }
