@@ -163,7 +163,7 @@ describe('PlanLibraryView', () => {
     const start = wrapper.get('[data-library-start]')
     expect(start.attributes('disabled')).toBeUndefined()
     await start.trigger('click')
-    expect(wrapper.emitted('start-plan')?.[0]?.[0]).toMatchObject({ path: '方案/导出显示进度.md' })
+    expect(wrapper.emitted('start-plan')?.[0]?.[0]).toMatchObject({ entry: { path: '方案/导出显示进度.md' }, sourceProjectId: 'proj-1' })
 
     pressEscape()
     await settled()

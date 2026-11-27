@@ -22,8 +22,8 @@ Design rules this module implements:
   stripped before anything is stored; entries the user deleted stay on a
   "forgotten" list that the prompt forbids restoring.
 * **Safe under concurrency.**  One pass per process and one per tier at a time;
-  the core document is written with compare-and-swap, so a concurrent user save
-  is retried from the latest content instead of being overwritten.
+  the core document is written only if it still matches the version sent to
+  the model, preserving any concurrent user save.
 """
 
 from __future__ import annotations
@@ -71,10 +71,6 @@ DREAM_MAX_CORE_CHARS = memory_library.MAX_CORE_PROMPT_CHARS
 DREAM_CALL_TIMEOUT_SECONDS = 180.0
 DREAM_LOCK_STALE_SECONDS = 600.0
 DREAM_SWEEP_SECONDS = 600.0
-
-#: How often a pass retries its core-document write when a user edits it at the
-#: same moment (compare-and-swap, never a blind overwrite).
-DREAM_CORE_WRITE_ATTEMPTS = 3
 
 STATE_DIRNAME = ".dreaming"
 STATE_FILENAME = "state.json"
@@ -398,12 +394,24 @@ def _cut_at_paragraph(text: str, limit: int) -> str:
     return cut.rstrip()
 
 
+def _read_core_documents(work_root: str | Path | None) -> dict[str, str]:
+    documents = {
+        memory_library.SCOPE_GLOBAL: memory_library.read_core_document(memory_library.SCOPE_GLOBAL, None)
+    }
+    if work_root:
+        documents[memory_library.SCOPE_PROJECT] = memory_library.read_core_document(
+            memory_library.SCOPE_PROJECT, work_root
+        )
+    return documents
+
+
 def build_dream_messages(
     *,
     work_root: str | Path | None,
     session_id: str,
     turns: list[dict[str, Any]],
     scope: str | None = None,
+    core_before: dict[str, str] | None = None,
 ) -> list[ChatMessage]:
     """Assemble the single prompt of one pass."""
     tier = (
@@ -413,17 +421,15 @@ def build_dream_messages(
     )
     state = load_state(tier, work_root if tier == memory_library.SCOPE_PROJECT else None)
 
-    project_core = (
-        memory_library.read_core_document(memory_library.SCOPE_PROJECT, work_root)
-        if tier == memory_library.SCOPE_PROJECT
-        else ""
-    )
+    if core_before is None:
+        core_before = _read_core_documents(work_root if tier == memory_library.SCOPE_PROJECT else None)
+    project_core = core_before.get(memory_library.SCOPE_PROJECT, "")
     index = (
         memory_library.render_index(memory_library.SCOPE_PROJECT, work_root)
         if tier == memory_library.SCOPE_PROJECT
         else ""
     )
-    global_core = memory_library.read_core_document(memory_library.SCOPE_GLOBAL, None)
+    global_core = core_before[memory_library.SCOPE_GLOBAL]
 
     forgotten = state.get("forgotten") or []
     forgotten_lines = (
@@ -498,7 +504,9 @@ def parse_dream_output(text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _apply_core_document(scope: str, work_root: str | Path | None, core_text: str) -> bool:
+def _apply_core_document(
+    scope: str, work_root: str | Path | None, core_text: str, *, expected: str
+) -> bool:
     text, _ = scrub_secrets(str(core_text or ""))
     text = text.strip()
     if not text:
@@ -508,23 +516,15 @@ def _apply_core_document(scope: str, work_root: str | Path | None, core_text: st
         # stops a runaway answer from turning the document into a dump.
         text = _cut_at_paragraph(text, DREAM_MAX_CORE_CHARS)
         text += "\n\n（整理结果超出体积上限，末尾已截断；更细的内容应放进独立记忆文件）"
-    # A pass holds the tier lock against other passes, but the user can save the
-    # document at any moment. Recompute from the latest copy (pinned regions are
-    # carried over verbatim) and use the compare-and-swap write, so a concurrent
-    # save is retried from the newest content instead of being lost.
-    for _ in range(DREAM_CORE_WRITE_ATTEMPTS):
-        existing = memory_library.read_core_document(scope, work_root)
-        merged = memory_library.merge_core_document(existing, text)
-        if merged == existing:
-            return False
-        try:
-            memory_library.write_core_document(
-                scope, work_root, merged, expected=existing
-            )
-        except memory_library.MemoryConflictError:
-            continue
-        return True
-    return False
+    # user:“全修，但是不要过度工程化”+(以送给模型的原文校验；整理期间手动保存或清空后，丢弃这次旧稿)。
+    merged = memory_library.merge_core_document(expected, text)
+    if merged == expected:
+        return False
+    try:
+        memory_library.write_core_document(scope, work_root, merged, expected=expected)
+    except memory_library.MemoryConflictError:
+        return False
+    return True
 
 
 def _apply_memories(
@@ -533,7 +533,13 @@ def _apply_memories(
     written: list[dict[str, str]] = []
     if not isinstance(items, list):
         return written
-    root = memory_library.memory_root(scope, work_root)
+    root = memory_library.memory_root(scope, work_root).resolve()
+    # user:“全修，但是不要过度工程化”+(在写入前用最新的删除记录挡住已删除路径)。
+    forgotten = {
+        Path(entry["path"])
+        for entry in load_state(scope, work_root).get("forgotten", [])
+        if isinstance(entry.get("path"), str)
+    }
     for item in items[:DREAM_MAX_MEMORIES_PER_SCOPE]:
         if not isinstance(item, dict):
             continue
@@ -564,6 +570,9 @@ def _apply_memories(
             )
         except (ValueError, memory_library.MemoryError):
             continue
+        path = Path(relative)
+        if path in forgotten or not forgotten.isdisjoint(path.parents):
+            continue
         mode = str(item.get("mode") or "write").strip().lower()
         try:
             if mode == "append":
@@ -577,15 +586,22 @@ def _apply_memories(
 
 
 def apply_dream_output(
-    *, work_root: str | Path | None, output: dict[str, Any]
+    *,
+    work_root: str | Path | None,
+    output: dict[str, Any],
+    core_before: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Write one validated pass.  Called only after the JSON parsed."""
+    if core_before is None:
+        core_before = _read_core_documents(work_root)
     written: list[dict[str, str]] = []
     global_section = output.get("global") if isinstance(output.get("global"), dict) else {}
     project_section = output.get("project") if isinstance(output.get("project"), dict) else {}
 
     global_core = global_section.get("core") or global_section.get("core_auto") or ""
-    if _apply_core_document(memory_library.SCOPE_GLOBAL, None, global_core):
+    if _apply_core_document(
+        memory_library.SCOPE_GLOBAL, None, global_core, expected=core_before[memory_library.SCOPE_GLOBAL]
+    ):
         written.append({"scope": memory_library.SCOPE_GLOBAL, "path": memory_library.CORE_FILENAME})
     written.extend(
         _apply_memories(memory_library.SCOPE_GLOBAL, None, global_section.get("memories"))
@@ -593,7 +609,10 @@ def apply_dream_output(
 
     if work_root:
         project_core = project_section.get("core") or project_section.get("core_auto") or ""
-        if _apply_core_document(memory_library.SCOPE_PROJECT, work_root, project_core):
+        if _apply_core_document(
+            memory_library.SCOPE_PROJECT, work_root, project_core,
+            expected=core_before[memory_library.SCOPE_PROJECT],
+        ):
             written.append(
                 {"scope": memory_library.SCOPE_PROJECT, "path": memory_library.CORE_FILENAME}
             )
@@ -688,11 +707,13 @@ async def _run_pass(
     if lock is None:
         return {"status": "skipped", "reason": "busy", "written": []}
     try:
+        core_before = _read_core_documents(root)
         messages = build_dream_messages(
             work_root=root,
             session_id=session_id,
             turns=kept,
             scope=tier,
+            core_before=core_before,
         )
         request = LLMRequest(
             messages=messages,
@@ -714,7 +735,7 @@ async def _run_pass(
         if not dreaming_enabled():
             return {"status": "skipped", "reason": "disabled", "written": []}
         output = parse_dream_output(getattr(response, "content", "") or "")
-        written = apply_dream_output(work_root=root, output=output)
+        written = apply_dream_output(work_root=root, output=output, core_before=core_before)
 
         # Re-read before writing the cursor: a delete may have added a tombstone
         # while the model was running, and that must not be clobbered.

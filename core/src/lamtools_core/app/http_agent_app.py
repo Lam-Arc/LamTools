@@ -28,6 +28,7 @@ from lamtools_core.cli import (
 )
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
+from lamtools_core.llm.helpers import folded_tool_call_repair_enabled
 from lamtools_core.llm.profiles import declared_reasoning_levels, reasoning_off_supported
 from lamtools_core.config import build_config_operation_catalog
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
@@ -132,7 +133,11 @@ class CoreConfigRoutingLLMClient:
 
     async def stream(self, request: LLMRequest):
         config, client = self._client_for_request(request)
+        repair = folded_tool_call_repair_enabled(config)
         async for event in client.stream(replace(request, model=config.model_id)):
+            if event.kind == "tool_call_delta":
+                # user:“全修，但是不要过度工程化”+(随工具调用传递本次路由解析出的开关)。
+                event = replace(event, metadata={**(event.metadata or {}), "folded_tool_call_repair": repair})
             yield event
 
     def _client_for_request(self, request: LLMRequest) -> tuple[Any, CoreHttpLLMClient]:

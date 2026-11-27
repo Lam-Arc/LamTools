@@ -503,43 +503,44 @@ async def test_turn_end_pass_skips_without_a_model(project_work):
 
 
 @pytest.mark.asyncio
-async def test_a_concurrent_user_edit_is_never_overwritten(project_work, monkeypatch):
-    """Dreaming must recompute from the user's copy, not clobber it (PRD 5.3)."""
-    memory.write_core_document(memory.SCOPE_PROJECT, project_work, "# 认知\n旧内容。\n")
-    from lamtools_core.mem import library as memory_library
+@pytest.mark.parametrize("edited", ["用户刚保存的普通编辑。", ""])
+async def test_an_inflight_dream_preserves_edits_and_clears(project_work, edited):
+    scope = memory.SCOPE_PROJECT
+    memory.write_core_document(scope, project_work, "旧的核心认知。")
 
-    # Patch the module the dreaming engine actually reads through (the package
-    # re-exports the function by value, so patching `memory` would do nothing).
-    original_read = memory_library.read_core_document
-    fired = {"done": False}
+    class EditingModel(StubLLM):
+        async def complete(self, request):
+            assert "旧的核心认知。" in request.messages[-1].content
+            memory.write_core_document(scope, project_work, edited)
+            return await super().complete(request)
 
-    def racing_read(scope, root):
-        text = original_read(scope, root)
-        if not fired["done"]:
-            fired["done"] = True
-            # The user saves a pinned line right after the pass read the file.
-            memory_library.core_file_path(scope, root).write_text(
-                text
-                + f"\n{memory.CORE_PINNED_START}\n用户刚写下的一句。\n{memory.CORE_PINNED_END}\n",
-                encoding="utf-8",
-            )
-        return text
+    result = await _run(project_work, EditingModel(_output(project={"core": "旧版本的整理结果。"})))
 
-    monkeypatch.setattr(memory_library, "read_core_document", racing_read)
+    assert result["status"] == "applied"
+    assert not result["written"]
+    assert memory.read_core_document(scope, project_work) == edited
 
-    # The model's proposal does NOT know about the concurrent save.
-    written = dreaming.apply_dream_output(
-        work_root=project_work,
-        output={"project": {"core": "# 认知\n- 自动整理结论\n", "memories": []}},
-    )
 
-    assert any(item["path"] == memory.CORE_FILENAME for item in written)
-    final = original_read(memory.SCOPE_PROJECT, project_work)
-    assert "自动整理结论" in final, "the pass must still land"
-    # It survives only because the retry recomputed from the latest document and
-    # carried the pinned region over — a blind write would have dropped it.
-    assert "用户刚写下的一句。" in final
-    assert final.count(memory.CORE_PINNED_START) == 1
+@pytest.mark.asyncio
+async def test_an_inflight_dream_cannot_recreate_a_deleted_memory(project_work):
+    scope = memory.SCOPE_PROJECT
+    path = "notes/old.md"
+    memory.write_memory(scope, project_work, path, "用户要忘记的内容。")
+
+    class DeletingModel(StubLLM):
+        async def complete(self, request):
+            memory.delete_memory(scope, project_work, path)
+            dreaming.record_forgotten(scope, project_work, path)
+            return await super().complete(request)
+
+    llm = DeletingModel(_output(project={"memories": [
+        {"path": "notes/./old.md", "content": "用户要忘记的内容。"},
+        {"path": "notes/new.md", "content": "应保留的另一条记忆。"},
+    ]}))
+    result = await _run(project_work, llm)
+
+    assert result["written"] == [{"scope": scope, "path": "notes/new.md"}]
+    assert not (memory.memory_root(scope, project_work) / path).exists()
 
 
 @pytest.mark.asyncio

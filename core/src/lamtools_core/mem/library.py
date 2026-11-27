@@ -464,8 +464,8 @@ def write_core_document(
     """Replace ``memory.md`` atomically, keeping the previous version.
 
     ``expected`` turns the read-modify-write into a compare-and-swap so a caller
-    that computed a new document from an older copy (Dreaming) can retry from the
-    latest content instead of silently dropping a concurrent edit.
+    that computed a new document from an older copy (Dreaming) can reject a
+    stale rewrite and preserve a concurrent edit.
     """
     normalized = _normalize_scope(scope)
     target = core_file_path(normalized, work_root)

@@ -104,7 +104,7 @@ import MaterialsView from '@/components/MaterialsView.vue'
 import LocalFilesView from '@/components/LocalFilesView.vue'
 import MemoryView from '@/components/MemoryView.vue'
 import PlanLibraryView from '@/components/PlanLibraryView.vue'
-import type { PlanAction, PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import type { PlanAction, PlanLaunchSource } from '@/components/PlanLibraryView.vue'
 import CoreSplitFileTree from '@/components/CoreSplitFileTree.vue'
 import type { SplitFileEntry } from '@/split/native'
 
@@ -137,8 +137,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: []
-  'start-plan': [entry: PlanLibraryEntry]
-  'plan-action': [payload: { entry: PlanLibraryEntry; action: PlanAction }]
+  'start-plan': [source: PlanLaunchSource]
+  'plan-action': [payload: PlanLaunchSource & { action: PlanAction }]
   /** 顶部条标题跟随分区与分区内的子页。 */
   heading: [payload: { title: string; subtitle: string }]
 }>()

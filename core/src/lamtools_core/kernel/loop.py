@@ -57,7 +57,11 @@ from lamtools_core.llm import (
 )
 from lamtools_core.llm.cache_diagnostics import record_cache_observation
 from lamtools_core.llm.forensics import runtime_context as forensic_runtime_context
-from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
+from lamtools_core.llm.helpers import (
+    folded_tool_call_repair_enabled,
+    merge_tool_call_deltas,
+    resolve_tool_calls,
+)
 from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.session_affinity import provider_session_affinity
@@ -128,23 +132,6 @@ _STREAM_TEXT_PROGRESS_CHARS = 128
 # watchdog 作为**下一个回合**投递（见 _announce_active_members 与
 # app/memory_resume_supervisor.py）。这样成员结果永远不会被本回合的最终总结
 # 卷走，主代理也不会为了成员把回合拖成看起来卡住。
-
-
-def _folded_tool_call_repair_enabled(llm_client: Any) -> bool:
-    """Whether folded parallel tool calls may be split back into one call each.
-
-    user:“还有这条配置路径，最好不要直调，而是走 Sunday 本身用户能接触到的配置模式”+
-    是否复原被供应商折叠的并行工具调用，按供应商/模型配置决定：provider 与 model 的
-    extra 都能写 ``folded_tool_call_repair: false`` 关掉（模型配置优先），默认开启。
-    默认开启是安全的：只有参数串真正是「多个完整 JSON 对象拼接」时才触发，正常模型
-    的合法参数永远走原路径。
-    """
-    config = getattr(llm_client, "config", None)
-    extras: dict[str, Any] = {}
-    for source in (getattr(config, "provider_extra", None), getattr(config, "model_extra", None)):
-        if isinstance(source, dict):
-            extras.update(source)
-    return extras.get("folded_tool_call_repair") is not False
 
 
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
@@ -2873,6 +2860,7 @@ class CoreLoopKernel:
         emitted_text = ""
         emitted_thinking = ""
         pending_tool_calls: dict[int, dict] = {}
+        repair_folded_arguments = folded_tool_call_repair_enabled(getattr(self.llm_client, "config", None))
         emitted_tool_call_indexes: set[int] = set()
         emitted_tool_input_arguments: dict[int, str] = {}
         # Some providers send usage in a standalone chunk (usage present but no
@@ -2953,9 +2941,14 @@ class CoreLoopKernel:
                     pending_usage = event.usage
                 if event.provider_state is not None:
                     provider_state = copy.deepcopy(event.provider_state)
-                route = event.metadata.get("cache_diagnostic_route") if isinstance(event.metadata, dict) else None
+                event_metadata = event.metadata if isinstance(event.metadata, dict) else {}
+                route = event_metadata.get("cache_diagnostic_route")
                 if isinstance(route, dict):
                     cache_diagnostic_route = dict(route)
+                # user:“全修，但是不要过度工程化”+(采用该次流式请求实际选中的模型配置)。
+                repair_setting = event_metadata.get("folded_tool_call_repair")
+                if isinstance(repair_setting, bool):
+                    repair_folded_arguments = repair_setting
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -3117,7 +3110,7 @@ class CoreLoopKernel:
         merged_tool_calls = terminal_tool_calls or (
             resolve_tool_calls(
                 pending_tool_calls,
-                repair_folded_arguments=_folded_tool_call_repair_enabled(self.llm_client),
+                repair_folded_arguments=repair_folded_arguments,
             )
             if pending_tool_calls
             else []

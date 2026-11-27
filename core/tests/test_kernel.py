@@ -6258,3 +6258,39 @@ class TestKernelRuntimeSettings:
         # The next request must advertise the new mode's tools, so the old
         # frozen array has to be dropped.
         assert frozen_tool_names("test-session", "static") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider_extra", "model_extra", "expected_count"), [
+    ({"folded_tool_call_repair": False}, {}, 1),
+    ({}, {"folded_tool_call_repair": False}, 1),
+    ({"folded_tool_call_repair": False}, {"folded_tool_call_repair": True}, 2),
+])
+async def test_routed_stream_honors_folded_tool_call_repair(
+    monkeypatch, provider_extra, model_extra, expected_count
+):
+    from types import SimpleNamespace
+
+    from lamtools_core.app.http_agent_app import CoreConfigRoutingLLMClient
+    from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
+
+    class FoldedStream:
+        async def stream(self, request):
+            yield LLMStreamEvent(kind="tool_call_delta", metadata={"tool_calls_delta": [{
+                "index": 0,
+                "id": "call-read",
+                "function": {"name": "read_file", "arguments": '{"path":"a"}{"path":"b"}'},
+            }]})
+
+    router = CoreConfigRoutingLLMClient(default_model_ref="test/model")
+    config = SimpleNamespace(model_id="test-model", provider_extra=provider_extra, model_extra=model_extra)
+    monkeypatch.setattr(router, "_client_for_request", lambda request: (config, FoldedStream()))
+    kernel = _make_kernel(MockRuntimeKit(), llm_client=ShallowThinkingClient(router, enabled=True))
+    response = await kernel._stream_model(
+        LLMRequest(model="test/model", messages=[ChatMessage(role="user", content="read")]),
+        RuntimeState(session_id="stream-session", run_id="stream-run"),
+        response_index=0,
+    )
+
+    assert response is not None
+    assert len(response.tool_calls) == expected_count

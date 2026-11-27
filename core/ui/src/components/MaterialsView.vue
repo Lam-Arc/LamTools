@@ -12,8 +12,9 @@
       <div class="materials-tools">
         <!-- user:“库本身的全局与项目划分也仅是一个文件划分”+(库默认看全部项目；项目只是筛选与归属，
              不要求先选中项目才能看库)。 -->
+        <!-- user:“全修，但是不要过度工程化”+(单项目也用现有筛选器进入该项目的归档文件夹)。 -->
         <select
-          v-if="projectOptions.length > 1"
+          v-if="projectOptions.length"
           v-model="projectFilter"
           class="materials-project-filter"
           :aria-label="t('按项目筛选')"

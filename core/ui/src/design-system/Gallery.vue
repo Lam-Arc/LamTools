@@ -932,7 +932,7 @@ onBeforeUnmount(() => {
       <div class="preview" :style="item.name === 'SundayButton' && buttonMaterial ? { '--theme-control-image': 'linear-gradient(135deg, var(--theme-control-solid), color-mix(in srgb, var(--theme-control-solid) 80%, var(--theme-control-text)))' } : undefined">
         <button v-if="deferredPreviewNames.has(item.name) && !query.trim() && !requestedPreviews.has(item.name)" type="button" class="btn btn--secondary" :data-load-preview="item.name" @click="requestPreview(item.name)">加载预览</button>
         <template v-else-if="item.name === 'MaterialsView'">
-          <p>上传、打开、复制和删除均为本地模拟。</p><div class="library-surface loadtools-preview" style="width: 100%; height: 600px; overflow: auto"><MaterialsView project-id="sample" work-root="" :request-rpc="sampleMaterialsRpc" :transport="galleryMessageTransport" :upload-files="uploadSampleMaterial" :copy-path="async path => { galleryMaterialCopied = path }" /></div>
+          <p>上传、打开、复制和删除均为本地模拟。</p><div class="library-surface loadtools-preview" style="width: 100%; height: 600px; overflow: auto"><MaterialsView project-id="sample" :projects="[{ id: 'sample', name: '示例项目' }]" work-root="" :request-rpc="sampleMaterialsRpc" :transport="galleryMessageTransport" :upload-files="uploadSampleMaterial" :copy-path="async path => { galleryMaterialCopied = path }" /></div>
           <span v-if="galleryMaterialTags">本地标签：{{ galleryMaterialTags }}</span><span v-if="galleryMaterialRating !== null">本地评分：{{ galleryMaterialRating }}</span><span v-if="galleryMaterialCopied">本地复制：{{ galleryMaterialCopied }}</span>
         </template>
         <!-- user:“直接渲染项目真实组件”+(记忆和方案页面在隔离的本地数据中可交互预览)。 -->

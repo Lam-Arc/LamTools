@@ -71,6 +71,19 @@ describe('方案库 · 全局库', () => {
     expect(wrapper.findAll('[data-library-entry]')).toHaveLength(1)
     expect(wrapper.text()).toContain('乙项目')
 
+    await wrapper.get('[data-library-entry]').trigger('click')
+    await settled()
+    await wrapper.get('[data-library-start]').trigger('click')
+    await wrapper.get('[data-plan-action="discuss"]').trigger('click')
+    expect(wrapper.emitted('start-plan')?.[0]?.[0]).toMatchObject({
+      entry: { path: entry('p2').path }, sourceProjectId: 'p2',
+    })
+    expect(wrapper.emitted('plan-action')?.[0]?.[0]).toMatchObject({
+      entry: { path: entry('p2').path }, sourceProjectId: 'p2', action: 'discuss',
+    })
+    expect((wrapper.vm as unknown as { handleBack: () => boolean }).handleBack()).toBe(true)
+    await settled()
+
     // 从项目里退一步回到项目清单，而不是退出整个资料库。
     expect((wrapper.vm as unknown as { handleBack: () => boolean }).handleBack()).toBe(true)
     await settled()

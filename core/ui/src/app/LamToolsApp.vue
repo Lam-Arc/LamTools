@@ -995,7 +995,7 @@ import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
 import { installOverlayAction } from '@/core-app/overlayAction.ts'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
-import { type PlanAction, type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import { type PlanAction, type PlanLaunchSource } from '@/components/PlanLibraryView.vue'
 import { buildPlanLaunchPrompt, type PlanLaunchAction } from '@/app/planLaunch.ts'
 import type {
   CoreSettingsModelPayload,
@@ -1926,21 +1926,21 @@ const composerSendDisabled = computed(() => {
 const rightSidebarHold = ref(false)
 
 // 从方案发起任务：待选项目；选定后预制提示词而不是直接发送。
-const pendingPlanLaunch = ref<{ plan: PlanLibraryEntry; action: PlanLaunchAction } | null>(null)
+const pendingPlanLaunch = ref<(PlanLaunchSource & { action: PlanLaunchAction }) | null>(null)
 
 /**
  * "开工"（资料库）：方案即「方案/」文件夹里的一篇文档。点下开工先不干活——
  * 弹卡片问清楚在哪个项目里开工；选完把执行提示词预制进输入框，发不发、
  * 什么时候发由用户自己按。
  */
-function startPlanFromLibrary(plan: PlanLibraryEntry): void {
-  pendingPlanLaunch.value = { plan, action: 'start' }
+function startPlanFromLibrary(source: PlanLaunchSource): void {
+  pendingPlanLaunch.value = { ...source, action: 'start' }
 }
 
 /** 方案动作（讨论 / 审查 / 修订 / 实施 / 检查落实情况）：同样先选项目，
  *  再给这份方案开一个专属会话并预制带上下文的提示词。 */
-function startPlanActionFromLibrary(payload: { entry: PlanLibraryEntry; action: PlanAction }): void {
-  pendingPlanLaunch.value = { plan: payload.entry, action: payload.action }
+function startPlanActionFromLibrary(payload: PlanLaunchSource & { action: PlanAction }): void {
+  pendingPlanLaunch.value = payload
 }
 
 /** 选定项目后：切到该项目、新建会话，预制对应动作的提示词，并把方案与会话
@@ -1949,10 +1949,10 @@ async function confirmPlanLaunchProject(projectId: string): Promise<void> {
   const launch = pendingPlanLaunch.value
   pendingPlanLaunch.value = null
   if (!launch) return
-  const plan = launch.plan
+  // user:“全修，但是不要过度工程化”+(会话关联和方案路径都使用发起动作时记录的源项目)。
+  const { entry: plan, sourceProjectId } = launch
   const project = projects.value.find((item) => item.id === projectId)
   if (!project) return
-  const sourceProjectId = activeProjectId.value ?? selectedProjectId.value
   selectedProjectId.value = project.id
   rememberRecentProject(project)
   try {
@@ -1964,16 +1964,16 @@ async function confirmPlanLaunchProject(projectId: string): Promise<void> {
   // 方案与这次会话建立联系：下次在新会话也能顺着它继续（PRD §9.1）。
   const linkedSessionId = activeSessionId.value
   if (linkedSessionId && plan.path) {
-    void projectClient.setPlanLibraryMeta(sourceProjectId || projectId, plan.path, {
+    void projectClient.setPlanLibraryMeta(sourceProjectId, plan.path, {
       related_sessions: [linkedSessionId],
     }).catch(() => undefined)
   }
   closeFullArea()
   const rootSource = projects.value.find((item) => item.id === sourceProjectId)
-  const sameProject = !sourceProjectId || sourceProjectId === projectId
+  const sameProject = sourceProjectId === projectId
   composerText.value = buildPlanLaunchPrompt(launch.action, plan, {
     sameProject,
-    projectName: rootSource?.name || sourceProjectId || '',
+    projectName: rootSource?.name || sourceProjectId,
     absolutePath: sameProject ? plan.path : absoluteArtifactPath({ path: plan.path, uri: '' }, rootSource?.workRoot),
   })
   void nextTick(resizeComposerTextarea)

@@ -46,12 +46,15 @@ function makeRpc(rows: ReturnType<typeof artifact>[]) {
   return { rpc, calls }
 }
 
-async function mountView(rows: ReturnType<typeof artifact>[]) {
+async function mountView(
+  rows: ReturnType<typeof artifact>[],
+  projects = [{ id: 'p1', name: '甲项目' }, { id: 'p2', name: '乙项目' }],
+) {
   const { rpc, calls } = makeRpc(rows)
   const wrapper = mount(MaterialsView, {
     props: {
       projectId: 'p1',
-      projects: [{ id: 'p1', name: '甲项目' }, { id: 'p2', name: '乙项目' }],
+      projects,
       workRoot: 'C:/work/a',
       requestRpc: rpc as never,
       transport: {} as never,
@@ -124,4 +127,19 @@ describe('资料库 · 全局库', () => {
 
     wrapper.unmount()
   })
+})
+
+it('只有一个项目时仍可进入它的归档文件夹', async () => {
+  const { wrapper } = await mountView(
+    [artifact('a1', '甲.md', 'p1', { folder: '素材' })],
+    [{ id: 'p1', name: '甲项目' }],
+  )
+
+  await wrapper.get('[data-materials-project-filter]').setValue('p1')
+  await flushPromises()
+  await wrapper.get('[data-materials-tab="folders"]').trigger('click')
+  await wrapper.get('[data-materials-folder="素材"]').trigger('click')
+  expect(wrapper.get('[data-material="a1"]').text()).toContain('甲.md')
+
+  wrapper.unmount()
 })

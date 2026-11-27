@@ -677,6 +677,22 @@ def _folded_call_id(base_id: str, position: int) -> str:
     return f"call_{uuid.uuid4().hex[:16]}"
 
 
+def folded_tool_call_repair_enabled(config: Any) -> bool:
+    """Whether folded parallel tool calls may be split back into one call each.
+
+    user:“还有这条配置路径，最好不要直调，而是走 Sunday 本身用户能接触到的配置模式”+
+    是否复原被供应商折叠的并行工具调用，按供应商/模型配置决定：provider 与 model 的
+    extra 都能写 ``folded_tool_call_repair: false`` 关掉（模型配置优先），默认开启。
+    默认开启是安全的：只有参数串真正是「多个完整 JSON 对象拼接」时才触发，正常模型
+    的合法参数永远走原路径。
+    """
+    extras: dict[str, Any] = {}
+    for source in (getattr(config, "provider_extra", None), getattr(config, "model_extra", None)):
+        if isinstance(source, dict):
+            extras.update(source)
+    return extras.get("folded_tool_call_repair") is not False
+
+
 def resolve_tool_calls(
     accumulated: dict[int, dict[str, Any]],
     *,

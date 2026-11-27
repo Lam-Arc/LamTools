@@ -24,7 +24,7 @@
           :disabled="selected.status !== 'ready'"
           :title="startTitle"
           data-library-start
-          @click="emit('start-plan', selected)"
+          @click="launchPlan(selected, 'start')"
         >{{ t("开工") }}</button>
         <button class="library-button" type="button" @click="openEditor(selected)">{{ t("编辑") }}</button>
         <button
@@ -459,6 +459,11 @@ export type PlanLibraryEntry = CorePlanLibraryEntry
 /** 方案详情里的 Agent 动作：都是给方案带上文的一次会话任务。 */
 export type PlanAction = 'discuss' | 'review' | 'revise' | 'execute' | 'check'
 
+export interface PlanLaunchSource {
+  entry: PlanLibraryEntry
+  sourceProjectId: string
+}
+
 const props = defineProps<{
   /** The switchable project client (desktop HTTP or the phone's standalone bridge). */
   client: CoreProjectClient
@@ -478,9 +483,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: []
-  'start-plan': [entry: PlanLibraryEntry]
+  'start-plan': [source: PlanLaunchSource]
   /** 讨论 / 审查 / 修订 / 实施 / 检查落实情况：由宿主起会话并预制提示词。 */
-  'plan-action': [payload: { entry: PlanLibraryEntry; action: PlanAction }]
+  'plan-action': [payload: PlanLaunchSource & { action: PlanAction }]
   /** 顶部条标题跟随内部子页（列表 / 文件夹 / 阅读 / 编辑）。 */
   heading: [payload: { title: string; subtitle: string }]
 }>()
@@ -1081,8 +1086,16 @@ async function copyPlanContent(): Promise<void> {
 
 function startPlanAction(action: PlanAction): void {
   const entry = selected.value
-  if (!entry) return
-  emit('plan-action', { entry, action })
+  if (entry) launchPlan(entry, action)
+}
+
+function launchPlan(entry: PlanLibraryEntry, action: PlanAction | 'start'): void {
+  // user:“全修，但是不要过度工程化”+(把方案库正在浏览的项目随方案传给宿主)。
+  const sourceProjectId = activeProjectId.value
+  if (!sourceProjectId) return
+  const source = { entry, sourceProjectId }
+  if (action === 'start') emit('start-plan', source)
+  else emit('plan-action', { ...source, action })
 }
 
 /* ---- 收藏 ---- */
@@ -1221,22 +1234,22 @@ function entryMenuItems(entry: PlanLibraryEntry): ContextMenuEntry[] {
       id: 'start',
       get label() { return t("开工") },
       disabled: entry.status !== 'ready',
-      action: () => emit('start-plan', entry),
+      action: () => launchPlan(entry, 'start'),
     },
     {
       id: 'discuss',
       get label() { return t("与 Agent 讨论") },
-      action: () => emit('plan-action', { entry, action: 'discuss' }),
+      action: () => launchPlan(entry, 'discuss'),
     },
     {
       id: 'review',
       get label() { return t("审查方案") },
-      action: () => emit('plan-action', { entry, action: 'review' }),
+      action: () => launchPlan(entry, 'review'),
     },
     {
       id: 'check',
       get label() { return t("检查落实情况") },
-      action: () => emit('plan-action', { entry, action: 'check' }),
+      action: () => launchPlan(entry, 'check'),
     },
     { id: 'edit', get label() { return t("编辑") }, action: () => void openEditor(entry) },
     {
