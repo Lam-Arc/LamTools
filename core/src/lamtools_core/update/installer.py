@@ -28,6 +28,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from lamtools_core.config.network import httpx_client_kwargs
+from lamtools_core.distribution import DEFAULT_CONNECTIONS
 
 _log = logging.getLogger(__name__)
 
@@ -69,6 +70,8 @@ _PROGRESS: dict[str, Any] = {
     "sha256": "",
     "path": "",
     "error": "",
+    # 这条下载实际走的出口：accelerator | proxy | configured | direct。
+    "route": "",
 }
 
 
@@ -120,7 +123,7 @@ def start_download(url: str, sha256: str, file_name: str = "", fallback_url: str
     if current["state"] == "downloading":
         return current
     _CANCEL.clear()
-    _set_progress(state="downloading", received=0, total=0, name="", sha256="", path="", error="")
+    _set_progress(state="downloading", received=0, total=0, name="", sha256="", path="", error="", route="")
     threading.Thread(
         target=_download_worker, args=(url, sha256, file_name, fallback_url), daemon=True, name="sunday-update-download"
     ).start()
@@ -190,11 +193,14 @@ def download_update(url: str, sha256: str, file_name: str = "", fallback_url: st
         def check_cancelled():
             if _CANCEL.is_set():
                 raise UpdateCancelled("下载已取消")
+        # user:“sunday更新 可以优先 easy net 吗？这样更新的速度会快一些”+(安装包走本机加速/代理，并拆成多段并发取，摘要仍对整包校验)。
         result = download_file(url, partial, expected_sha256=expected, max_bytes=MAX_ARTIFACT_BYTES,
                                timeout=DOWNLOAD_TIMEOUT_SECONDS,
                                headers={"User-Agent": _user_agent(), "Accept": "application/octet-stream"},
                                progress=lambda count, total: _set_progress(received=count, total=total),
-                               cancel=check_cancelled, fallback_urls=(fallback_url,) if fallback_url else ())
+                               cancel=check_cancelled, fallback_urls=(fallback_url,) if fallback_url else (),
+                               connections=DEFAULT_CONNECTIONS,
+                               on_route=lambda kind: _set_progress(route=kind))
         received = result["bytes"]
         os.replace(partial, target)
     except UpdateInstallError:
@@ -210,7 +216,7 @@ def download_update(url: str, sha256: str, file_name: str = "", fallback_url: st
     finally:
         partial.unlink(missing_ok=True)
     _VERIFIED[str(target)] = expected
-    _log.info("Update: downloaded %s (%s bytes, sha256 verified)", name, received)
+    _log.info("Update: downloaded %s (%s bytes, sha256 verified, route=%s)", name, received, progress_snapshot().get("route") or "direct")
     return {"path": str(target), "name": name, "bytes": received, "sha256": expected}
 
 

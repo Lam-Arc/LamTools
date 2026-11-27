@@ -6,20 +6,23 @@ from unittest.mock import AsyncMock
 import pytest
 
 
-def test_download_routes_use_accelerator_only_for_github(monkeypatch):
+def test_download_routes_prefer_the_easynet_route(monkeypatch):
+    # user:“sunday更新 可以优先 easy net 吗？这样更新的速度会快一些”+(安装包、官网清单、插件包都先走 EasyNet，直连永远排在第二)。
     from lamtools_core import distribution as dist
     monkeypatch.setattr(dist, "httpx_client_kwargs", lambda url: {"trust_env": False})
     owner = object()
-    dist.register_accelerator(owner, "http://127.0.0.1:12345")
+    dist.register_local_route(owner, "http://127.0.0.1:12345", kind="accelerator")
     try:
         assert dist.route_candidates("https://api.github.com/repos/a/b")[0]["proxy"] == "http://127.0.0.1:12345"
-        assert "proxy" not in dist.route_candidates("https://example.com")[0]
-        assert "proxy" not in dist.route_candidates("https://github.com.evil.test")[0]
-        assert len(dist.route_candidates("https://github.com/a/b")) == 2
-        dist.clear_accelerator(object())
+        assert dist.route_candidates("https://ainarit.com/downloads/desktop-update.json")[0]["proxy"] == "http://127.0.0.1:12345"
+        routes = dist.route_candidates("https://github.com/a/b")
+        assert len(routes) == 2 and "proxy" not in routes[1]
+        # 本机回环不经代理；不是自己注册的路由，别人清不掉。
+        assert "proxy" not in dist.route_candidates("http://127.0.0.1:8787/file")[0]
+        dist.clear_local_route(object())
         assert "proxy" in dist.route_candidates("https://github.com")[0]
     finally:
-        dist.clear_accelerator(owner)
+        dist.clear_local_route(owner)
     assert "proxy" not in dist.route_candidates("https://github.com")[0]
 
 

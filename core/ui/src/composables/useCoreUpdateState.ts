@@ -94,6 +94,8 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
   const installHint = ref('')
   const installState = ref<CoreUpdateInstallState>('idle')
   const installMessage = ref('')
+  /** 这次下载实际走的出口：accelerator | proxy | configured | direct。 */
+  const installRoute = ref('')
   const installError = ref('')
   const installProgress = ref<number | null>(null)
   const installReceived = ref(0)
@@ -166,6 +168,7 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
     installProgress.value = installTotal.value > 0
       ? Math.min(1, installReceived.value / installTotal.value)
       : null
+    installRoute.value = String(status.route || '')
     installMessage.value = String(status.message || '')
   }
 
@@ -362,11 +365,16 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
   const installProgressLabel = computed(() => {
     if (installState.value !== 'downloading') return ''
     const received = formatMegabytes(installReceived.value)
+    const route = installRoute.value === 'accelerator'
+      ? ' · EasyNet 加速'
+      : installRoute.value === 'proxy'
+        ? ' · EasyNet 代理'
+        : ''
     if (installTotal.value > 0) {
       const percent = Math.min(100, Math.round((installReceived.value / installTotal.value) * 100))
-      return `正在下载 ${percent}%（${received} / ${formatMegabytes(installTotal.value)}）`
+      return `正在下载 ${percent}%（${received} / ${formatMegabytes(installTotal.value)}）${route}`
     }
-    return `正在下载（${received}）`
+    return `正在下载（${received}）${route}`
   })
 
   /** The installer's size, when the manifest said it, to set expectations. */
@@ -402,6 +410,7 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
     installHint,
     installState,
     installMessage,
+    installRoute,
     installError,
     installProgress,
     installReceived,

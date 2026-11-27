@@ -127,17 +127,23 @@ def build_update_operation_catalog() -> OperationCatalog:
     return catalog
 
 
+#: 出口名：只在真的走了 EasyNet 时说，直连不必解释。
+_ROUTE_LABELS = {"accelerator": "本机加速", "proxy": "EasyNet 代理"}
+
+
 def _download_message(snapshot: dict[str, Any]) -> str:
     """One line the UI can show verbatim, in the same shape both hosts use."""
     state = str(snapshot.get("state") or "idle")
+    route = _ROUTE_LABELS.get(str(snapshot.get("route") or ""))
+    suffix = f" · 走{route}" if route else ""
     received = int(snapshot.get("received") or 0)
     total = int(snapshot.get("total") or 0)
     megabytes = received / (1024 * 1024)
     if state == "downloading":
         if total > 0:
             percent = min(100, int(received * 100 / total))
-            return f"正在下载 {percent}%（{megabytes:.1f} MB / {total / (1024 * 1024):.1f} MB）"
-        return f"正在下载（{megabytes:.1f} MB）"
+            return f"正在下载 {percent}%（{megabytes:.1f} MB / {total / (1024 * 1024):.1f} MB）{suffix}"
+        return f"正在下载（{megabytes:.1f} MB）{suffix}"
     if state == "verified":
         return f"已下载并校验 {snapshot.get('name') or '安装包'}"
     if state == "cancelled":
