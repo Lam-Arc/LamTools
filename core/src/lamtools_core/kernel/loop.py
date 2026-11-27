@@ -130,6 +130,23 @@ _STREAM_TEXT_PROGRESS_CHARS = 128
 # 卷走，主代理也不会为了成员把回合拖成看起来卡住。
 
 
+def _folded_tool_call_repair_enabled(llm_client: Any) -> bool:
+    """Whether folded parallel tool calls may be split back into one call each.
+
+    user:“还有这条配置路径，最好不要直调，而是走 Sunday 本身用户能接触到的配置模式”+
+    是否复原被供应商折叠的并行工具调用，按供应商/模型配置决定：provider 与 model 的
+    extra 都能写 ``folded_tool_call_repair: false`` 关掉（模型配置优先），默认开启。
+    默认开启是安全的：只有参数串真正是「多个完整 JSON 对象拼接」时才触发，正常模型
+    的合法参数永远走原路径。
+    """
+    config = getattr(llm_client, "config", None)
+    extras: dict[str, Any] = {}
+    for source in (getattr(config, "provider_extra", None), getattr(config, "model_extra", None)):
+        if isinstance(source, dict):
+            extras.update(source)
+    return extras.get("folded_tool_call_repair") is not False
+
+
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
     ids: list[str] = []
     for message in messages:
@@ -3098,7 +3115,12 @@ class CoreLoopKernel:
 
         # Stream ended without a done event — build response from accumulated data
         merged_tool_calls = terminal_tool_calls or (
-            resolve_tool_calls(pending_tool_calls) if pending_tool_calls else []
+            resolve_tool_calls(
+                pending_tool_calls,
+                repair_folded_arguments=_folded_tool_call_repair_enabled(self.llm_client),
+            )
+            if pending_tool_calls
+            else []
         )
         if not accumulated and not thinking and not merged_tool_calls:
             await self._emit_stream_fallback(state, "流式响应未返回内容")

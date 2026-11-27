@@ -8,6 +8,7 @@ OpenAI-compatible payload formats.
 from __future__ import annotations
 
 import json
+import uuid
 import re
 from typing import Any
 
@@ -623,13 +624,75 @@ def merge_tool_call_deltas(
     return accumulated
 
 
+def split_folded_tool_arguments(args_str: Any) -> list[dict[str, Any]]:
+    """Return the distinct JSON objects a folded arguments string carries.
+
+    user:"还有这条配置路径，最好不要直调，而是走 Sunday 本身用户能接触到的配置模式"+
+    有的供应商/中转会把同一响应里的多个并行 function call 折进同一个 tool_call
+    index：首片给出 id 与函数名，之后每个调用只再发一段**完整** JSON 参数，既不带
+    id 也不带 name。拼接结果形如 ``{"path":"a.txt"}{"path":"b.txt"}``，严格
+    ``json.loads`` 必然失败。这里只承认「两个及以上完整 JSON 对象、彼此之间仅隔
+    空白」这一种形态；截断、尾随内容、非对象值一律返回空列表，绝不猜测参数。
+    """
+    if not isinstance(args_str, str):
+        return []
+    source = args_str.strip()
+    if not source:
+        return []
+    fence_match = _MARKDOWN_FENCE_RE.match(source)
+    if fence_match:
+        source = fence_match.group(1).strip()
+    if not source.startswith("{"):
+        return []
+
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        while index < length and source[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        try:
+            value, index = decoder.raw_decode(source, index)
+        except ValueError:
+            return []
+        if not isinstance(value, dict):
+            return []
+        objects.append(value)
+    return objects if len(objects) >= 2 else []
+
+
+def _folded_call_id(base_id: str, position: int) -> str:
+    """Give each reconstructed call its own id.
+
+    The provider never sent ids for the folded tail, so they derive from the
+    first call's id with a stable suffix: history replay and tool-result
+    pairing both need a non-empty, unique id per call. Only characters that are
+    safe inside any provider's opaque id are used.
+    """
+    if base_id:
+        return f"{base_id}-{position}"
+    return f"call_{uuid.uuid4().hex[:16]}"
+
+
 def resolve_tool_calls(
     accumulated: dict[int, dict[str, Any]],
+    *,
+    repair_folded_arguments: bool = True,
 ) -> list[LLMToolCall]:
     """Convert accumulated tool call dict to list of LLMToolCall.
 
     Sorts by index key, parses arguments JSON.
     Includes the raw arguments string in metadata.
+
+    ``repair_folded_arguments`` splits an arguments string that carries several
+    concatenated JSON objects (parallel calls folded into one index by the
+    provider) back into one call per object. The extra calls inherit the only
+    function name that arrived -- a provider that folds calls also drops the
+    name of every follow-up -- and get derived unique ids. Set it to false to
+    keep the strict one-call-per-index behaviour.
     """
     result: list[LLMToolCall] = []
 
@@ -637,13 +700,36 @@ def resolve_tool_calls(
         acc = accumulated[index]
         fn = acc.get("function", {})
         args_str = fn.get("arguments", "")
-        args = parse_tool_call_arguments(args_str)
+        base_id = str(acc.get("id") or "")
+        name = fn.get("name", "")
+
+        folded = split_folded_tool_arguments(args_str) if repair_folded_arguments else []
+        if folded:
+            folded_count = len(folded)
+            call_base_id = base_id or f"call_{uuid.uuid4().hex[:16]}"
+            for position, arguments in enumerate(folded):
+                metadata = _tool_call_argument_metadata(args_str)
+                # 参数本身是合法的完整 JSON，只是被折进了一条调用里。
+                metadata.pop("arguments_parse_error", None)
+                metadata.pop("raw_arguments_chars", None)
+                metadata["folded_tool_arguments"] = folded_count
+                metadata["folded_tool_argument_index"] = position + 1
+                result.append(
+                    LLMToolCall(
+                        id=call_base_id if position == 0 else _folded_call_id(call_base_id, position + 1),
+                        name=name,
+                        arguments=arguments,
+                        raw=acc,
+                        metadata=metadata,
+                    )
+                )
+            continue
 
         result.append(
             LLMToolCall(
-                id=acc.get("id", ""),
-                name=fn.get("name", ""),
-                arguments=args,
+                id=base_id,
+                name=name,
+                arguments=parse_tool_call_arguments(args_str),
                 raw=acc,
                 metadata=_tool_call_argument_metadata(args_str),
             )
@@ -663,4 +749,5 @@ __all__ = [
     "normalize_stream_chunk",
     "merge_tool_call_deltas",
     "resolve_tool_calls",
+    "split_folded_tool_arguments",
 ]
