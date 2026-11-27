@@ -163,6 +163,27 @@
         <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
+    <!-- user:“设置中新增：主动记忆（Memory）…默认状态：开启”+(一个开关同时控制
+         核心认知自动注入与后台整理；关闭不删除任何已保存记忆，也不影响手动使用)。 -->
+    <article class="setting-card" data-memory-active-card>
+      <div class="subhead">
+        <span class="muted subhead-title">{{ t("主动记忆") }}</span>
+      </div>
+      <div class="general-toggle-row">
+        <p class="general-hint general-hint--inline">{{ t("自动积累和整理对你的认知，并在会话里直接使用：开启时 memory.md 会自动带进每次请求，后台也会持续整理。关闭后不再自动注入、不再整理，已保存的记忆仍然保留，也可以手动查看和编辑。") }}</p>
+        <SundaySwitch
+          :model-value="memoryActive"
+          :disabled="loading || memoryActiveBusy"
+          :label="t('主动记忆')"
+          data-memory-active-switch
+          @update:model-value="toggleActiveMemory"
+        />
+      </div>
+      <p class="general-hint">{{ t("在「记忆」里可以查看与编辑两档的核心认知（memory.md），并查看上次自动整理时间。") }}</p>
+      <p v-if="memoryActiveSaved" class="general-saved" role="status">
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
+    </article>
+
     <!-- user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
          (通用页用一眼能看懂的开关表达普通 Enter 的落点：开=直接引导，关=排队；
           开关只改之后的发送，Ctrl/Cmd+Enter 永远执行另一种，都不动已排队的项。) -->
@@ -425,6 +446,8 @@ const NAMESPACE = 'core.network'
 const KEEP_AWAKE_NAMESPACE = 'core.keepAwake'
 const ASK_AUTO_CONTINUE_NAMESPACE = 'core.askAutoContinue'
 const MEMORY_RESUME_NAMESPACE = 'core.memoryResume'
+/** 主动记忆：后端缺省为开启，文件里只记录明确的选择。 */
+const MEMORY_ACTIVE_NAMESPACE = 'core.memory'
 
 // Mirrors the backend defaults in runtime/memory_guard.py: an unset namespace
 // means「开着，阈值 4 GB」, so the card must not read an empty value as "off".
@@ -446,6 +469,10 @@ const memoryResumeSaving = ref(false)
 const memoryResumeLoading = ref(false)
 const memoryThresholdDraft = ref(String(MEMORY_RESUME_DEFAULT_THRESHOLD_GB))
 const memoryResumeSaved = ref(false)
+const memoryActive = ref(true)
+const memoryActiveSaving = ref(false)
+const memoryActiveLoading = ref(false)
+const memoryActiveSaved = ref(false)
 
 // user:“Assistant 可选择是否使用消息气泡”“支持自定义 Assistant 显示名称和头像”
 // “支持开启或关闭自动气泡拆分”+(三项都只是显示偏好：读侧在消息渲染里同步生效，
@@ -587,6 +614,9 @@ const memoryResumeSupported = computed(
   () => (props.platform ?? 'other') === 'windows' || (props.platform ?? 'other') === 'linux',
 )
 const memoryResumeBusy = computed(() => memoryResumeLoading.value || memoryResumeSaving.value || busy.value)
+const memoryActiveBusy = computed(
+  () => memoryActiveLoading.value || memoryActiveSaving.value || busy.value,
+)
 const navigationBusy = computed(() => busy.value || memoryResumeSaving.value || languageSaving.value)
 const networkDrafts = Object.fromEntries((['proxy', 'no_proxy', 'ca_cert'] as const).map(key => [key, useSettingsDraft({
   section: 'general', label: () => ({ proxy: t('代理地址'), no_proxy: t('直连地址'), ca_cert: t('CA 证书') })[key],
@@ -764,6 +794,43 @@ async function toggleMemoryResume() {
   }
 }
 
+async function fetchActiveMemory(): Promise<void> {
+  memoryActiveLoading.value = true
+  memoryActiveSaved.value = false
+  error.value = ''
+  try {
+    const value = readValue(await props.requestRpc('settings.get', { namespace: MEMORY_ACTIVE_NAMESPACE }))
+    // 未写过的命名空间 = 后端默认（开启），不能读成关闭。
+    memoryActive.value = value.enabled === undefined ? true : !!value.enabled
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memoryActiveLoading.value = false
+  }
+}
+
+async function toggleActiveMemory(): Promise<void> {
+  if (memoryActiveBusy.value) return
+  const next = !memoryActive.value
+  const previous = memoryActive.value
+  memoryActive.value = next
+  memoryActiveSaving.value = true
+  memoryActiveSaved.value = false
+  error.value = ''
+  try {
+    await props.requestRpc('settings.update', {
+      namespace: MEMORY_ACTIVE_NAMESPACE,
+      value: { enabled: next },
+    })
+    memoryActiveSaved.value = true
+  } catch (e) {
+    memoryActive.value = previous
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memoryActiveSaving.value = false
+  }
+}
+
 async function saveMemoryThreshold() {
   if (!memoryResumeSupported.value || memoryResumeBusy.value) return false
   const parsed = Number(memoryThresholdDraft.value)
@@ -796,6 +863,7 @@ async function saveMemoryThreshold() {
 }
 
 onMounted(fetchMemoryResume)
+onMounted(fetchActiveMemory)
 onMounted(fetchAssistantAppearance)
 onMounted(fetchSendBehavior)
 </script>

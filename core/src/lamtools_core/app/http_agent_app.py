@@ -1045,6 +1045,15 @@ def create_core_agent_http_app(
                     await memory_resume_supervisor.start()
                 except Exception:
                     _logger.exception("[startup] memory resume supervisor failed to start (non-fatal)")
+                # user:“Dreaming 负责…从新增会话中识别具有持续价值的信息”+(回合结束是主路径，
+                # 这个循环只在它没跑成时兜底，绝不阻塞启动)。
+                from lamtools_core.mem.dreaming import start_memory_dream_supervisor
+
+                enter_phase("memory-dream")
+                try:
+                    await start_memory_dream_supervisor(context=live_context())
+                except Exception:
+                    _logger.exception("[startup] memory dream supervisor failed to start (non-fatal)")
                 enter_phase("scheduler")
                 if scheduler_lease_acquired:
                     await arrange_runner.start()
@@ -1124,6 +1133,9 @@ def create_core_agent_http_app(
         memory_resume_supervisor = app_state.get("memory_resume_supervisor")
         if memory_resume_supervisor is not None:
             await memory_resume_supervisor.stop()
+        from lamtools_core.mem.dreaming import stop_memory_dream_supervisor
+
+        await stop_memory_dream_supervisor()
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
             await observer_supervisor.stop()
@@ -1924,6 +1936,11 @@ def _register_core_artifact_operations(
         return project
 
     async def artifact_list(request: OperationRequest) -> OperationResult:
+        # user:“库本身的全局与项目划分也仅是一个文件划分”+(all_projects 让库一次列出所有项目的资料；
+        # 项目只是条目的归属，不再要求先选中项目才能看库)。
+        if bool(request.payload.get("all_projects")):
+            records = await artifact_store.list_all(include_deleted=bool(request.payload.get("include_deleted")))
+            return OperationResult(name=request.name, payload={"artifacts": [record.to_dict() for record in records]})
         project = await _project_for(request)
         if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
@@ -2135,6 +2152,8 @@ def _register_core_artifact_operations(
         return OperationResult(name=request.name, payload={"artifacts": [item.to_dict() for item in used]})
 
     async def artifact_stats(request: OperationRequest) -> OperationResult:
+        if bool(request.payload.get("all_projects")):
+            return OperationResult(name=request.name, payload=await artifact_store.stats_all())
         project = await _project_for(request)
         if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
@@ -2999,7 +3018,25 @@ def _register_memory_operations(catalog: OperationCatalog) -> None:
         scope = str(args.get("scope") or memory.SCOPE_PROJECT)
         root = _work_root(request)
         path = str(args.get("path") or "")
-        return _run("memory.delete", lambda: {"path": memory.delete_memory(scope, root or None, path)})
+
+        def action() -> dict[str, Any]:
+            from lamtools_core.mem import dreaming as memory_dreaming
+
+            # user:“用户要求忘记…不被自动整理机制重新恢复”+(界面删除同样记墓碑)。
+            title = ""
+            try:
+                first = memory.read_memory(scope, root or None, path).strip().splitlines()
+                title = first[0][:120] if first else ""
+            except (memory.MemoryError, IndexError):
+                title = ""
+            deleted = memory.delete_memory(scope, root or None, path)
+            try:
+                memory_dreaming.record_forgotten(scope, root or None, deleted, title=title)
+            except Exception:  # noqa: BLE001 - a tombstone must not fail a delete
+                pass
+            return {"path": deleted}
+
+        return _run("memory.delete", action)
 
     async def memory_rename(request: OperationRequest) -> OperationResult:
         args = _payload(request)
@@ -3060,7 +3097,125 @@ def _register_memory_operations(catalog: OperationCatalog) -> None:
 
         return _run("memory.projects", action)
 
+    async def memory_core_get(request: OperationRequest) -> OperationResult:
+        """memory.core.get — the L1 cognition document of one tier.
+
+        user:“用户应能够查看当前 memory.md / 查看最近一次自动整理时间”+(编辑、版本
+        与整理状态一次取回，记忆页不必再拆成三个请求)。
+        """
+        from lamtools_core.mem import dreaming as memory_dreaming
+
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request) or None
+
+        def action() -> dict[str, Any]:
+            normalized = memory.normalize_scope(scope)
+            document_root = root if normalized == memory.SCOPE_PROJECT else None
+            return {
+                "scope": normalized,
+                "path": str(memory.core_file_path(normalized, document_root)),
+                "content": memory.read_core_document(normalized, document_root),
+                "versions": memory.list_core_versions(normalized, document_root),
+                "dream": memory_dreaming.dream_status(normalized, document_root),
+            }
+
+        return _run("memory.core.get", action)
+
+    async def memory_core_set(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request) or None
+        content = str(args.get("content") or "")
+        return _run(
+            "memory.core.set",
+            lambda: {
+                "path": memory.write_core_document(scope, root, content).path,
+                "scope": memory.normalize_scope(scope),
+            },
+        )
+
+    async def memory_core_clear(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request) or None
+        return _run(
+            "memory.core.clear",
+            lambda: {"path": memory.clear_core_document(scope, root)},
+        )
+
+    async def memory_core_versions(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request) or None
+        return _run(
+            "memory.core.versions",
+            lambda: {
+                "scope": memory.normalize_scope(scope),
+                "versions": memory.list_core_versions(scope, root),
+            },
+        )
+
+    async def memory_core_restore(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request) or None
+        version = str(args.get("version") or "")
+        return _run(
+            "memory.core.restore",
+            lambda: {
+                "path": memory.restore_core_version(scope, root, version).path,
+                "version": version,
+            },
+        )
+
+    async def memory_dream_status(request: OperationRequest) -> OperationResult:
+        from lamtools_core.mem import dreaming as memory_dreaming
+        from lamtools_core.mem import settings as memory_settings
+
+        root = _work_root(request) or None
+
+        def action() -> dict[str, Any]:
+            return {
+                "enabled": memory_settings.memory_enabled(),
+                "global": memory_dreaming.dream_status(memory.SCOPE_GLOBAL, None),
+                "project": (
+                    memory_dreaming.dream_status(memory.SCOPE_PROJECT, root)
+                    if root
+                    else None
+                ),
+            }
+
+        return _run("memory.dream.status", action)
+
+    async def memory_dream_run(request: OperationRequest) -> OperationResult:
+        """memory.dream.run — "整理记忆" now; the pass itself stays in the background."""
+        from lamtools_core.mem import dreaming as memory_dreaming
+        from lamtools_core.mem import settings as memory_settings
+
+        root = _work_root(request)
+        if not memory_settings.memory_enabled():
+            return OperationResult(
+                name=request.name,
+                payload={"accepted": False, "reason": "disabled"},
+            )
+        accepted = memory_dreaming.request_dream(root)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "accepted": accepted,
+                "reason": "" if accepted else "supervisor_unavailable",
+            },
+        )
+
     for name, handler in {
+        "memory.core.clear": memory_core_clear,
+        "memory.core.get": memory_core_get,
+        "memory.core.restore": memory_core_restore,
+        "memory.core.set": memory_core_set,
+        "memory.core.versions": memory_core_versions,
+        "memory.dream.run": memory_dream_run,
+        "memory.dream.status": memory_dream_status,
         "memory.reveal": memory_reveal,
         "memory.projects": memory_projects,
         "memory.tree": memory_tree,

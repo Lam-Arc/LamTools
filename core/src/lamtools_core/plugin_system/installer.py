@@ -25,8 +25,11 @@ def download_archive(url: str, expected_sha256: str = "", *, fallback_url: str =
     os.close(handle)
     target = Path(name)
     # user:“插件更新…自动通过网络拓展加速”+(完整传输重试与应用安装包共用实现，失败后不保留半包)。
+    # user:“sunday更新 可以优先 easy net 吗？这样更新的速度会快一些”+(插件包与安装包共用多连接与 EasyNet 路由)。
+    from lamtools_core.distribution import DEFAULT_CONNECTIONS
     download_file(url, target, expected_sha256=expected_sha256, max_bytes=256 * 1024 * 1024,
-                  headers={"Accept": "application/octet-stream"}, fallback_urls=(fallback_url,) if fallback_url else ())
+                  headers={"Accept": "application/octet-stream"}, fallback_urls=(fallback_url,) if fallback_url else (),
+                  connections=DEFAULT_CONNECTIONS)
     return target
 
 

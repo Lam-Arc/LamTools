@@ -29,6 +29,8 @@ class NetworkRuntime:
         self._watchdog = None
         self._shutting_down = False
         self._proxy_desired = False
+        self._proxy_running = False
+        self._accelerator_port = 0
 
     @property
     def lifecycle_processes(self):
@@ -126,9 +128,10 @@ class NetworkRuntime:
                 self._watchdog = asyncio.create_task(self._watch())
             state = await self.call('status', {})
             # user:“自动通过网络拓展加速（如果需要）”+(启用本机 CONNECT 加速并供宿主分发请求共享，不更改系统代理)。
-            from lamtools_core.distribution import register_accelerator
             accelerator = await self.call('accelerator.start', {})
-            register_accelerator(self, f"http://127.0.0.1:{int(accelerator['port'])}")
+            self._accelerator_port = int(accelerator.get('port') or 0)
+            self._proxy_running = bool(state.get('proxy', {}).get('running'))
+            self._sync_distribution_route()
             if any(row.get('status') not in {'complete', 'removed'} for row in state.get('downloads', [])):
                 await self.call('transfer.recover', {})
         except BaseException:
@@ -223,24 +226,43 @@ class NetworkRuntime:
             result = response['result']
             if method == 'proxy.start':
                 self._proxy_desired = True
+                self._proxy_running = True
+                self._sync_distribution_route()
             elif method == 'proxy.stop':
                 self._proxy_desired = False
+                self._proxy_running = False
+                self._sync_distribution_route()
             # user:“自动通过网络拓展加速（如果需要）”+(手动启停加速器时同步宿主路由，避免保留过期端口)。
             if method == 'accelerator.start':
-                from lamtools_core.distribution import register_accelerator
-                register_accelerator(self, f"http://127.0.0.1:{int(result['port'])}")
+                self._accelerator_port = int(result.get('port') or 0)
+                self._sync_distribution_route()
             elif method == 'accelerator.stop':
-                from lamtools_core.distribution import clear_accelerator
-                clear_accelerator(self)
+                self._accelerator_port = 0
+                self._sync_distribution_route()
             return result
 
     async def install_engine(self, params):
         from .engine_install import install_engine
         return await install_engine(self.data_dir, params)
 
+    #: 订阅代理的混合端口由 Rust 控制器固定（controller/src/engines.rs 的 mixed-port）。
+    PROXY_MIXED_PORT = 17890
+
+    def _sync_distribution_route(self):
+        # user:“sunday更新 可以优先 easy net 吗？这样更新的速度会快一些”+(加速器优先，其次订阅代理；都没有时清掉，宿主分发按直连走)。
+        from lamtools_core.distribution import clear_local_route, register_local_route
+        if self._accelerator_port > 0:
+            register_local_route(self, f"http://127.0.0.1:{self._accelerator_port}", kind='accelerator')
+        elif self._proxy_running:
+            register_local_route(self, f"http://127.0.0.1:{self.PROXY_MIXED_PORT}", kind='proxy')
+        else:
+            clear_local_route(self)
+
     async def stop(self, context=None):
-        from lamtools_core.distribution import clear_accelerator
-        clear_accelerator(self)
+        from lamtools_core.distribution import clear_local_route
+        clear_local_route(self)
+        self._accelerator_port = 0
+        self._proxy_running = False
         self._shutting_down = True
         watchdog = self._watchdog
         self._watchdog = None

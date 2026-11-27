@@ -27,11 +27,13 @@ from ..app.plan_library import (
     create_folder,
     create_plan,
     delete_folder,
+    import_plan,
     list_plan_folders,
     move_plan,
     rename_plan,
     scan_plan_library,
     set_plan_favorite,
+    set_plan_meta,
 )
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
 from ..app.session_items import SessionItemsError
@@ -908,7 +910,13 @@ def create_core_router(
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         try:
-            entry = create_plan(project.work_root, str(body.get("name") or ""), folder=str(body.get("folder") or ""))
+            entry = create_plan(
+                project.work_root,
+                str(body.get("name") or ""),
+                folder=str(body.get("folder") or ""),
+                plan_type=str(body.get("type") or ""),
+                topic=str(body.get("topic") or ""),
+            )
         except PlanLibraryError as cause:
             raise HTTPException(status_code=400, detail=str(cause)) from cause
         return {"entry": entry}
@@ -970,6 +978,44 @@ def create_core_router(
             raise HTTPException(status_code=404, detail="Project not found")
         try:
             entry = set_plan_favorite(project.work_root, str(body.get("path") or ""), favorite=bool(body.get("favorite")))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
+
+    @router.post("/projects/{project_id}/plan-library/meta")
+    async def set_plan_library_meta(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        related = body.get("related_sessions")
+        try:
+            entry = set_plan_meta(
+                project.work_root,
+                str(body.get("path") or ""),
+                plan_type=body.get("type"),
+                design_status=body.get("design_status"),
+                impl_status=body.get("impl_status"),
+                topic=body.get("topic"),
+                summary=body.get("summary"),
+                related_sessions=[str(item) for item in related] if isinstance(related, list) else None,
+            )
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
+
+    @router.post("/projects/{project_id}/plan-library/import")
+    async def import_plan_library_file(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            entry = import_plan(
+                project.work_root,
+                str(body.get("path") or ""),
+                folder=str(body.get("folder") or ""),
+            )
         except PlanLibraryError as cause:
             raise HTTPException(status_code=400, detail=str(cause)) from cause
         return {"entry": entry}

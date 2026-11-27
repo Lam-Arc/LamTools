@@ -1180,6 +1180,15 @@ class CoreBaseAgentKit:
         # user:“任何属于系统提示词，在上下文压缩之前绝不变动”+每个压缩周期只发送第一次渲染的文本；之后只比较当前块，变化走尾部通知。
         current_turn_id = str((state.metadata or {}).get("turn_id") or "").strip()
         previous_epoch = state.metadata.get(MOVABLE_CONTEXT_METADATA_KEY)
+        # user:“缓存保护不能影响记忆更新、删除及关闭功能的实际生效”+(开关一翻，
+        # 头部里那份认知必须真的消失/出现，而不是只靠一条尾部说明；这一次重建是
+        # 用户主动改变行为换来的，值得）。
+        from lamtools_core.mem.settings import memory_enabled
+
+        memory_on = memory_enabled()
+        if isinstance(previous_epoch, dict) and previous_epoch.get("memory_enabled") is not None:
+            if bool(previous_epoch.get("memory_enabled")) != memory_on:
+                previous_epoch = None
         movable_plan = plan_movable_context(
             previous_epoch,
             system_prompt=system_prompt,
@@ -1187,7 +1196,9 @@ class CoreBaseAgentKit:
             turn_id=current_turn_id,
         )
         if movable_plan.changed:
-            state.metadata[MOVABLE_CONTEXT_METADATA_KEY] = movable_plan.epoch
+            epoch = dict(movable_plan.epoch)
+            epoch["memory_enabled"] = memory_on
+            state.metadata[MOVABLE_CONTEXT_METADATA_KEY] = epoch
         # user:“严格延续”+新纪元必须在第一次请求前就落库，不能等模型回答后才保存。
         movable_seeded = movable_plan.seeded
         movable_notices: list[ChatMessage] = []

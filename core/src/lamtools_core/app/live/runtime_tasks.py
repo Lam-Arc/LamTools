@@ -472,6 +472,24 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                     "[live] post-turn interaction reconciliation failed thread_id=%s",
                     thread_id,
                 )
+            # user:“Dreaming…会话结束或进入空闲状态”+(回合收尾后分离整理记忆；
+            # 内部有内容门槛与冷却，普通闲聊不会留下记忆，也不拖慢回合)。
+            try:
+                from lamtools_core.mem.dreaming import maybe_dream_after_turn
+
+                _spawn_live_background(
+                    maybe_dream_after_turn(
+                        context=context,
+                        thread_id=thread_id,
+                        work_root=str(runtime_start.get("work_root") or ""),
+                    ),
+                    label="memory-dream",
+                    thread_id=thread_id,
+                )
+            except BaseException:
+                _logger.exception(
+                    "[live] memory dream scheduling failed thread_id=%s", thread_id
+                )
         # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”+(本回合没有
         # 消费的尾部引导在这里投成新回合；先投递，再走队列派发，一次收口)。
         try:

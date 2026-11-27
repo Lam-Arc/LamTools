@@ -808,12 +808,12 @@
     @cancel="appConfirm = null"
     @confirm="confirmAppAction"
   />
-  <!-- 开工前先问清楚：这份方案在哪个项目里开工。 -->
+  <!-- 从方案发起任务前先问清楚：这份方案在哪个项目里开工 / 讨论 / 审查。 -->
   <CoreProjectPicker
-    v-if="pendingPlanStart"
+    v-if="pendingPlanLaunch"
     :projects="projects"
-    @select="confirmPlanStartProject"
-    @cancel="pendingPlanStart = null"
+    @select="confirmPlanLaunchProject"
+    @cancel="pendingPlanLaunch = null"
   />
   <SelectionAssistant
     :session-id="activeSessionId"
@@ -995,7 +995,8 @@ import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
 import { installOverlayAction } from '@/core-app/overlayAction.ts'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
-import { type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import { type PlanAction, type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import { buildPlanLaunchPrompt, type PlanLaunchAction } from '@/app/planLaunch.ts'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -1924,8 +1925,8 @@ const composerSendDisabled = computed(() => {
 // 右侧栏悬停卡正占着区域：壳层据此在指针移向卡片时不收竖栏。
 const rightSidebarHold = ref(false)
 
-// 开工待选项目：非空时弹「选择项目」卡片，选定后预制提示词而不是直接发送。
-const pendingPlanStart = ref<PlanLibraryEntry | null>(null)
+// 从方案发起任务：待选项目；选定后预制提示词而不是直接发送。
+const pendingPlanLaunch = ref<{ plan: PlanLibraryEntry; action: PlanLaunchAction } | null>(null)
 
 /**
  * "开工"（资料库）：方案即「方案/」文件夹里的一篇文档。点下开工先不干活——
@@ -1933,15 +1934,22 @@ const pendingPlanStart = ref<PlanLibraryEntry | null>(null)
  * 什么时候发由用户自己按。
  */
 function startPlanFromLibrary(plan: PlanLibraryEntry): void {
-  pendingPlanStart.value = plan
+  pendingPlanLaunch.value = { plan, action: 'start' }
 }
 
-/** 开工选定的项目：开工 = 给这份方案开一个全新的专属会话——切到所选项目、
- * 新建会话，再把执行提示词预制进输入框，发不发由用户自己按。 */
-async function confirmPlanStartProject(projectId: string): Promise<void> {
-  const plan = pendingPlanStart.value
-  pendingPlanStart.value = null
-  if (!plan) return
+/** 方案动作（讨论 / 审查 / 修订 / 实施 / 检查落实情况）：同样先选项目，
+ *  再给这份方案开一个专属会话并预制带上下文的提示词。 */
+function startPlanActionFromLibrary(payload: { entry: PlanLibraryEntry; action: PlanAction }): void {
+  pendingPlanLaunch.value = { plan: payload.entry, action: payload.action }
+}
+
+/** 选定项目后：切到该项目、新建会话，预制对应动作的提示词，并把方案与会话
+ *  关联起来（frontmatter 的 关联: 会话:<id>），不要求用户学习额外流程。 */
+async function confirmPlanLaunchProject(projectId: string): Promise<void> {
+  const launch = pendingPlanLaunch.value
+  pendingPlanLaunch.value = null
+  if (!launch) return
+  const plan = launch.plan
   const project = projects.value.find((item) => item.id === projectId)
   if (!project) return
   const sourceProjectId = activeProjectId.value ?? selectedProjectId.value
@@ -1953,29 +1961,42 @@ async function confirmPlanStartProject(projectId: string): Promise<void> {
     showToast('error', messageFromError(error), 6000)
     return
   }
+  // 方案与这次会话建立联系：下次在新会话也能顺着它继续（PRD §9.1）。
+  const linkedSessionId = activeSessionId.value
+  if (linkedSessionId && plan.path) {
+    void projectClient.setPlanLibraryMeta(sourceProjectId || projectId, plan.path, {
+      related_sessions: [linkedSessionId],
+    }).catch(() => undefined)
+  }
   closeFullArea()
-  composerText.value = buildPlanLibraryExecutionPrompt(plan, sourceProjectId, projectId)
+  const rootSource = projects.value.find((item) => item.id === sourceProjectId)
+  const sameProject = !sourceProjectId || sourceProjectId === projectId
+  composerText.value = buildPlanLaunchPrompt(launch.action, plan, {
+    sameProject,
+    projectName: rootSource?.name || sourceProjectId || '',
+    absolutePath: sameProject ? plan.path : absoluteArtifactPath({ path: plan.path, uri: '' }, rootSource?.workRoot),
+  })
   void nextTick(resizeComposerTextarea)
   focusComposer(composerText.value.length)
 }
 
-/** 开工指令：执行技能自己读回方案文件；跨项目时给出方案的绝对位置并说明需要批准。 */
-function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry, sourceProjectId: string | null, targetProjectId: string): string {
-  const sameProject = !sourceProjectId || sourceProjectId === targetProjectId
-  if (sameProject) {
-    return [
-      `执行方案《${plan.title}》（${plan.path}）。`,
-      t("先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；"),
-      t("然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。"),
-    ].join('')
+/** 资料库「导入」：桌面给源文件路径，其它环境给文件名与正文；取消返回 null。 */
+async function pickPlanImportFile(): Promise<{ path?: string; name?: string; text?: string } | null> {
+  const picker = appRuntime.capabilities.files
+  if (!picker) return null
+  try {
+    if (picker.pickPaths) {
+      const paths = await picker.pickPaths({ multiple: false, accept: '.md,text/markdown' })
+      return paths?.[0] ? { path: paths[0] } : null
+    }
+    if (!picker.pick) return null
+    const files = await picker.pick({ multiple: false, accept: '.md,text/markdown' })
+    const file = files?.[0]
+    if (!file) return null
+    return { name: file.name, text: await file.text() }
+  } catch {
+    return null
   }
-  const source = projects.value.find((project) => project.id === sourceProjectId)
-  const absolutePath = absoluteArtifactPath({ path: plan.path, uri: '' }, source?.workRoot)
-  return [
-    `执行方案《${plan.title}》。这份方案属于项目「${source?.name || sourceProjectId}」，存放在 ${absolutePath}。`,
-    t("先用 read_file 读回这份方案（它在当前项目之外，读到它需要你先申请访问批准），对照仓库现状核对需求与步骤，有出入的地方先记下结论；"),
-    t("然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工；方案文件的更新写回它原来的位置。"),
-  ].join('')
 }
 
 /**
@@ -5636,7 +5657,7 @@ const pageBindings = useCorePageBindings({
   projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
   refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
   selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,
-  settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule,
+  pickPlanImportFile, settingsSection, startPlanFromLibrary, startPlanActionFromLibrary, theme, themeMode, themeSchedule,
   transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
   updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles
 })

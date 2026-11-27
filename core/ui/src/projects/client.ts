@@ -21,6 +21,12 @@ export interface CoreFileEntry {
   ext: string
 }
 
+/** 方案类型：PRD/SPEC/… 等分类代码（扩展分类共用一份词表，空串 = 未分类）。 */
+export type CorePlanType =
+  | 'PRD' | 'SPEC' | 'DESIGN' | 'RESEARCH' | 'EXP' | 'PLAN' | 'AUDIT' | 'REPORT'
+  | 'ARCH' | 'ADR' | 'RFC' | 'POC' | 'TEST' | 'MIG' | 'SOP' | 'RCA'
+  | ''
+
 /** One plan document in the project's 「方案/」 folder, as the scan reports it. */
 export interface CorePlanLibraryEntry {
   name: string
@@ -28,11 +34,29 @@ export interface CorePlanLibraryEntry {
   /** Directory inside 「方案/」 the file lives in ('' = top level). */
   folder: string
   title: string
-  status: 'draft' | 'ready' | 'executing' | 'done'
+  /** 兼容值：旧客户端用它判断能否开工（ready = 生效且未实施）。 */
+  status: 'draft' | 'ready' | 'executing' | 'done' | 'archived' | 'deprecated'
+  /** 设计状态与实施状态是两条独立的轴（PRD §8）。 */
+  design_status: 'draft' | 'active' | 'archived' | 'deprecated'
+  impl_status: 'none' | 'doing' | 'review' | 'accepted'
+  type: CorePlanType
+  type_label: string
+  topic: string
+  related: string[]
   summary: string
   favorite: boolean
   size: number
   updated_at: number
+}
+
+/** 只改 frontmatter 的元数据补丁：正文不动。 */
+export interface CorePlanMetaPatch {
+  type?: CorePlanType
+  design_status?: 'draft' | 'active' | 'archived' | 'deprecated'
+  impl_status?: 'none' | 'doing' | 'review' | 'accepted'
+  topic?: string
+  summary?: string
+  related_sessions?: string[]
 }
 
 /** One folder inside 「方案/」, at any depth. */
@@ -65,7 +89,9 @@ export interface CoreProjectClient {
   readRawFile(projectId: string, path: string): Promise<TransportHttpResponse>
   browseDirectory(path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
   listPlanLibrary(projectId: string): Promise<{ dir: string; entries: CorePlanLibraryEntry[]; folders: CorePlanLibraryFolder[] }>
-  createPlanLibraryFile(projectId: string, name: string, folder?: string): Promise<{ entry: CorePlanLibraryEntry }>
+  createPlanLibraryFile(projectId: string, name: string, folder?: string, type?: CorePlanType, topic?: string): Promise<{ entry: CorePlanLibraryEntry }>
+  setPlanLibraryMeta(projectId: string, path: string, patch: CorePlanMetaPatch): Promise<{ entry: CorePlanLibraryEntry }>
+  importPlanLibraryFile(projectId: string, path: string, folder?: string): Promise<{ entry: CorePlanLibraryEntry }>
   createPlanLibraryFolder(projectId: string, path: string): Promise<{ folder: CorePlanLibraryFolder }>
   deletePlanLibraryFolder(projectId: string, path: string): Promise<{ deleted: string }>
   renamePlanLibraryFile(projectId: string, path: string, name: string): Promise<{ entry: CorePlanLibraryEntry }>
@@ -168,10 +194,22 @@ export function createCoreProjectClient(transport: LamToolsTransport): CoreProje
         `${projectPath(projectId)}/plan-library`,
       )
     },
-    async createPlanLibraryFile(projectId, name, folder = '') {
+    async createPlanLibraryFile(projectId, name, folder = '', type = '', topic = '') {
       return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/files`, {
         method: 'POST',
-        body: { name, folder },
+        body: { name, folder, type, topic },
+      })
+    },
+    async setPlanLibraryMeta(projectId, path, patch) {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/meta`, {
+        method: 'POST',
+        body: { path, ...patch },
+      })
+    },
+    async importPlanLibraryFile(projectId, path, folder = '') {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/import`, {
+        method: 'POST',
+        body: { path, folder },
       })
     },
     async createPlanLibraryFolder(projectId, path) {

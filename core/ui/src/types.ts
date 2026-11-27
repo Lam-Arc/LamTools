@@ -191,6 +191,10 @@ export interface ProjectArtifact {
   mime_type?: string;
   path?: string;
   uri?: string;
+  /** 资料归属的项目；全局库用它定位操作目标。 */
+  project_id?: string;
+  /** 资料所在项目的工作根；全局库展开 workspace:// 时用。 */
+  work_root?: string;
   role?: ArtifactRole;
   status?: ArtifactStatus;
   source?: string;
