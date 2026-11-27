@@ -769,6 +769,12 @@ def build(env: dict[str, str], debug: bool, target: str, timeout: int) -> int:
     guarded = check_runtime_matches_core(env, target)
     if guarded != EXIT_OK:
         return guarded
+    # user:“还有手机版”+(Gradle 必须使用刚通过版本校验的运行时目录和架构)。
+    env = {
+        **env,
+        "SUNDAY_RT_ABI": runtime_abi(target, env),
+        "SUNDAY_RT_ASSETS": str(runtime_assets_dir(target, env).resolve()),
+    }
     cli = tauri_cli()
     assert cli is not None
     command = cli + ["android", "build", "--apk", "--target", target]
@@ -838,7 +844,7 @@ def sign(apk: Path, env: dict[str, str], timeout: int) -> int:
 
 
 def verify(apk: Path) -> int:
-    """Assert the APK carries both halves of the bridge.
+    """Assert the APK carries the bridge and the embedded Core runtime.
 
     A build that compiles is not evidence that our Kotlin was injected: the project
     would happily build Tauri's own template without our Activity overrides. Checking
@@ -858,6 +864,10 @@ def verify(apk: Path) -> int:
         blob = b"".join(archive.read(name) for name in dex)
         wanted = {
             "native library": True,
+            # user:“还有手机版”+(构建通过也要检查 APK 内的运行时，防止发布打开就报错的包)。
+            "runtime manifest": "assets/runtime/manifest.json" in names,
+            "runtime archive": any(name.startswith("assets/runtime/rootfs-") for name in names),
+            "proot": any(name.startswith("lib/") and name.endswith("/libproot.so") for name in names),
             "class LifecycleBridge (dex)": b"LifecycleBridge" in blob,
             "class MainActivity (dex)": b"MainActivity" in blob,
             # user:"verify() 里加断言：dex 里必须出现 SundayOverlayService"+(否则构建
@@ -873,7 +883,7 @@ def verify(apk: Path) -> int:
             EXIT_BUILD,
             "the APK is missing " + ", ".join(missing) + ": the Kotlin injection did not land",
         )
-    say("verify: the APK carries the bridge and the Rust library")
+    say("verify: the APK carries the bridge and embedded runtime")
     return EXIT_OK
 
 
