@@ -37,6 +37,9 @@ MEMORY_TOOL_DESCRIPTION = (
     "with new_string; add occurrence when the text appears more than once), "
     "delete (file or directory), rename (move to new_path), mkdir. "
     "INDEX.md is generated and cannot be written, renamed or deleted. "
+    "Each tier also has a root 'memory.md': the core cognition injected into "
+    "every request. Write it to keep what you should always know about the "
+    "user/project current and compact; every rewrite keeps a restorable version. "
     "Memory writes automatically retain the original conversation context and exact source position. "
     "Use reload_context with the memory path to reload its latest original context; "
     "pass source_id from a memory-context link to select an older source. "
@@ -232,7 +235,21 @@ def make_memory_handler(work_root: str | Path | None):
             if action == "delete":
                 if not path:
                     return _failed(call, "'delete' requires a path", "missing_argument")
+                # user:“用户要求忘记…不被自动整理机制重新恢复”+(删除即记墓碑，
+                # 后续整理提示词会把这条列为禁止恢复)。
+                title = ""
+                try:
+                    first = memory_library.read_memory(scope, root, path).strip().splitlines()
+                    title = first[0][:120] if first else ""
+                except (memory_library.MemoryError, IndexError):
+                    title = ""
                 deleted = memory_library.delete_memory(scope, root, path)
+                try:
+                    from lamtools_core.mem import dreaming as memory_dreaming
+
+                    memory_dreaming.record_forgotten(scope, root, deleted, title=title)
+                except Exception:  # noqa: BLE001 - a tombstone must not fail a delete
+                    pass
                 return ToolResult(
                     call_id=call.id,
                     name=call.name,

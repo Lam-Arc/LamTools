@@ -11,6 +11,14 @@ one-line summary per file) and injected into every session, so the model
 learns what is stored without reading every file.  The model then uses the
 ``memory`` tool to list, read and edit the files.
 
+Each tier also carries one real, editable ``memory.md`` at its root: the L1
+core cognition distilled from the stored knowledge.  It is injected on its own
+(never through ``INDEX.md``) and keeps a restorable version history under
+``.versions/``.  The document may be rewritten as a whole so cognition can
+evolve and resolve its own contradictions; text the user pins between
+``memory:keep`` markers survives every rewrite, and the version history is the
+safety net for everything else.
+
 A memory is retrieved by the model recognising that the current task matches
 it, so the summary line is a *trigger*, not a topic label: authors (model or
 human) write each file's title as the condition under which it should be
@@ -41,6 +49,27 @@ SCOPE_GLOBAL = "global"
 SCOPE_PROJECT = "project"
 
 INDEX_FILENAME = "INDEX.md"
+
+# user:“引入以 memory.md 为核心的主动认知机制，复用现有记忆系统”+(核心认知是档位根目录里的
+# 一个真实 Markdown 文档，自动注入；它属于记忆库本身，不是第二套存储)。
+CORE_FILENAME = "memory.md"
+
+#: Text the user explicitly pins. Dreaming may rewrite the rest of the document
+#: — cognition has to be able to evolve and to resolve its own contradictions —
+#: but these regions are copied into every automated rewrite verbatim.
+CORE_PINNED_START = "<!-- memory:keep:start -->"
+CORE_PINNED_END = "<!-- memory:keep:end -->"
+
+#: Version snapshots of the core document, kept next to the tier.
+VERSIONS_DIRNAME = ".versions"
+MAX_CORE_VERSIONS = 20
+
+#: Hard cap for reading the core document.
+MAX_CORE_READ_CHARS = 100_000
+
+#: Exception guard for the injected core cognition; normal size is kept small
+#: by Dreaming's distillation target, so hitting this means something went wrong.
+MAX_CORE_PROMPT_CHARS = 4_000
 
 #: Paths the tool and RPC refuse to write to / delete / rename.
 RESERVED_NAMES: frozenset[str] = frozenset({INDEX_FILENAME})
@@ -210,6 +239,10 @@ def list_entries(
             if name in RESERVED_NAMES or name.startswith("."):
                 continue
             file_path = current_path / name
+            if _is_core_entry(file_path, root):
+                # The L1 document is injected on its own; listing it again would
+                # only duplicate it in the index and in the UI.
+                continue
             entries.append(_entry_for(file_path, root, is_dir=False))
         for name in dirnames:
             entries.append(_entry_for(current_path / name, root, is_dir=True))
@@ -232,7 +265,11 @@ def read_memory(scope: str, work_root: str | Path | None, path: str) -> str:
 
 
 def write_memory(scope: str, work_root: str | Path | None, path: str, content: str) -> MemoryEntry:
-    target = resolve_memory_path(scope, work_root, _require_relative(path))
+    relative = _require_relative(path)
+    if relative == CORE_FILENAME:
+        # user:“用户明确要求记住…直接处理”+(核心认知走带版本快照的写入路径)。
+        return write_core_document(scope, work_root, content)
+    target = resolve_memory_path(scope, work_root, relative)
     if target.is_dir():
         raise MemoryPathError(f"'{path}' is a directory")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +279,14 @@ def write_memory(scope: str, work_root: str | Path | None, path: str, content: s
 
 
 def append_memory(scope: str, work_root: str | Path | None, path: str, content: str) -> MemoryEntry:
-    target = resolve_memory_path(scope, work_root, _require_relative(path))
+    relative = _require_relative(path)
+    if relative == CORE_FILENAME:
+        existing = read_core_document(scope, work_root)
+        addition_text = str(content or "")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        return write_core_document(scope, work_root, existing + addition_text)
+    target = resolve_memory_path(scope, work_root, relative)
     if target.is_dir():
         raise MemoryPathError(f"'{path}' is a directory")
     existing = ""
@@ -303,12 +347,20 @@ def edit_memory(
     updated = text[:start] + str(new_string or "") + text[start + len(old):]
     # user:“记忆也应当保存记忆时的精确位置”+(正文编辑与新来源链接使用一次原子写入，避免仅保存其中一半)。
     updated += context_links
+    if _clean_relative(path) == CORE_FILENAME:
+        return write_core_document(scope, work_root, updated)
     _atomic_write(target, updated)
     refresh_index(scope, work_root)
     return _entry_for(target, _memory_root(scope, work_root).resolve(), is_dir=False)
 
 
 def delete_memory(scope: str, work_root: str | Path | None, path: str) -> str:
+    relative = _clean_relative(path)
+    if relative == CORE_FILENAME:
+        # Deleting the L1 document means clearing the cognition, never losing the
+        # version history (PRD 7.2 “清空指定作用域的核心认知”).
+        clear_core_document(scope, work_root)
+        return relative
     target = resolve_memory_path(scope, work_root, path)
     if target == _memory_root(scope, work_root).resolve():
         raise MemoryPathError("refusing to delete the memory root")
@@ -323,6 +375,10 @@ def delete_memory(scope: str, work_root: str | Path | None, path: str) -> str:
 
 
 def rename_memory(scope: str, work_root: str | Path | None, path: str, new_path: str) -> str:
+    if _clean_relative(path) == CORE_FILENAME:
+        raise MemoryReservedError(
+            "'memory.md' is the tier's core cognition document; write it instead of renaming it"
+        )
     source = resolve_memory_path(scope, work_root, _require_relative(path))
     if not source.exists():
         raise MemoryNotFoundError(f"memory entry not found: {path}")
@@ -342,6 +398,214 @@ def make_directory(scope: str, work_root: str | Path | None, path: str) -> str:
     target.mkdir(parents=True, exist_ok=True)
     refresh_index(scope, work_root)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Core cognition (memory.md) — the L1 document injected into every request
+# ---------------------------------------------------------------------------
+
+
+def core_file_path(scope: str, work_root: str | Path | None) -> Path:
+    """The tier's core cognition document (``memory.md`` at the tier root)."""
+    return _memory_root(_normalize_scope(scope), work_root) / CORE_FILENAME
+
+
+def _is_core_entry(path: Path, root: Path) -> bool:
+    """Whether *path* is a tier's core document (only the root one counts)."""
+    try:
+        return path.parent == root and path.name == CORE_FILENAME
+    except OSError:  # pragma: no cover - defensive
+        return False
+
+
+def read_core_document(scope: str, work_root: str | Path | None) -> str:
+    """Return ``memory.md`` text, or the empty string when it does not exist."""
+    target = core_file_path(scope, work_root)
+    if not target.is_file():
+        return ""
+    try:
+        text = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise MemoryError(f"could not read the core memory document: {exc}") from exc
+    if len(text) > MAX_CORE_READ_CHARS:
+        text = text[:MAX_CORE_READ_CHARS] + "\n\n[truncated: core memory exceeds the read limit]"
+    return text
+
+
+def _snapshot_core_document(scope: str, work_root: str | Path | None, text: str) -> None:
+    """Keep the previous content as a restorable version (the real safety net)."""
+    if not text.strip():
+        return
+    root = _memory_root(_normalize_scope(scope), work_root)
+    versions = root / VERSIONS_DIRNAME
+    versions.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    _atomic_write(versions / f"{CORE_FILENAME}.{stamp}.md", text)
+    files = sorted(
+        (item for item in versions.glob(f"{CORE_FILENAME}.*.md") if item.is_file()),
+        key=lambda item: item.name,
+    )
+    for stale in files[: max(0, len(files) - MAX_CORE_VERSIONS)]:
+        try:
+            stale.unlink()
+        except OSError:  # pragma: no cover - a locked snapshot is not fatal
+            continue
+
+
+def write_core_document(
+    scope: str,
+    work_root: str | Path | None,
+    content: str,
+    *,
+    expected: str | None = None,
+) -> MemoryEntry:
+    """Replace ``memory.md`` atomically, keeping the previous version.
+
+    ``expected`` turns the read-modify-write into a compare-and-swap so a caller
+    that computed a new document from an older copy (Dreaming) can retry from the
+    latest content instead of silently dropping a concurrent edit.
+    """
+    normalized = _normalize_scope(scope)
+    target = core_file_path(normalized, work_root)
+    previous = read_core_document(normalized, work_root)
+    if expected is not None and previous != expected:
+        raise MemoryConflictError(
+            "core memory changed while it was being updated; retry from the latest content"
+        )
+    text = str(content or "")
+    if len(text) > MAX_CORE_READ_CHARS:
+        # Writing something the read path would truncate turns the document
+        # into a silent lie; refuse it and say why.
+        raise MemoryPathError(
+            f"core memory document exceeds the {MAX_CORE_READ_CHARS}-character limit"
+        )
+    if previous.strip() and previous != text:
+        _snapshot_core_document(normalized, work_root, previous)
+    _atomic_write(target, text)
+    return _entry_for(target, _memory_root(normalized, work_root).resolve(), is_dir=False)
+
+
+def clear_core_document(scope: str, work_root: str | Path | None) -> str:
+    """Empty the core document (the version history stays)."""
+    write_core_document(scope, work_root, "")
+    return str(core_file_path(scope, work_root))
+
+
+def list_core_versions(
+    scope: str, work_root: str | Path | None, *, limit: int = MAX_CORE_VERSIONS
+) -> list[dict[str, object]]:
+    """Newest-first list of restorable core-document versions."""
+    try:
+        versions = _memory_root(_normalize_scope(scope), work_root) / VERSIONS_DIRNAME
+    except MemoryError:
+        return []
+    if not versions.is_dir():
+        return []
+    entries: list[dict[str, object]] = []
+    for item in sorted(
+        versions.glob(f"{CORE_FILENAME}.*.md"), key=lambda candidate: candidate.name, reverse=True
+    ):
+        if not item.is_file():
+            continue
+        try:
+            stat = item.stat()
+        except OSError:
+            continue
+        entries.append(
+            {
+                "id": item.name,
+                "size": int(stat.st_size),
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            }
+        )
+        if limit and len(entries) >= limit:
+            break
+    return entries
+
+
+def restore_core_version(
+    scope: str, work_root: str | Path | None, version: str
+) -> MemoryEntry:
+    """Restore one snapshot; the current content is snapshotted first."""
+    name = str(version or "").strip()
+    if (
+        not name
+        or "/" in name
+        or "\\" in name
+        or ".." in name
+        or not name.startswith(CORE_FILENAME + ".")
+    ):
+        raise MemoryPathError("invalid core memory version id")
+    target = _memory_root(_normalize_scope(scope), work_root) / VERSIONS_DIRNAME / name
+    if not target.is_file():
+        raise MemoryNotFoundError(f"core memory version not found: {name}")
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise MemoryError(f"could not read the core memory version: {exc}") from exc
+    return write_core_document(scope, work_root, text)
+
+
+def core_text_for_prompt(
+    scope: str, work_root: str | Path | None, *, max_chars: int = MAX_CORE_PROMPT_CHARS
+) -> str:
+    """The core cognition rendered for injection.
+
+    The budget is an exception guard, not the normal size control: Dreaming is
+    asked to keep the document small, so hitting this cap means something went
+    wrong and the truncation is stated instead of hidden.
+    """
+    try:
+        text = read_core_document(scope, work_root).strip()
+    except MemoryError:
+        return ""
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    note = (
+        f"\n\n[核心认知超出注入预算，已截断到 {max_chars} 字符；"
+        f"完整内容见 {CORE_FILENAME}]"
+    )
+    keep = max(0, max_chars - len(note))
+    return text[:keep].rstrip() + note
+
+
+def pinned_blocks(content: str) -> list[str]:
+    """Return the bodies of the user's pinned regions, in document order."""
+    blocks: list[str] = []
+    rest = str(content or "")
+    while True:
+        start = rest.find(CORE_PINNED_START)
+        if start < 0:
+            break
+        end = rest.find(CORE_PINNED_END, start)
+        if end < 0:
+            break
+        body = rest[start + len(CORE_PINNED_START):end].strip()
+        if body:
+            blocks.append(body)
+        rest = rest[end + len(CORE_PINNED_END):]
+    return blocks
+
+
+def merge_core_document(current: str, proposed: str) -> str:
+    """Merge an automated rewrite with the text the user pinned.
+
+    Dreaming may reorganise, compress and correct everything else in the
+    document — that is how contradictions get resolved instead of accumulating —
+    but pinned regions are carried over verbatim, so an explicit "keep this"
+    never depends on the model remembering to keep it.
+    """
+    text = str(proposed or "").strip()
+    for block in pinned_blocks(current):
+        if block in text:
+            continue
+        pinned = f"{CORE_PINNED_START}\n{block}\n{CORE_PINNED_END}"
+        text = f"{text}\n\n{pinned}" if text else pinned
+    return (text + "\n") if text else ""
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +722,11 @@ def _tree_entries(root: Path) -> list[MemoryEntry]:
         except OSError:
             return
         for child in children:
-            if child.name.startswith(".") or child.name in RESERVED_NAMES:
+            if (
+                child.name.startswith(".")
+                or child.name in RESERVED_NAMES
+                or _is_core_entry(child, root)
+            ):
                 continue
             if child.is_dir():
                 entries.append(_entry_for(child, root, is_dir=True))
@@ -476,7 +744,10 @@ def _iter_files(root: Path):
         for name in filenames:
             if name in RESERVED_NAMES or name.startswith("."):
                 continue
-            yield Path(current) / name
+            candidate = Path(current) / name
+            if _is_core_entry(candidate, root):
+                continue
+            yield candidate
 
 
 def _entry_for(path: Path, root: Path, *, is_dir: bool) -> MemoryEntry:
@@ -578,12 +849,19 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 __all__ = [
+    "CORE_FILENAME",
+    "CORE_PINNED_END",
+    "CORE_PINNED_START",
     "INDEX_FILENAME",
+    "MAX_CORE_PROMPT_CHARS",
+    "MAX_CORE_READ_CHARS",
+    "MAX_CORE_VERSIONS",
     "MAX_INDEX_CHARS",
     "MAX_READ_CHARS",
     "RESERVED_NAMES",
     "SCOPE_GLOBAL",
     "SCOPE_PROJECT",
+    "VERSIONS_DIRNAME",
     "MemoryConflictError",
     "MemoryEntry",
     "MemoryError",
@@ -591,19 +869,28 @@ __all__ = [
     "MemoryPathError",
     "MemoryReservedError",
     "append_memory",
+    "clear_core_document",
+    "core_file_path",
+    "core_text_for_prompt",
     "delete_memory",
     "edit_memory",
     "has_content",
     "index_text_for_prompt",
+    "list_core_versions",
     "list_entries",
     "make_directory",
     "memory_root",
+    "merge_core_document",
     "normalize_scope",
+    "pinned_blocks",
+    "read_core_document",
     "read_memory",
     "refresh_index",
     "rename_memory",
     "render_index",
     "resolve_memory_path",
+    "restore_core_version",
     "reveal_memory",
+    "write_core_document",
     "write_memory",
 ]

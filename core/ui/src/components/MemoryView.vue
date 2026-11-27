@@ -14,7 +14,16 @@
       </template>
       <template v-else-if="mode === 'reader' && selected">
         <button class="library-button" type="button" data-memory-edit @click="openEditor(selected)">{{ t("编辑") }}</button>
+        <!-- user:“清空指定作用域的核心认知”+(核心认知不是一个可删除的普通文件：清空后版本历史仍在)。 -->
         <button
+          v-if="isCoreSelected"
+          class="library-button library-button--danger"
+          type="button"
+          data-memory-core-clear
+          @click="pendingClear = true"
+        >{{ t("清空") }}</button>
+        <button
+          v-else
           class="library-button library-button--danger"
           type="button"
           :data-memory-delete="confirmingDelete ? 'confirm' : 'arm'"
@@ -26,8 +35,8 @@
         <button class="icon-button" type="button" :disabled="loading" :aria-label="t('刷新')" :title="t('刷新')" data-memory-refresh @click="reload">
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="library-button" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个项目')" data-memory-create-folder @click="openDialog('create-folder')">{{ t("新建文件夹") }}</button>
-        <button class="library-button library-button--primary" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个项目')" data-memory-create-file @click="openDialog('create-file')">
+        <button class="library-button" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个位置')" data-memory-create-folder @click="openDialog('create-folder')">{{ t("新建文件夹") }}</button>
+        <button class="library-button library-button--primary" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个位置')" data-memory-create-file @click="openDialog('create-file')">
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("新建记忆") }}</button>
       </template>
     </FullAreaActions>
@@ -37,7 +46,7 @@
         <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
       </button>
       <p v-if="mode !== 'listing' && selected" class="library-crumb" data-memory-crumb>
-        {{ rootLabel }}<template v-if="activeProject"><span class="crumb-sep" aria-hidden="true">›</span>{{ activeProject.name }}</template><span class="crumb-sep" aria-hidden="true">›</span>{{ truncateTitle(selectedName) }}
+        {{ rootLabel }}<template v-if="activeProject"><span class="crumb-sep" aria-hidden="true">›</span>{{ activeProject.name }}</template><template v-else-if="scope === 'global'"><span class="crumb-sep" aria-hidden="true">›</span>{{ t("全局记忆") }}</template><span class="crumb-sep" aria-hidden="true">›</span>{{ truncateTitle(selectedName) }}
       </p>
       <nav v-else-if="insideProject" class="library-crumb" data-memory-crumb :aria-label="t('位置')">
         <button type="button" class="crumb-link" @click="exitProject">{{ rootLabel }}</button>
@@ -88,6 +97,27 @@
           <span v-if="selected.modified">· {{ selected.modified }}</span>
         </p>
       </header>
+      <!-- user:“查看最近一次自动整理时间 / 恢复”+(核心认知自带整理状态与可恢复版本)。 -->
+      <div v-if="isCoreSelected" class="memory-core-panel" data-memory-core-panel>
+        <p class="memory-core-meta">
+          <span v-if="coreDream?.last_dream_at">{{ t("上次自动整理：{0}", { 0: formatStamp(coreDream.last_dream_at) }) }}</span>
+          <span v-else>{{ t("还没有自动整理记录") }}</span>
+          <span v-if="coreDream?.enabled === false">· {{ t("主动记忆已关闭") }}</span>
+        </p>
+        <p v-if="coreDream?.last_error" class="full-area-note full-area-note--error" role="alert">{{ coreDream.last_error }}</p>
+        <p v-if="coreNotice" class="full-area-note" role="status" data-memory-core-notice>{{ coreNotice }}</p>
+        <div v-if="coreVersions.length" class="memory-core-versions" data-memory-core-versions>
+          <span>{{ t("历史版本") }}</span>
+          <button
+            v-for="version in coreVersions.slice(0, 6)"
+            :key="version.id"
+            class="library-button"
+            type="button"
+            :data-memory-core-version="version.id"
+            @click="pendingRestore = version"
+          >{{ version.modified }}</button>
+        </div>
+      </div>
       <p v-if="contentLoading" class="full-area-note" role="status">{{ t("正在打开…") }}</p>
       <p v-else-if="contentError" class="full-area-note full-area-note--error" role="alert">{{ contentError }}</p>
       <article v-else-if="selected.path.toLowerCase().endsWith('.md')" class="library-document">
@@ -123,15 +153,9 @@
       <!-- ── 工具栏：搜索 + 视图切换 ── -->
       <div class="library-toolbar" data-memory-toolbar>
         <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享搜索框并保留本页查询和无障碍标签)。 -->
-        <LibrarySearchField v-model="query" :label="atProjectLevel ? t('搜索项目') : t('搜索记忆')" :input-attrs="{ 'data-memory-search': '' }" />
+        <LibrarySearchField v-model="query" :label="atProjectLevel ? t('搜索位置') : t('搜索记忆')" :input-attrs="{ 'data-memory-search': '' }" />
         <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享视图切换并保留本页的状态与保存方式)。 -->
         <LibraryViewToggle v-if="!atProjectLevel" v-model="viewMode" data-memory-view-toggle />
-      </div>
-
-      <!-- ── 两档：项目 / 全局 ── -->
-      <div class="filter-tabs" role="group" :aria-label="t('记忆档位')" data-memory-tiers>
-        <button type="button" :class="{ active: scope === 'project' }" :aria-pressed="scope === 'project'" data-memory-tier="project" @click="setScope('project')">{{ t("项目记忆") }}</button>
-        <button type="button" :class="{ active: scope === 'global' }" :aria-pressed="scope === 'global'" data-memory-tier="global" @click="setScope('global')">{{ t("全局记忆") }}</button>
       </div>
 
       <!-- 手机没有 memory RPC：如实说明，不做半截界面。 -->
@@ -139,33 +163,47 @@
 
       <!-- ── 项目档第一层：先选是哪个项目 ── -->
       <template v-else-if="atProjectLevel">
+        <!-- user:“库本身的全局与项目划分也仅是一个文件划分”+(位置清单：全局 + 各项目；
+             全局不依赖项目清单，项目读失败也挡不住它)。 -->
+        <div class="folder-grid" role="list" data-memory-projects>
+          <article
+            class="folder-card"
+            role="listitem"
+            tabindex="0"
+            :aria-label="t('打开全局记忆')"
+            data-memory-global
+            @click="enterGlobal"
+            @keydown.enter.prevent="enterGlobal"
+          >
+            <span class="folder-card-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.6" /></span>
+            <span class="folder-card-name">{{ t("全局记忆") }}</span>
+          </article>
+          <template v-if="!projectsLoading && !projectsError">
+            <article
+              v-for="project in filteredProjects"
+              :key="project.id"
+              class="folder-card"
+              role="listitem"
+              tabindex="0"
+              :aria-label="t('打开 {0} 的项目记忆', { 0: project.name })"
+              :data-memory-project="project.id"
+              @click="enterProject(project)"
+              @keydown.enter.prevent="enterProject(project)"
+            >
+              <span class="folder-card-icon" aria-hidden="true">
+                <ProjectVisualIcon :icon-key="project.iconKey" :color-key="project.colorKey" :size="18" :icon-size="13" />
+              </span>
+              <span class="folder-card-name">{{ project.name }}</span>
+            </article>
+          </template>
+        </div>
         <p v-if="projectsLoading && !projects.length" class="full-area-note" role="status">{{ t("正在读取项目…") }}</p>
         <p v-else-if="projectsError" class="full-area-note full-area-note--error" role="alert" data-memory-project-error>
           {{ projectsError }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
         </p>
-        <div v-else-if="filteredProjects.length" class="folder-grid" role="list" data-memory-projects>
-          <article
-            v-for="project in filteredProjects"
-            :key="project.id"
-            class="folder-card"
-            role="listitem"
-            tabindex="0"
-            :aria-label="t('打开 {0} 的项目记忆', { 0: project.name })"
-            :data-memory-project="project.id"
-            @click="enterProject(project)"
-            @keydown.enter.prevent="enterProject(project)"
-          >
-            <span class="folder-card-icon" aria-hidden="true">
-              <ProjectVisualIcon :icon-key="project.iconKey" :color-key="project.colorKey" :size="18" :icon-size="13" />
-            </span>
-            <span class="folder-card-name">{{ project.name }}</span>
-          </article>
-        </div>
-        <div v-else class="full-area-empty" data-memory-no-projects>
-          <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
-          <h2 class="full-area-empty-title">{{ projectsEmptyTitle }}</h2>
-          <p class="full-area-empty-hint">{{ projectsEmptyHint }}</p>
-        </div>
+        <p v-else-if="!filteredProjects.length" class="full-area-note tab-empty" data-memory-no-projects>
+          {{ projectsEmptyTitle }} — {{ projectsEmptyHint }}
+        </p>
       </template>
 
       <template v-else>
@@ -174,6 +212,34 @@
           {{ error }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
         </p>
         <template v-else>
+        <!-- user:“查看当前 memory.md / 查看全局与项目记忆”+(核心认知固定在这一层，
+             不混进普通条目；它自己就是会被自动注入的那份认知)。 -->
+        <article v-if="!openFolder && !searching" class="memory-core-card" data-memory-core-card>
+          <div class="memory-core-head">
+            <Brain :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>{{ t("核心认知") }}</span>
+            <code class="memory-core-file">memory.md</code>
+          </div>
+          <p class="memory-core-summary">{{ coreSummary }}</p>
+          <p class="memory-core-meta">
+            <span v-if="coreDream?.last_dream_at">{{ t("上次自动整理：{0}", { 0: formatStamp(coreDream.last_dream_at) }) }}</span>
+            <span v-else>{{ t("还没有自动整理记录") }}</span>
+            <span v-if="coreVersions.length">· {{ t("{0} 个历史版本", { 0: coreVersions.length }) }}</span>
+          </p>
+          <p v-if="coreNotice" class="full-area-note" role="status">{{ coreNotice }}</p>
+          <div class="memory-core-actions">
+            <button class="library-button" type="button" data-memory-core-open @click="openCore">{{ t("查看") }}</button>
+            <button class="library-button" type="button" data-memory-core-edit @click="openEditor(coreItem)">{{ t("编辑") }}</button>
+            <button
+              class="library-button library-button--primary"
+              type="button"
+              data-memory-core-dream
+              :disabled="coreBusy || coreDream?.enabled === false"
+              @click="runDreamNow"
+            >{{ t("立即整理") }}</button>
+          </div>
+        </article>
+
         <!-- ── 子文件夹 ── -->
         <!-- user:“确保视觉、功能和交互不退化”+(卡片内菜单的回车只操作菜单，不触发卡片打开)。 -->
         <div v-if="childFolders.length && !searching" class="folder-grid" role="list" data-memory-folders>
@@ -290,6 +356,16 @@
     <LibraryConfirmDialog :open="pendingDiscard" :title="t('放弃修改')" :aria-label="t('确认放弃修改')" :cancel-label="t('继续编辑')" :confirm-label="t('放弃修改')" :confirm-attrs="{ 'data-memory-discard-confirm': '' }" data-memory-discard @cancel="pendingDiscard = false" @confirm="discardEditor">
       「{{ selectedName }}{{ t("」还有没保存的内容，离开就会丢掉。") }}
     </LibraryConfirmDialog>
+
+    <!-- ── 清空核心认知 ── -->
+    <LibraryConfirmDialog :open="pendingClear" :title="t('清空核心认知')" :aria-label="t('确认清空核心认知')" :confirm-label="t('清空')" :confirm-attrs="{ 'data-memory-core-clear-confirm': '' }" data-memory-core-clear-dialog @cancel="pendingClear = false" @confirm="clearCore">
+      {{ t("memory.md 会被清空，模型不再自动携带这份认知；历史版本仍可恢复，独立记忆文件不受影响。") }}
+    </LibraryConfirmDialog>
+
+    <!-- ── 恢复历史版本 ── -->
+    <LibraryConfirmDialog :open="Boolean(pendingRestore)" :title="t('恢复历史版本')" :aria-label="t('确认恢复历史版本')" :confirm-label="t('恢复')" :confirm-attrs="{ 'data-memory-core-restore-confirm': '' }" data-memory-core-restore-dialog @cancel="pendingRestore = null" @confirm="restoreVersion(pendingRestore)">
+      {{ t("将用 {0} 的内容替换当前 memory.md；当前内容会先存成一个新版本。", { 0: pendingRestore?.modified || '' }) }}
+    </LibraryConfirmDialog>
   </div>
 </template>
 
@@ -306,16 +382,14 @@ import LibraryNameDialog from '@/components/LibraryNameDialog.vue'
 /**
  * MemoryView — the 记忆 as one full-area view, shaped like the 资料库.
  *
- * Memory is two directory tiers of plain files (project `<work_root>/.lam/memory/`,
- * global `<core config>/memory/`), already exposed over RPC as tree / read /
- * write / delete / rename / mkdir. This view is the browser for them: the same
- * toolbar, level-by-level folder walk, reader and editor the library uses —
- * which is why both render the shared `.library-surface` recipe.
+ * Memory lives in plain files across locations: the global `<core config>/memory/`
+ * and each project's `<work_root>/.lam/memory/`, already exposed over RPC as
+ * tree / read / write / delete / rename / mkdir. This view is the browser for
+ * them: the same toolbar, level-by-level folder walk, reader and editor the
+ * library uses — which is why both render the shared `.library-surface` recipe.
  *
- * The project tier puts projects first: its opening level lists every project
- * (from the project client), and a project's files only appear once one is
- * entered — memory belongs to someone before it belongs to a folder. The
- * global tier has no such layer.
+ * user:“库本身的全局与项目划分也仅是一个文件划分，无需单独做管理”+(位置清单把全局与
+ * 各项目放在一起：进哪个位置才读哪个位置的记忆；全局/项目只是文件位置，不是两档管理)。
  *
  * `INDEX.md` is generated output and is never listed by the backend, so it
  * cannot be opened, edited or deleted from here either.
@@ -324,6 +398,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ArrowLeft,
   BookOpen,
+  Brain,
   FileText,
   Folder,
   MoreHorizontal,
@@ -424,6 +499,56 @@ type DialogKind = 'create-file' | 'create-folder' | 'rename'
 const dialog = ref<{ kind: DialogKind; value: string; error: string; busy: boolean; target?: MemoryItem } | null>(null)
 const pendingDelete = ref<MemoryItem | null>(null)
 
+/** 核心认知：档位根目录的 memory.md（L1），由后端自动注入，独立于普通条目。 */
+const CORE_PATH = 'memory.md'
+interface CoreVersion { id: string; size: number; modified: string }
+interface CoreDream {
+  enabled?: boolean
+  last_dream_at?: string
+  last_error?: string
+  forgotten?: number
+  sessions?: number
+}
+const coreContent = ref('')
+const coreVersions = ref<CoreVersion[]>([])
+const coreDream = ref<CoreDream | null>(null)
+const coreBusy = ref(false)
+const coreNotice = ref('')
+const pendingClear = ref(false)
+const pendingRestore = ref<CoreVersion | null>(null)
+const isCoreSelected = computed(() => selected.value?.path === CORE_PATH)
+
+function formatStamp(value: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (count: number) => String(count).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const coreSummary = computed(() => {
+  const lines = coreContent.value
+    .split('\n')
+    .map(text => text.trim())
+    .filter(text => text && !text.startsWith('<!--'))
+  // 卡片标题已经写了「核心认知」：摘要从第一句真正的内容开始，不重复 H1。
+  const line = lines.find(text => !text.startsWith('#'))
+    ?? lines.find(text => text.startsWith('#'))?.replace(/^#+\s*/, '')
+  if (!line) return t("还没有形成核心认知：助手会在之后的使用中逐步积累。")
+  return line.slice(0, 160)
+})
+
+/** 核心认知在阅读/编辑页里复用普通条目的形状，只是路径固定。 */
+const coreItem = computed<MemoryItem>(() => ({
+  path: CORE_PATH,
+  is_dir: false,
+  size: coreContent.value.length,
+  modified: formatStamp(coreDream.value?.last_dream_at || ''),
+  summary: coreSummary.value,
+  name: CORE_PATH,
+  dir: '',
+}))
+
 const isMobile = computed(() => props.platform === 'mobile')
 /** 项目档还没进入具体项目时，展示的是项目清单这一层。 */
 const atProjectLevel = computed(() => scope.value === 'project' && !activeProject.value)
@@ -436,7 +561,7 @@ const canWrite = computed(() => scope.value === 'global' || Boolean(activeProjec
 const tierSubtitle = computed(() => {
   if (scope.value === 'global') return t("跨项目共享的记忆 — 模型在会话里读它，你在这里整理它。")
   if (activeProject.value) return t("只属于「{0}」的记忆 — 模型在会话里读它，你在这里整理它。", { 0: activeProject.value.name })
-  return t("项目记忆按项目归档 — 先选一个项目，再整理它的记忆。")
+  return t("全局与各项目的记忆都在这里 — 选一个位置进去看。")
 })
 
 /** 项目清单层的搜索框过滤的是项目，不是文件。 */
@@ -493,10 +618,16 @@ const folderTrail = computed(() => {
 const selectedName = computed(() => selected.value?.name ?? '')
 const rootLabel = computed(() => props.rootLabel || t("记忆"))
 
-const emptyTitle = computed(() => (openFolder.value ? t("这个文件夹还是空的") : t("这片记忆还是空的")))
-const emptyHint = computed(() => (openFolder.value
-  ? t("写点什么，助手下次就会读到它。")
-  : t("记忆就是普通文件：写在这里的，助手在之后的每个会话里都能读到。")))
+const emptyTitle = computed(() => {
+  if (openFolder.value) return t("这个文件夹还是空的")
+  return coreContent.value.trim() ? t("还没有独立的记忆文件") : t("这片记忆还是空的")
+})
+const emptyHint = computed(() => {
+  if (openFolder.value) return t("写点什么，助手下次就会读到它。")
+  return coreContent.value.trim()
+    ? t("核心认知已经就绪；更细的知识会在这里按主题生成文件。")
+    : t("记忆就是普通文件：写在这里的，助手在之后的每个会话里都能读到。")
+})
 
 function rpcParams(extra: Record<string, unknown> = {}): Record<string, unknown> {
   if (scope.value === 'global') return { scope: 'global', ...extra }
@@ -541,7 +672,10 @@ async function reload(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const result = await rpc<{ entries?: MemoryEntry[] }>('memory.tree')
+    const [result] = await Promise.all([
+      rpc<{ entries?: MemoryEntry[] }>('memory.tree'),
+      loadCore(),
+    ])
     entries.value = result.entries || []
     if (openFolder.value && !items.value.some(item => item.is_dir && item.path === openFolder.value)) {
       openFolder.value = ''
@@ -558,9 +692,24 @@ async function reload(): Promise<void> {
   }
 }
 
-function setScope(next: 'project' | 'global'): void {
-  if (scope.value === next) return
-  scope.value = next
+/** 进入全局记忆：它只是位置清单里的一个位置，不是另一套管理模式。 */
+function enterGlobal(): void {
+  if (scope.value === 'global') return
+  scope.value = 'global'
+  activeProject.value = null
+  openFolder.value = ''
+  query.value = ''
+  mode.value = 'listing'
+  clearSelection()
+  entries.value = []
+  error.value = ''
+  projectsError.value = ''
+  void reload()
+}
+
+/** 回到位置清单（全局 + 各项目）。 */
+function leaveLocation(): void {
+  scope.value = 'project'
   activeProject.value = null
   openFolder.value = ''
   query.value = ''
@@ -588,14 +737,81 @@ function enterProject(project: CoreProject): void {
 /** 退回项目清单这一层。 */
 function exitProject(): void {
   if (!activeProject.value) return
-  activeProject.value = null
-  openFolder.value = ''
-  query.value = ''
-  mode.value = 'listing'
+  leaveLocation()
+}
+
+async function loadCore(): Promise<void> {
+  if (scope.value === 'project' && !activeProject.value?.workRoot) {
+    coreContent.value = ''
+    coreVersions.value = []
+    coreDream.value = null
+    return
+  }
+  coreBusy.value = true
+  try {
+    const result = await rpc<{ content?: string; versions?: CoreVersion[]; dream?: CoreDream }>('memory.core.get')
+    coreContent.value = result.content ?? ''
+    coreVersions.value = result.versions ?? []
+    coreDream.value = result.dream ?? null
+  } catch {
+    // 卡片只是入口；读不到时不挡住普通记忆的浏览。
+    coreContent.value = ''
+    coreVersions.value = []
+    coreDream.value = null
+  } finally {
+    coreBusy.value = false
+  }
+}
+
+function openCore(): void {
+  confirmingDelete.value = false
+  selected.value = coreItem.value
+  content.value = coreContent.value
+  contentError.value = ''
+  mode.value = 'reader'
+}
+
+async function runDreamNow(): Promise<void> {
+  coreNotice.value = ''
+  try {
+    const result = await rpc<{ accepted?: boolean; reason?: string }>('memory.dream.run')
+    coreNotice.value = result.accepted
+      ? t("已开始整理记忆，整理完成后核心认知会更新。")
+      : t("暂时无法开始整理（{0}）。", { 0: result.reason || 'unavailable' })
+  } catch (cause) {
+    coreNotice.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function clearCore(): Promise<void> {
+  pendingClear.value = false
+  coreNotice.value = ''
+  try {
+    await rpc('memory.core.clear', {})
+  } catch (cause) {
+    coreNotice.value = cause instanceof Error ? cause.message : String(cause)
+    return
+  }
   clearSelection()
-  entries.value = []
-  error.value = ''
-  void reload()
+  mode.value = 'listing'
+  await reload()
+}
+
+async function restoreVersion(version: CoreVersion | null): Promise<void> {
+  pendingRestore.value = null
+  if (!version) return
+  coreNotice.value = ''
+  try {
+    await rpc('memory.core.restore', { version: version.id })
+  } catch (cause) {
+    coreNotice.value = cause instanceof Error ? cause.message : String(cause)
+    return
+  }
+  await reload()
+  if (mode.value === 'reader' && selected.value?.path === CORE_PATH) {
+    selected.value = coreItem.value
+    content.value = coreContent.value
+  }
 }
 
 async function loadContent(): Promise<void> {
@@ -604,7 +820,9 @@ async function loadContent(): Promise<void> {
   contentLoading.value = true
   contentError.value = ''
   try {
-    const result = await rpc<{ content?: string }>('memory.read', { path: entry.path })
+    const result = entry.path === CORE_PATH
+      ? await rpc<{ content?: string }>('memory.core.get', {})
+      : await rpc<{ content?: string }>('memory.read', { path: entry.path })
     content.value = result.content ?? ''
   } catch (cause) {
     contentError.value = cause instanceof Error ? cause.message : String(cause)
@@ -633,7 +851,9 @@ async function openEditor(item: MemoryItem): Promise<void> {
   editorBaseline.value = ''
   editorLoading.value = true
   try {
-    const result = await rpc<{ content?: string }>('memory.read', { path: item.path })
+    const result = item.path === CORE_PATH
+      ? await rpc<{ content?: string }>('memory.core.get', {})
+      : await rpc<{ content?: string }>('memory.read', { path: item.path })
     content.value = result.content ?? ''
     draft.value = content.value
     editorBaseline.value = content.value
@@ -651,7 +871,11 @@ async function saveEditor(): Promise<void> {
   saving.value = true
   saveError.value = ''
   try {
-    await rpc('memory.write', { path: entry.path, content: draft.value })
+    if (entry.path === CORE_PATH) {
+      await rpc('memory.core.set', { content: draft.value })
+    } else {
+      await rpc('memory.write', { path: entry.path, content: draft.value })
+    }
   } catch (cause) {
     saveError.value = cause instanceof Error ? cause.message : String(cause)
     return
@@ -664,6 +888,7 @@ async function saveEditor(): Promise<void> {
   // 保存后回到阅读页：该看的是结果，而不是刚写完的原文。
   const fresh = items.value.find(item => item.path === entry.path)
   if (fresh) selected.value = fresh
+  else if (entry.path === CORE_PATH) selected.value = coreItem.value
   mode.value = 'reader'
 }
 
@@ -882,6 +1107,10 @@ function handleBack(): boolean {
     exitProject()
     return true
   }
+  if (scope.value === 'global') {
+    leaveLocation()
+    return true
+  }
   return false
 }
 function onBackClick(): void {
@@ -892,7 +1121,8 @@ defineExpose({ handleBack, isEditing: () => mode.value === 'editor', hasUnsavedC
 
 const heading = computed(() => {
   const root = rootLabel.value
-  const project = activeProject.value ? `${activeProject.value.name} › ` : ''
+  const location = activeProject.value?.name ?? (scope.value === 'global' ? t("全局记忆") : '')
+  const project = location ? `${location} › ` : ''
   if (mode.value === 'editor' && selected.value) {
     return { title: t("{0} › {1}编辑 {2}", { 0: root, 1: project, 2: truncateTitle(selectedName.value) }), subtitle: '' }
   }
@@ -902,8 +1132,8 @@ const heading = computed(() => {
   if (openFolder.value) {
     return { title: `${root} › ${project}${folderTrail.value.map(step => step.name).join(' › ')}`, subtitle: '' }
   }
-  if (activeProject.value) {
-    return { title: `${root} › ${activeProject.value.name}`, subtitle: tierSubtitle.value }
+  if (location) {
+    return { title: `${root} › ${location}`, subtitle: tierSubtitle.value }
   }
   return { title: root, subtitle: tierSubtitle.value }
 })
@@ -930,6 +1160,70 @@ onUnmounted(() => {
 
 <style scoped>
 /* 版面样式共用 styles/library-surface.css；这里只放记忆独有的部分。 */
+.memory-core-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.memory-core-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.memory-core-file {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.memory-core-summary {
+  margin: 0;
+  color: var(--text-secondary, inherit);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.memory-core-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.memory-core-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.memory-core-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-core-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
 .memory-plain {
   margin: 0;
   padding: var(--space-3);

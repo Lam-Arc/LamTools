@@ -42,6 +42,20 @@ function fakeRpc() {
       }
     }
     if (method === 'memory.tree') return { entries: tree.map(entry => ({ ...entry })) }
+    // 核心认知文档：档位根目录的 memory.md，独立于普通条目。
+    if (method === 'memory.core.get') {
+      return {
+        scope: String(params.scope ?? 'project'),
+        path: 'memory.md',
+        content: '# 核心认知\n\n用户偏好先写方案。\n',
+        versions: [{ id: 'memory.md.20261004-100000-000000.md', size: 20, modified: '2026-10-04 10:00' }],
+        dream: { enabled: true, last_dream_at: '2026-10-04T10:00:00+00:00' },
+      }
+    }
+    if (method === 'memory.core.set') return { path: 'memory.md' }
+    if (method === 'memory.core.clear') return { path: 'memory.md' }
+    if (method === 'memory.core.restore') return { path: 'memory.md' }
+    if (method === 'memory.dream.run') return { accepted: true, reason: '' }
     if (method === 'memory.read') return { path, content: '# 偏好\n\n正文一段。\n' }
     if (method === 'memory.write') {
       if (!tree.some(entry => entry.path === path)) {
@@ -173,7 +187,7 @@ describe('MemoryView', () => {
     const { wrapper, calls } = mountView()
     await settled()
 
-    await wrapper.get('[data-memory-tier="global"]').trigger('click')
+    await wrapper.get('[data-memory-global]').trigger('click')
     await settled()
 
     const tree = calls.filter(call => call.method === 'memory.tree')
@@ -255,10 +269,12 @@ describe('MemoryView', () => {
     expect(wrapper.get('[data-memory-project-error]').text()).toContain('项目列表不可用')
     expect(calls).toHaveLength(0)
 
-    await wrapper.get('[data-memory-tier="global"]').trigger('click')
+    await wrapper.get('[data-memory-global]').trigger('click')
     await settled()
     expect(wrapper.find('[data-memory-project-error]').exists()).toBe(false)
-    expect(calls[calls.length - 1]).toEqual({ method: 'memory.tree', params: { scope: 'global' } })
+    expect(calls.some(call => call.method === 'memory.tree' && call.params.scope === 'global')).toBe(true)
+    // 核心认知（memory.md）与普通条目一起刷新：它是会被自动注入的那份文档。
+    expect(calls.some(call => call.method === 'memory.core.get' && call.params.scope === 'global')).toBe(true)
     wrapper.unmount()
   })
 
@@ -290,6 +306,44 @@ describe('MemoryView', () => {
     await settled()
     expect((wrapper.get('[data-memory-search]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.findAll('[data-memory-entry]').map(node => node.attributes('data-memory-entry'))).toEqual(['偏好.md'])
+    wrapper.unmount()
+  })
+
+
+  it('pins the core cognition document above ordinary entries and opens it', async () => {
+    const { wrapper, calls } = mountView()
+    await settled()
+    await wrapper.get('[data-memory-project="proj-1"]').trigger('click')
+    await settled()
+
+    // memory.md 不在普通条目里：它有自己的固定入口，展示的是会自动注入的那份认知。
+    const card = wrapper.get('[data-memory-core-card]')
+    expect(card.text()).toContain('核心认知')
+    expect(card.text()).toContain('用户偏好先写方案')
+    expect(wrapper.findAll('[data-memory-entry]').map(node => node.attributes('data-memory-entry')))
+      .not.toContain('memory.md')
+
+    await wrapper.get('[data-memory-core-open]').trigger('click')
+    await settled()
+
+    expect(wrapper.get('[data-memory-reader]').text()).toContain('用户偏好先写方案')
+    expect(wrapper.find('[data-memory-core-panel]').exists()).toBe(true)
+    expect(wrapper.get('[data-memory-core-panel]').text()).toContain('上次自动整理')
+    expect(calls.some(call => call.method === 'memory.core.get' && call.params.scope === 'project')).toBe(true)
+
+    // 阅读页的删除按钮换成「清空」：核心认知不该被当成普通文件删掉。
+    expect(wrapper.find('[data-memory-core-clear]').exists()).toBe(true)
+    expect(wrapper.find('[data-memory-delete]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('位置清单把全局和各项目放在一起，不再分项目/全局两档', async () => {
+    const { wrapper } = mountView()
+    await settled()
+
+    expect(wrapper.find('[data-memory-tiers]').exists()).toBe(false)
+    expect(wrapper.get('[data-memory-global]').text()).toContain('全局记忆')
+    expect(wrapper.findAll('[data-memory-project]')).toHaveLength(1)
     wrapper.unmount()
   })
 
